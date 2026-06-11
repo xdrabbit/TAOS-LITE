@@ -1,0 +1,57 @@
+manifest_version = 1
+project = "TAOS-LITE"
+default_target = "dev"
+
+env_required = [
+  "OPENAI_API_KEY",
+]
+
+env_optional = [
+  "OPENAI_TRANSCRIBE_MODEL",
+  "OPENAI_PARAPHRASE_MODEL",
+  "ELEVENLABS_API_KEY",
+  "ELEVENLABS_VOICE_ID",
+  "ELEVENLABS_MODEL",
+  "OPENAI_TTS_MODEL",
+  "OPENAI_TTS_VOICE",
+]
+
+hazards = [
+  "Microphone access requires a secure browser context (HTTPS) for iPhone/Safari use.",
+  "Transcription and paraphrase require OPENAI_API_KEY.",
+  "Voice playback requires ELEVENLABS_API_KEY (or falls back to OpenAI TTS).",
+]
+
+notes = [
+  "TAOS-LITE is push-to-talk: record a full thought, then transcribe -> concept paraphrase -> optional TTS.",
+  "Use the local dev target for validation before adding any exposed target.",
+]
+
+[project_info]
+name = "TAOS-LITE"
+repo_path = "/home/tom/blackbird_dev/TAOS-LITE"
+branch = "main"
+app_type = "nextjs"
+package_manager = "npm"
+
+[targets.dev]
+description = "Local TAOS-LITE Next.js dev server"
+target_kind = "web"
+command = ["npm", "run", "dev"]
+cwd = "/home/tom/blackbird_dev/TAOS-LITE"
+permission_profile = "local-dev"
+allow_driver_launch = true
+port = 3017
+url = "http://localhost:3017"
+url_source = "declared"
+healthcheck_url = "http://127.0.0.1:3017"
+stop_mode = "signal"
+stdio_source = "stdout"
+requires = ["node", "npm"]
+protocol = "http"
+host = "localhost"
+safety_notes = [
+  "Local development only.",
+  "No remote tunnel is declared for this target.",
+  "Use a secure context (HTTPS) for real iPhone microphone testing.",
+]
