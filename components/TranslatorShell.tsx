@@ -312,8 +312,10 @@ export function TranslatorShell(): JSX.Element {
             type="button"
             onClick={toggleRecord}
             disabled={processing}
-            className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold transition active:scale-[0.99] disabled:opacity-60 ${
-              recording ? "bg-rose-500 text-white" : "bg-amber-400 text-stone-950 hover:bg-amber-300"
+            className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold text-white transition active:scale-[0.99] disabled:opacity-60 ${
+              recording
+                ? "animate-pulse bg-red-400 shadow-[0_0_34px_rgba(248,113,113,0.65)]"
+                : "bg-red-600 hover:bg-red-500"
             }`}
           >
             <span className="text-2xl">{recording ? "⏹" : "🎙"}</span>
