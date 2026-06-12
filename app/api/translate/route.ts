@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLanguageLabel, isSupportedLanguageCode } from "@/lib/realtime/languages";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Long turns (up to ~12 min of audio) need more than the default to transcribe
+// + paraphrase. 300s is the max on Vercel Pro.
+export const maxDuration = 300;
 
 type Tone = "casual" | "detailed";
 

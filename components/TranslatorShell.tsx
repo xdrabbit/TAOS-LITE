@@ -18,6 +18,10 @@ const SPEAKERS: Record<LangCode, Speaker> = {
   en: { code: "en", who: "Tom", label: "English" }
 };
 
+// Safety net for very long turns: warn (beep) 5s before, then auto stop & translate.
+const MAX_RECORDING_MS = 12 * 60 * 1000;
+const WRAP_UP_WARNING_MS = 5000;
+
 function pickMimeType(): string {
   if (typeof MediaRecorder === "undefined") return "";
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"];
@@ -48,6 +52,7 @@ export function TranslatorShell(): JSX.Element {
   const [translation, setTranslation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [wrappingUp, setWrappingUp] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -55,6 +60,10 @@ export function TranslatorShell(): JSX.Element {
   const mimeRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const warnTimerRef = useRef<number | null>(null);
+  const maxStopTimerRef = useRef<number | null>(null);
 
   const target: LangCode = source === "es" ? "en" : "es";
   const speaker = SPEAKERS[source];
@@ -62,9 +71,13 @@ export function TranslatorShell(): JSX.Element {
 
   useEffect(() => {
     return () => {
+      clearRecordingTimers();
+      releaseWakeLock();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      void audioCtxRef.current?.close().catch(() => {});
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function ensureAudioEl(): HTMLAudioElement | null {
@@ -81,6 +94,78 @@ export function TranslatorShell(): JSX.Element {
     if (!a) return;
     a.play().catch(() => {});
     a.pause();
+  }
+
+  // Create/resume an AudioContext during the record gesture so we can beep later.
+  function ensureAudioContext() {
+    try {
+      if (!audioCtxRef.current) {
+        const Ctx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (Ctx) audioCtxRef.current = new Ctx();
+      }
+      void audioCtxRef.current?.resume();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function beep() {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    try {
+      const tone = (start: number, freq: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.3, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.2);
+      };
+      const now = ctx.currentTime;
+      tone(now, 880);
+      tone(now + 0.25, 880);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function requestWakeLock() {
+    try {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request: (type: "screen") => Promise<WakeLockSentinel> };
+      };
+      if (nav.wakeLock?.request) {
+        wakeLockRef.current = await nav.wakeLock.request("screen");
+      }
+    } catch {
+      /* ignore — wake lock is best-effort */
+    }
+  }
+
+  function releaseWakeLock() {
+    try {
+      void wakeLockRef.current?.release();
+    } catch {
+      /* ignore */
+    }
+    wakeLockRef.current = null;
+  }
+
+  function clearRecordingTimers() {
+    if (warnTimerRef.current !== null) {
+      window.clearTimeout(warnTimerRef.current);
+      warnTimerRef.current = null;
+    }
+    if (maxStopTimerRef.current !== null) {
+      window.clearTimeout(maxStopTimerRef.current);
+      maxStopTimerRef.current = null;
+    }
   }
 
   async function speak(text: string) {
@@ -114,6 +199,7 @@ export function TranslatorShell(): JSX.Element {
   async function startRecording() {
     setError(null);
     blessAudio();
+    ensureAudioContext();
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setStatus("error");
@@ -134,9 +220,23 @@ export function TranslatorShell(): JSX.Element {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       recorder.onstop = () => void handleRecordingStopped();
-      recorder.start();
+      // Flush audio into chunks every second so a long turn is never held in one
+      // fragile buffer that could be lost if the page is suspended.
+      recorder.start(1000);
       recorderRef.current = recorder;
       setStatus("recording");
+      setWrappingUp(false);
+      void requestWakeLock();
+
+      clearRecordingTimers();
+      warnTimerRef.current = window.setTimeout(() => {
+        setWrappingUp(true);
+        beep();
+      }, MAX_RECORDING_MS - WRAP_UP_WARNING_MS);
+      maxStopTimerRef.current = window.setTimeout(() => {
+        beep();
+        stopRecording();
+      }, MAX_RECORDING_MS);
     } catch {
       setStatus("error");
       setError("Microphone permission was denied. Enable it in Safari settings and retry.");
@@ -144,6 +244,9 @@ export function TranslatorShell(): JSX.Element {
   }
 
   function stopRecording() {
+    clearRecordingTimers();
+    setWrappingUp(false);
+    releaseWakeLock();
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       setStatus("processing");
@@ -312,15 +415,25 @@ export function TranslatorShell(): JSX.Element {
             type="button"
             onClick={toggleRecord}
             disabled={processing}
-            className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold text-white transition active:scale-[0.99] disabled:opacity-60 ${
+            className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold transition active:scale-[0.99] disabled:opacity-60 ${
               recording
-                ? "animate-pulse bg-red-400 shadow-[0_0_34px_rgba(248,113,113,0.65)]"
-                : "bg-red-600 hover:bg-red-500"
+                ? "animate-pulse bg-amber-400 text-stone-950 shadow-[0_0_34px_rgba(251,191,36,0.6)]"
+                : "border border-amber-300/30 bg-stone-50 text-stone-900 hover:bg-white"
             }`}
           >
-            <span className="text-2xl">{recording ? "⏹" : "🎙"}</span>
+            <span
+              className={`inline-block rounded-[6px] ${
+                recording ? "h-5 w-5 bg-stone-900/85" : "h-6 w-6 bg-amber-500"
+              }`}
+            />
             {recording ? "Stop & Translate" : processing ? "Working…" : `Speak ${speaker.label}`}
           </button>
+
+          {wrappingUp && recording ? (
+            <p className="text-center text-sm text-amber-300">
+              Wrapping up — auto stop &amp; translate in a few seconds…
+            </p>
+          ) : null}
 
           <div className="flex items-center justify-between gap-3 text-sm">
             <label className="flex items-center gap-2 text-amber-100/70">
