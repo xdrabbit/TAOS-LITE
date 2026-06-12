@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { saveTranslation } from "@/lib/supabase";
+import { HistoryDrawer } from "./HistoryDrawer";
 
 type LangCode = "en" | "es";
 type Tone = "casual" | "detailed";
@@ -41,7 +43,13 @@ function fileNameFor(mime: string): string {
   return "audio.webm";
 }
 
-export function TranslatorShell(): JSX.Element {
+export function TranslatorShell({
+  email,
+  onSignOut
+}: {
+  email: string;
+  onSignOut: () => void;
+}): JSX.Element {
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
   const [tone, setTone] = useState<Tone>("casual");
   const [engine, setEngine] = useState<Engine>("elevenlabs");
@@ -53,6 +61,7 @@ export function TranslatorShell(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [wrappingUp, setWrappingUp] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -288,6 +297,18 @@ export function TranslatorShell(): JSX.Element {
       setOriginal(typeof payload.original === "string" ? payload.original : "");
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
       setStatus("done");
+      if (payload.translation) {
+        // Best-effort save to the private, RLS-protected history. Never block
+        // the conversation on a save hiccup.
+        void saveTranslation({
+          source_lang: source,
+          target_lang: target,
+          tone,
+          original_text: payload.original ?? "",
+          translation_text: payload.translation,
+          engine
+        }).catch(() => {});
+      }
       if (autoPlay && payload.translation) {
         void speak(payload.translation);
       }
@@ -320,11 +341,25 @@ export function TranslatorShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between">
+        <header className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70">
-            {speaker.label} → {listener.label}
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100"
+            >
+              History
+            </button>
+            <button
+              type="button"
+              onClick={onSignOut}
+              title={email}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/70"
+            >
+              Sign out
+            </button>
+          </div>
         </header>
 
         {/* Who is speaking */}
@@ -462,6 +497,8 @@ export function TranslatorShell(): JSX.Element {
           </div>
         </section>
       </div>
+
+      <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </main>
   );
 }

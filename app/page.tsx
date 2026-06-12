@@ -1,5 +1,5 @@
-import { TranslatorShell } from "@/components/TranslatorShell";
+import { AppShell } from "@/components/AppShell";
 
 export default function Home(): JSX.Element {
-  return <TranslatorShell />;
+  return <AppShell />;
 }
