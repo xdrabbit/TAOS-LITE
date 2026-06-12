@@ -4,10 +4,11 @@ import { createClient } from "@supabase/supabase-js";
 // every Supabase app. Security comes from Row-Level Security on the table, not
 // from hiding this key. The service_role key is the secret one and is NEVER
 // used in the client.
+// Dedicated TAOS-LITE Supabase project (isolated from other apps).
 const SUPABASE_URL =
-  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://psqesjcbqxmmucrdhugx.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://duqkmuaceklnfgvoufrz.supabase.co";
 const SUPABASE_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "sb_publishable_Dq-FbnOrMVFSlrrldGe-qw_qeYeshcV";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "sb_publishable_LBhw7XTAhPWjNhbmjcf3uA_r_tbaALD";
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
