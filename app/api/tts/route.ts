@@ -4,9 +4,11 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type Engine = "elevenlabs" | "openai";
+type LangCode = "en" | "es";
 
 // A multilingual-capable default voice so the same voice reads EN and ES well.
 const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (works with multilingual model)
+const ELEVENLABS_TOM_VOICE = "uOQZaXDzEW5WoyNfLPne";
 const DEFAULT_OPENAI_VOICE = "nova";
 
 function audioResponse(buffer: ArrayBuffer): NextResponse {
@@ -19,12 +21,23 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
   });
 }
 
-async function elevenLabs(text: string): Promise<NextResponse> {
+function elevenLabsVoiceId(sourceLanguage?: LangCode, targetLanguage?: LangCode): string {
+  if (sourceLanguage === "en" && targetLanguage === "es") {
+    return ELEVENLABS_TOM_VOICE;
+  }
+  return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
+}
+
+async function elevenLabs(
+  text: string,
+  sourceLanguage?: LangCode,
+  targetLanguage?: LangCode
+): Promise<NextResponse> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
   }
-  const voiceId = process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
+  const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage);
   const model = process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5"; // low-latency, multilingual
 
   const res = await fetch(
@@ -79,7 +92,12 @@ async function openai(text: string): Promise<NextResponse> {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    const body = (await req.json().catch(() => ({}))) as { text?: string; engine?: string };
+    const body = (await req.json().catch(() => ({}))) as {
+      text?: string;
+      engine?: string;
+      sourceLanguage?: LangCode;
+      targetLanguage?: LangCode;
+    };
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const engine: Engine = body.engine === "openai" ? "openai" : "elevenlabs";
 
@@ -87,7 +105,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
     }
 
-    return engine === "openai" ? openai(text) : elevenLabs(text);
+    return engine === "openai"
+      ? openai(text)
+      : elevenLabs(text, body.sourceLanguage, body.targetLanguage);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json({ error: "TTS failed.", details: message }, { status: 500 });

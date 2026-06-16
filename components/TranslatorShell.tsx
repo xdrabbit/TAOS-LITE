@@ -186,7 +186,7 @@ export function TranslatorShell({
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, engine })
+        body: JSON.stringify({ text, engine, sourceLanguage: source, targetLanguage: target })
       });
       if (!res.ok) {
         const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
