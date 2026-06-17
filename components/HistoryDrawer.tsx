@@ -44,7 +44,7 @@ export function HistoryDrawer({
         if (active) setRows(data);
       })
       .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : "Could not load history.");
+        if (active) setError(e instanceof Error ? e.message : "Could not load history · No se pudo cargar el historial.");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -68,7 +68,11 @@ export function HistoryDrawer({
   }
 
   async function clearAll() {
-    if (!window.confirm("Delete your entire translation history? This cannot be undone.")) {
+    if (
+      !window.confirm(
+        "Delete your entire history? This can't be undone.\n¿Borrar todo el historial? No se puede deshacer."
+      )
+    ) {
       return;
     }
     const prev = rows;
@@ -84,7 +88,7 @@ export function HistoryDrawer({
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[rgba(9,9,9,0.96)] backdrop-blur">
       <div className="flex items-center justify-between border-b border-white/10 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
-        <h2 className="text-lg font-semibold text-amber-200">History</h2>
+        <h2 className="text-lg font-semibold text-amber-200">History · Historial</h2>
         <div className="flex items-center gap-2">
           {rows.length > 0 ? (
             <button
@@ -92,7 +96,7 @@ export function HistoryDrawer({
               onClick={clearAll}
               className="rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1.5 text-sm text-rose-200"
             >
-              Clear all
+              Clear all · Borrar
             </button>
           ) : null}
           <button
@@ -100,18 +104,18 @@ export function HistoryDrawer({
             onClick={onClose}
             className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-amber-100"
           >
-            Close
+            Close · Cerrar
           </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
         {loading ? (
-          <p className="animate-pulse text-amber-100/60">Loading…</p>
+          <p className="animate-pulse text-amber-100/60">Loading… · Cargando…</p>
         ) : error ? (
           <p className="text-rose-300">{error}</p>
         ) : rows.length === 0 ? (
-          <p className="text-amber-100/50">No translations saved yet.</p>
+          <p className="text-amber-100/50">No translations saved yet · Aún no hay traducciones.</p>
         ) : (
           <ul className="flex flex-col gap-3">
             {rows.map((row) => (
@@ -136,7 +140,7 @@ export function HistoryDrawer({
                     onClick={() => void remove(row.id)}
                     className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-rose-200/90"
                   >
-                    Delete
+                    Delete · Eliminar
                   </button>
                 </div>
               </li>

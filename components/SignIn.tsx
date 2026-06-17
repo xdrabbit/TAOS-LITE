@@ -22,11 +22,11 @@ export function SignIn(): JSX.Element {
         password: passcode
       });
       if (error) {
-        setError("Incorrect passcode. Try again.");
+        setError("Incorrect passcode · Código incorrecto");
       }
       // On success, AppShell's auth listener swaps in the app.
     } catch {
-      setError("Sign-in failed. Check your connection and try again.");
+      setError("Sign-in failed · No se pudo entrar");
     } finally {
       setBusy(false);
     }
@@ -36,10 +36,16 @@ export function SignIn(): JSX.Element {
     <main className="flex min-h-screen items-center justify-center px-5">
       <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
         <h1 className="text-2xl font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-        <p className="mt-1 text-sm text-amber-100/60">Enter the passcode to open your translator.</p>
+        <p className="mt-1 text-sm text-amber-100/60">
+          Enter the passcode to open your translator.
+          <br />
+          Escribe el código para abrir tu traductor.
+        </p>
 
         <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
-          <label className="text-xs uppercase tracking-[0.18em] text-amber-100/50">Passcode</label>
+          <label className="text-xs uppercase tracking-[0.18em] text-amber-100/50">
+            Passcode · Código
+          </label>
           <input
             type="password"
             required
@@ -54,7 +60,7 @@ export function SignIn(): JSX.Element {
             disabled={busy || !passcode}
             className="mt-2 rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300 disabled:opacity-60"
           >
-            {busy ? "Opening…" : "Enter"}
+            {busy ? "Opening… · Abriendo…" : "Enter · Entrar"}
           </button>
         </form>
 

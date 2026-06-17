@@ -20,6 +20,70 @@ const SPEAKERS: Record<LangCode, Speaker> = {
   en: { code: "en", who: "Tom", label: "English" }
 };
 
+// Speaker-facing copy flips to whoever is talking (Tom = en, Liz = es) so each
+// person reads the controls they act on in their own language.
+const STRINGS: Record<
+  LangCode,
+  {
+    speak: string;
+    stop: string;
+    working: string;
+    speakingNow: string;
+    swap: string;
+    listening: string;
+    translating: string;
+    idle: string;
+    heard: string;
+    forLabel: string;
+    wrapUp: string;
+    micUnavailable: string;
+    micDenied: string;
+    ttsFailed: string;
+    translateFailed: string;
+  }
+> = {
+  en: {
+    speak: "Speak",
+    stop: "Stop & Translate",
+    working: "Working…",
+    speakingNow: "Speaking now",
+    swap: "Swap",
+    listening: "Listening…",
+    translating: "Translating…",
+    idle: "Tap the mic, speak a full thought, tap again.",
+    heard: "Heard",
+    forLabel: "For",
+    wrapUp: "Wrapping up — auto stop & translate in a few seconds…",
+    micUnavailable: "Microphone not available. Open this page over HTTPS in Safari and allow mic access.",
+    micDenied: "Microphone permission was denied. Enable it in Safari settings and retry.",
+    ttsFailed: "Voice playback failed.",
+    translateFailed: "Translation failed."
+  },
+  es: {
+    speak: "Hablar",
+    stop: "Detener y traducir",
+    working: "Procesando…",
+    speakingNow: "Hablando ahora",
+    swap: "Cambiar",
+    listening: "Escuchando…",
+    translating: "Traduciendo…",
+    idle: "Toca el micrófono, di una idea completa y toca otra vez.",
+    heard: "Se escuchó",
+    forLabel: "Para",
+    wrapUp: "Terminando — se detiene y traduce en unos segundos…",
+    micUnavailable: "Micrófono no disponible. Abre esta página con HTTPS en Safari y permite el micrófono.",
+    micDenied: "Se denegó el permiso del micrófono. Actívalo en los ajustes de Safari e inténtalo de nuevo.",
+    ttsFailed: "No se pudo reproducir la voz.",
+    translateFailed: "No se pudo traducir."
+  }
+};
+
+// Bilingual labels for shared controls used by both people.
+const TONE_LABEL: Record<Tone, string> = {
+  casual: "Casual",
+  detailed: "Detailed · Detallado"
+};
+
 // Safety net for very long turns: warn (beep) 5s before, then auto stop & translate.
 const MAX_RECORDING_MS = 12 * 60 * 1000;
 const WRAP_UP_WARNING_MS = 5000;
@@ -77,6 +141,7 @@ export function TranslatorShell({
   const target: LangCode = source === "es" ? "en" : "es";
   const speaker = SPEAKERS[source];
   const listener = SPEAKERS[target];
+  const s = STRINGS[source]; // speaker-facing copy (active speaker's language)
 
   useEffect(() => {
     return () => {
@@ -190,7 +255,7 @@ export function TranslatorShell({
       });
       if (!res.ok) {
         const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
-        throw new Error(p.details || p.error || "Voice playback failed.");
+        throw new Error(p.details || p.error || s.ttsFailed);
       }
       const blob = await res.blob();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -201,7 +266,7 @@ export function TranslatorShell({
       await a.play();
     } catch (e) {
       setIsSpeaking(false);
-      setError(e instanceof Error ? e.message : "Voice playback failed.");
+      setError(e instanceof Error ? e.message : s.ttsFailed);
     }
   }
 
@@ -212,7 +277,7 @@ export function TranslatorShell({
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setStatus("error");
-      setError("Microphone not available. Open this page over HTTPS in Safari and allow mic access.");
+      setError(s.micUnavailable);
       return;
     }
 
@@ -248,7 +313,7 @@ export function TranslatorShell({
       }, MAX_RECORDING_MS);
     } catch {
       setStatus("error");
-      setError("Microphone permission was denied. Enable it in Safari settings and retry.");
+      setError(s.micDenied);
     }
   }
 
@@ -292,7 +357,7 @@ export function TranslatorShell({
         details?: string;
       };
       if (!res.ok) {
-        throw new Error(payload.details || payload.error || "Translation failed.");
+        throw new Error(payload.details || payload.error || s.translateFailed);
       }
       setOriginal(typeof payload.original === "string" ? payload.original : "");
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
@@ -314,7 +379,7 @@ export function TranslatorShell({
       }
     } catch (e) {
       setStatus("error");
-      setError(e instanceof Error ? e.message : "Translation failed.");
+      setError(e instanceof Error ? e.message : s.translateFailed);
     }
   }
 
@@ -328,7 +393,7 @@ export function TranslatorShell({
 
   function swap() {
     blessAudio();
-    setSource((s) => (s === "es" ? "en" : "es"));
+    setSource((prev) => (prev === "es" ? "en" : "es"));
     setOriginal("");
     setTranslation("");
     setError(null);
@@ -349,7 +414,7 @@ export function TranslatorShell({
               onClick={() => setHistoryOpen(true)}
               className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100"
             >
-              History
+              History · Historial
             </button>
             <button
               type="button"
@@ -357,51 +422,51 @@ export function TranslatorShell({
               title={email}
               className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/70"
             >
-              Sign out
+              Sign out · Salir
             </button>
           </div>
         </header>
 
-        {/* Who is speaking */}
+        {/* Who is speaking — labelled in the active speaker's language */}
         <button
           onClick={swap}
           type="button"
           className="flex items-center justify-between rounded-3xl border border-white/10 bg-[rgba(36,30,24,0.8)] p-4 text-left transition active:scale-[0.99]"
         >
           <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">Speaking now</div>
+            <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">{s.speakingNow}</div>
             <div className="text-2xl font-semibold text-white">
               {speaker.who} · {speaker.label}
             </div>
           </div>
           <div className="flex flex-col items-center gap-1 text-amber-300">
             <span className="text-2xl">⇄</span>
-            <span className="text-[10px] uppercase tracking-wider text-amber-100/50">Swap</span>
+            <span className="text-[10px] uppercase tracking-wider text-amber-100/50">{s.swap}</span>
           </div>
         </button>
 
-        {/* Tone toggle */}
+        {/* Tone toggle (shared, bilingual) */}
         <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
           {(["casual", "detailed"] as Tone[]).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTone(t)}
-              className={`rounded-xl px-3 py-2 text-sm font-medium capitalize transition ${
+              className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
                 tone === t ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
               }`}
             >
-              {t}
+              {TONE_LABEL[t]}
             </button>
           ))}
         </div>
 
-        {/* Result */}
+        {/* Result — header in the listener's language */}
         <section className="flex flex-1 flex-col gap-3">
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
             <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
               <span>
-                For {listener.who} · {listener.label}
+                {STRINGS[target].forLabel} {listener.who} · {listener.label}
               </span>
               {translation ? (
                 <button
@@ -413,26 +478,22 @@ export function TranslatorShell({
                   className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
                     isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
                   }`}
-                  aria-label="Read translation aloud"
+                  aria-label="Play translation / Reproducir traducción"
                 >
                   <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
-                  <span className="text-[11px]">Play</span>
+                  <span className="text-[11px]">Play · Oír</span>
                 </button>
               ) : null}
             </div>
             <div className="flex flex-1 items-center">
               <p className="text-pretty text-[clamp(1.8rem,7vw,2.8rem)] font-semibold leading-tight tracking-tight text-white">
-                {translation ||
-                  (processing
-                    ? "Translating…"
-                    : recording
-                      ? "Listening…"
-                      : "Tap the mic, speak a full thought, tap again.")}
+                {translation || (processing ? s.translating : recording ? s.listening : s.idle)}
               </p>
             </div>
             {original ? (
               <p className="mt-4 border-t border-white/10 pt-3 text-sm text-emerald-50/55">
-                <span className="uppercase tracking-wider text-emerald-100/40">Heard:</span> {original}
+                <span className="uppercase tracking-wider text-emerald-100/40">{s.heard}:</span>{" "}
+                {original}
               </p>
             ) : null}
           </div>
@@ -461,13 +522,11 @@ export function TranslatorShell({
                 recording ? "h-5 w-5 bg-stone-900/85" : "h-6 w-6 bg-amber-500"
               }`}
             />
-            {recording ? "Stop & Translate" : processing ? "Working…" : `Speak ${speaker.label}`}
+            {recording ? s.stop : processing ? s.working : `${s.speak} ${speaker.label}`}
           </button>
 
           {wrappingUp && recording ? (
-            <p className="text-center text-sm text-amber-300">
-              Wrapping up — auto stop &amp; translate in a few seconds…
-            </p>
+            <p className="text-center text-sm text-amber-300">{s.wrapUp}</p>
           ) : null}
 
           <div className="flex items-center justify-between gap-3 text-sm">
@@ -478,7 +537,7 @@ export function TranslatorShell({
                 onChange={(e) => setAutoPlay(e.target.checked)}
                 className="h-4 w-4 accent-amber-400"
               />
-              Auto-play voice
+              Auto-play voice · Reproducir voz
             </label>
             <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
               {(["elevenlabs", "openai"] as Engine[]).map((eng) => (
