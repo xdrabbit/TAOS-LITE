@@ -8,7 +8,8 @@ type LangCode = "en" | "es";
 
 // A multilingual-capable default voice so the same voice reads EN and ES well.
 const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (works with multilingual model)
-const ELEVENLABS_TOM_VOICE = "uOQZaXDzEW5WoyNfLPne";
+const ELEVENLABS_TOM_VOICE = "uOQZaXDzEW5WoyNfLPne"; // Tom's clone — reads EN->ES
+const ELEVENLABS_LIZMA_VOICE = "dWtid9SQ2W6xrE8V2T82"; // Liz's clone ("lizma") — reads ES->EN
 const DEFAULT_OPENAI_VOICE = "nova";
 
 function audioResponse(buffer: ArrayBuffer): NextResponse {
@@ -22,8 +23,13 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
 }
 
 function elevenLabsVoiceId(sourceLanguage?: LangCode, targetLanguage?: LangCode): string {
+  // Tom speaks EN -> Liz hears Spanish in Tom's voice.
   if (sourceLanguage === "en" && targetLanguage === "es") {
     return ELEVENLABS_TOM_VOICE;
+  }
+  // Liz speaks ES -> Tom hears English in Liz's ("lizma") voice.
+  if (sourceLanguage === "es" && targetLanguage === "en") {
+    return ELEVENLABS_LIZMA_VOICE;
   }
   return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
 }
