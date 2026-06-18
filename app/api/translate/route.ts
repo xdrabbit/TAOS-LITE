@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLanguageLabel, isSupportedLanguageCode } from "@/lib/realtime/languages";
 
 export const runtime = "nodejs";
-// Long turns (up to ~12 min of audio) need more than the default to transcribe
-// + paraphrase. 300s is the max on Vercel Pro.
+// 300s is the max on Vercel Pro. The client per-turn cap (MAX_TURN_DURATION_MS
+// in TranslatorShell) must stay <= this, or a long turn can't be transcribed +
+// paraphrased before the function is killed and the turn fails silently.
 export const maxDuration = 300;
 
 type Tone = "casual" | "detailed";
