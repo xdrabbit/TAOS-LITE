@@ -40,6 +40,7 @@ const STRINGS: Record<
     micDenied: string;
     ttsFailed: string;
     translateFailed: string;
+    noAudio: string;
   }
 > = {
   en: {
@@ -57,7 +58,8 @@ const STRINGS: Record<
     micUnavailable: "Microphone not available. Open this page over HTTPS in Safari and allow mic access.",
     micDenied: "Microphone permission was denied. Enable it in Safari settings and retry.",
     ttsFailed: "Voice playback failed.",
-    translateFailed: "Translation failed."
+    translateFailed: "Translation failed.",
+    noAudio: "No audio was captured. Check the mic and try again."
   },
   es: {
     speak: "Hablar",
@@ -74,7 +76,8 @@ const STRINGS: Record<
     micUnavailable: "Micrófono no disponible. Abre esta página con HTTPS en Safari y permite el micrófono.",
     micDenied: "Se denegó el permiso del micrófono. Actívalo en los ajustes de Safari e inténtalo de nuevo.",
     ttsFailed: "No se pudo reproducir la voz.",
-    translateFailed: "No se pudo traducir."
+    translateFailed: "No se pudo traducir.",
+    noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo."
   }
 };
 
@@ -84,9 +87,25 @@ const TONE_LABEL: Record<Tone, string> = {
   detailed: "Detailed · Detallado"
 };
 
-// Safety net for very long turns: warn (beep) 5s before, then auto stop & translate.
-const MAX_RECORDING_MS = 12 * 60 * 1000;
-const WRAP_UP_WARNING_MS = 5000;
+// ── Per-turn safety cap ──────────────────────────────────────────────────
+// Hard limit on a single recording. On reaching it we auto-stop and run the
+// normal transcribe → translate → speak flow on whatever audio was captured
+// (the audio is NEVER discarded). Keep this <= the /api/translate route's
+// `maxDuration` (300s) — a longer turn can't be transcribed + paraphrased in
+// time and the turn fails silently. Change to 150000 for a 2.5-minute cap.
+const MAX_TURN_DURATION_MS = 300000; // 5 minutes
+
+// Visual "wrap up" ramp on the record button. NO audio cues — the mic and
+// speaker are both live during a turn, so the only safe signal is visual.
+const RAMP_EARLY_MS = 30000; // T-30s remaining: gentle "breathing" glow begins
+const RAMP_FAST_MS = 10000; // T-10s remaining: pulse starts accelerating
+const PULSE_SLOW_MS = 600; // pulse period at the start of the fast ramp (T-10s)
+const PULSE_FAST_MS = 150; // pulse period as it reaches T-0 (fastest)
+
+// Keep the upload well under Vercel's ~4.5 MB request-body limit even on a
+// full-length turn: cap MediaRecorder at a voice-friendly bitrate
+// (32 kbps ≈ 1.2 MB for 5 min) so the audio buffer can't grow unbounded.
+const AUDIO_BITS_PER_SECOND = 32000;
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === "undefined") return "";
@@ -133,10 +152,14 @@ export function TranslatorShell({
   const mimeRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const warnTimerRef = useRef<number | null>(null);
   const maxStopTimerRef = useRef<number | null>(null);
+  // Visual ramp state (drives the record button directly, no re-render per frame).
+  const recordBtnRef = useRef<HTMLButtonElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const recordStartRef = useRef<number>(0);
+  const pulsePhaseRef = useRef<number>(0);
+  const lastTickRef = useRef<number>(0);
 
   const target: LangCode = source === "es" ? "en" : "es";
   const speaker = SPEAKERS[source];
@@ -149,7 +172,6 @@ export function TranslatorShell({
       releaseWakeLock();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-      void audioCtxRef.current?.close().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -170,43 +192,77 @@ export function TranslatorShell({
     a.pause();
   }
 
-  // Create/resume an AudioContext during the record gesture so we can beep later.
-  function ensureAudioContext() {
-    try {
-      if (!audioCtxRef.current) {
-        const Ctx =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (Ctx) audioCtxRef.current = new Ctx();
-      }
-      void audioCtxRef.current?.resume();
-    } catch {
-      /* ignore */
+  // Reset any inline ramp styling so the button returns to its normal look.
+  function resetRecordButtonStyle() {
+    const btn = recordBtnRef.current;
+    if (btn) {
+      btn.style.transform = "";
+      btn.style.boxShadow = "";
     }
   }
 
-  function beep() {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    try {
-      const tone = (start: number, freq: number) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.3, start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
-        osc.connect(gain).connect(ctx.destination);
-        osc.start(start);
-        osc.stop(start + 0.2);
-      };
-      const now = ctx.currentTime;
-      tone(now, 880);
-      tone(now + 0.25, 880);
-    } catch {
-      /* ignore */
+  // Drives the purely-visual "wrap up" ramp on the record button each frame.
+  // T-30s → T-10s: a gentle slow breathing glow (early heads-up).
+  // T-10s → T-0:  a pulse that accelerates as the period shrinks 600ms → 150ms.
+  // We mutate the button's style directly (via ref) to avoid a re-render per
+  // frame, and respect prefers-reduced-motion by using a steady glow instead.
+  function tickRamp() {
+    const now = performance.now();
+    const elapsed = now - recordStartRef.current;
+    const remaining = MAX_TURN_DURATION_MS - elapsed;
+    const btn = recordBtnRef.current;
+
+    // Surface the textual heads-up once we enter the ramp window.
+    setWrappingUp(remaining <= RAMP_EARLY_MS);
+
+    if (btn) {
+      const reduceMotion =
+        typeof window !== "undefined" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+      if (remaining > RAMP_EARLY_MS) {
+        resetRecordButtonStyle();
+      } else {
+        const urgent = remaining <= RAMP_FAST_MS;
+        // Pulse period: constant & gentle in the early window, then shrinking
+        // (faster and faster) through the final window.
+        const period = urgent
+          ? PULSE_FAST_MS +
+            (PULSE_SLOW_MS - PULSE_FAST_MS) * (Math.max(0, remaining) / RAMP_FAST_MS)
+          : 2400;
+
+        let wave: number;
+        if (reduceMotion) {
+          // No oscillation; steady intensity that steps up when urgent.
+          wave = urgent ? 1 : 0.5;
+        } else {
+          const dt = now - (lastTickRef.current || now);
+          pulsePhaseRef.current += (dt / period) * Math.PI * 2;
+          wave = (Math.sin(pulsePhaseRef.current) + 1) / 2; // 0..1
+        }
+
+        const scaleAmt = urgent ? 0.08 : 0.03;
+        const glow = (urgent ? 80 : 36) * wave + 18;
+        btn.style.transform = reduceMotion ? "" : `scale(${1 + wave * scaleAmt})`;
+        btn.style.boxShadow = `0 0 ${glow}px rgba(251,191,36,${0.4 + wave * 0.5})`;
+      }
     }
+
+    lastTickRef.current = now;
+    if (remaining <= 0) {
+      // Hard cap reached — the maxStopTimer backstop also fires stopRecording().
+      stopRecording();
+      return;
+    }
+    rafRef.current = requestAnimationFrame(tickRamp);
+  }
+
+  function stopRamp() {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    resetRecordButtonStyle();
   }
 
   async function requestWakeLock() {
@@ -232,14 +288,11 @@ export function TranslatorShell({
   }
 
   function clearRecordingTimers() {
-    if (warnTimerRef.current !== null) {
-      window.clearTimeout(warnTimerRef.current);
-      warnTimerRef.current = null;
-    }
     if (maxStopTimerRef.current !== null) {
       window.clearTimeout(maxStopTimerRef.current);
       maxStopTimerRef.current = null;
     }
+    stopRamp();
   }
 
   async function speak(text: string) {
@@ -265,6 +318,7 @@ export function TranslatorShell({
       a.onended = () => setIsSpeaking(false);
       await a.play();
     } catch (e) {
+      console.error("[tts] playback failed", e);
       setIsSpeaking(false);
       setError(e instanceof Error ? e.message : s.ttsFailed);
     }
@@ -273,7 +327,6 @@ export function TranslatorShell({
   async function startRecording() {
     setError(null);
     blessAudio();
-    ensureAudioContext();
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setStatus("error");
@@ -286,9 +339,12 @@ export function TranslatorShell({
       streamRef.current = stream;
       const mime = pickMimeType();
       mimeRef.current = mime;
-      const recorder = mime
-        ? new MediaRecorder(stream, { mimeType: mime })
-        : new MediaRecorder(stream);
+      // Constrain the bitrate so even a full-length turn stays a small upload
+      // (see AUDIO_BITS_PER_SECOND) — guards against unbounded buffer growth
+      // and Vercel's ~4.5 MB request-body limit.
+      const opts: MediaRecorderOptions = { audioBitsPerSecond: AUDIO_BITS_PER_SECOND };
+      if (mime) opts.mimeType = mime;
+      const recorder = new MediaRecorder(stream, opts);
       chunksRef.current = [];
       recorder.ondataavailable = (ev) => {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
@@ -302,15 +358,15 @@ export function TranslatorShell({
       setWrappingUp(false);
       void requestWakeLock();
 
+      // Start the per-turn cap: a setTimeout is the authoritative hard stop
+      // (fires even if the rAF ramp is throttled in a background tab); the
+      // rAF loop drives the visual wrap-up ramp.
       clearRecordingTimers();
-      warnTimerRef.current = window.setTimeout(() => {
-        setWrappingUp(true);
-        beep();
-      }, MAX_RECORDING_MS - WRAP_UP_WARNING_MS);
-      maxStopTimerRef.current = window.setTimeout(() => {
-        beep();
-        stopRecording();
-      }, MAX_RECORDING_MS);
+      recordStartRef.current = performance.now();
+      pulsePhaseRef.current = 0;
+      lastTickRef.current = 0;
+      maxStopTimerRef.current = window.setTimeout(stopRecording, MAX_TURN_DURATION_MS);
+      rafRef.current = requestAnimationFrame(tickRamp);
     } catch {
       setStatus("error");
       setError(s.micDenied);
@@ -334,8 +390,14 @@ export function TranslatorShell({
     const mime = mimeRef.current || "audio/webm";
     const blob = new Blob(chunksRef.current, { type: mime });
     recorderRef.current = null;
+    chunksRef.current = [];
     if (blob.size === 0) {
-      setStatus("idle");
+      // Previously this returned to idle silently — a long turn that lost its
+      // audio (e.g. the page was suspended) produced no translation and no
+      // error. Surface it instead so the turn never fails invisibly.
+      console.error("[translate] no audio captured (empty recording blob)");
+      setStatus("error");
+      setError(s.noAudio);
       return;
     }
 
@@ -378,6 +440,7 @@ export function TranslatorShell({
         void speak(payload.translation);
       }
     } catch (e) {
+      console.error("[translate] pipeline failed", e);
       setStatus("error");
       setError(e instanceof Error ? e.message : s.translateFailed);
     }
@@ -508,12 +571,15 @@ export function TranslatorShell({
         {/* Controls */}
         <section className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4">
           <button
+            ref={recordBtnRef}
             type="button"
             onClick={toggleRecord}
             disabled={processing}
             className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold transition active:scale-[0.99] disabled:opacity-60 ${
               recording
-                ? "animate-pulse bg-amber-400 text-stone-950 shadow-[0_0_34px_rgba(251,191,36,0.6)]"
+                ? `bg-amber-400 text-stone-950 shadow-[0_0_34px_rgba(251,191,36,0.6)] ${
+                    wrappingUp ? "" : "animate-pulse"
+                  }`
                 : "border border-amber-300/30 bg-stone-50 text-stone-900 hover:bg-white"
             }`}
           >
@@ -526,7 +592,9 @@ export function TranslatorShell({
           </button>
 
           {wrappingUp && recording ? (
-            <p className="text-center text-sm text-amber-300">{s.wrapUp}</p>
+            <p role="status" aria-live="polite" className="text-center text-sm text-amber-300">
+              {s.wrapUp}
+            </p>
           ) : null}
 
           <div className="flex items-center justify-between gap-3 text-sm">
