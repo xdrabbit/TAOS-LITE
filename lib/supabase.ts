@@ -14,8 +14,9 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    // We use email OTP codes, not magic-link URL parsing.
-    detectSessionInUrl: false
+    // Needed to complete the Google OAuth redirect (PKCE) back into the app.
+    detectSessionInUrl: true,
+    flowType: "pkce"
   }
 });
 
@@ -71,4 +72,36 @@ export async function clearHistory(): Promise<void> {
     .delete()
     .neq("id", "00000000-0000-0000-0000-000000000000");
   if (error) throw error;
+}
+
+export interface Profile {
+  id: string;
+  email: string | null;
+  plan: string;
+  subscription_status: string;
+  stripe_customer_id: string | null;
+  trial_ends_at: string;
+  current_period_end: string | null;
+}
+
+export async function getProfile(): Promise<Profile | null> {
+  // RLS returns only the signed-in user's own profile row.
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(
+      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end"
+    )
+    .maybeSingle();
+  if (error) return null;
+  return (data as Profile | null) ?? null;
+}
+
+// Gate: active/comp subscribers always in; trial users in until trial_ends_at.
+export function hasAccess(p: Profile | null): boolean {
+  if (!p) return false;
+  if (p.subscription_status === "active" || p.subscription_status === "comp") return true;
+  if (p.subscription_status === "trialing") {
+    return !p.trial_ends_at || new Date(p.trial_ends_at).getTime() > Date.now();
+  }
+  return false;
 }
