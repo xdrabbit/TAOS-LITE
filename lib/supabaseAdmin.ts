@@ -7,6 +7,6 @@ const SUPABASE_URL =
 
 export const supabaseAdmin = createClient(
   SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "service-role-not-set-build-placeholder",
   { auth: { persistSession: false, autoRefreshToken: false } }
 );
