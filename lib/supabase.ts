@@ -105,3 +105,23 @@ export function hasAccess(p: Profile | null): boolean {
   }
   return false;
 }
+
+export interface TutorAttemptInput {
+  course?: string;
+  lesson_id: string;
+  target_phrase: string;
+  transcript?: string | null;
+  target_lang?: string;
+  accuracy_score?: number | null;
+  fluency_score?: number | null;
+  completeness_score?: number | null;
+  prosody_score?: number | null;
+  pron_score?: number | null;
+  word_scores?: unknown;
+}
+
+// RLS + the user_id default(auth.uid()) keep each attempt private to its user.
+export async function saveTutorAttempt(input: TutorAttemptInput): Promise<void> {
+  const { error } = await supabase.from("tutor_attempts").insert(input);
+  if (error) throw error;
+}
