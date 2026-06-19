@@ -20,6 +20,12 @@ const SPEAKERS: Record<LangCode, Speaker> = {
   en: { code: "en", who: "Tom", label: "English" }
 };
 
+// Unobtrusive build marker so we can tell which deploy is live. Vercel injects
+// the commit SHA at build time; falls back to "local" during dev.
+const APP_VERSION = "0.4";
+const BUILD_SHA = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7);
+const BUILD_LABEL = `v${APP_VERSION}${BUILD_SHA ? ` · ${BUILD_SHA}` : " · local"}`;
+
 // Speaker-facing copy flips to whoever is talking (Tom = en, Liz = es) so each
 // person reads the controls they act on in their own language.
 const STRINGS: Record<
@@ -623,6 +629,8 @@ export function TranslatorShell({
             </div>
           </div>
         </section>
+
+        <p className="pt-1 text-center text-[10px] tracking-wider text-amber-100/25">{BUILD_LABEL}</p>
       </div>
 
       <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
