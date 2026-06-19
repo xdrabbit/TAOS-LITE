@@ -9,7 +9,7 @@ type LangCode = "en" | "es";
 // A multilingual-capable default voice so the same voice reads EN and ES well.
 const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (works with multilingual model)
 const ELEVENLABS_TOM_VOICE = "uOQZaXDzEW5WoyNfLPne"; // Tom's clone — reads EN->ES
-const ELEVENLABS_LIZ_VOICE = "tpOaz7u8rY4nup9rRUmh"; // Liz's clone — reads ES->EN
+const ELEVENLABS_LIZ_VOICE = "dWtid9SQ2W6xrE8V2T82"; // Liz's clone — reads ES->EN
 const DEFAULT_OPENAI_VOICE = "nova";
 
 function audioResponse(buffer: ArrayBuffer): NextResponse {
