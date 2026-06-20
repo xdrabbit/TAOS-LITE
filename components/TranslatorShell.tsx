@@ -143,7 +143,7 @@ export function TranslatorShell({
   const [tone, setTone] = useState<Tone>("casual");
   const [engine, setEngine] = useState<Engine>("elevenlabs");
   const [autoPlay, setAutoPlay] = useState(true);
-  const [autoDetect, setAutoDetect] = useState(false);
+  const [autoDetect, setAutoDetect] = useState(true);
 
   const [status, setStatus] = useState<Status>("idle");
   const [original, setOriginal] = useState("");
