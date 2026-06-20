@@ -125,3 +125,31 @@ export async function saveTutorAttempt(input: TutorAttemptInput): Promise<void> 
   const { error } = await supabase.from("tutor_attempts").insert(input);
   if (error) throw error;
 }
+
+export interface TutorSessionStart {
+  mode?: string;
+  learn_lang?: string;
+  level?: string;
+  focus?: string | null;
+  model?: string | null;
+}
+
+// Conversation-tutor metering. Realtime is the priciest path, so we log a row at
+// start and stamp the duration at end for cost visibility. RLS keeps it private.
+export async function startTutorSession(input: TutorSessionStart): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("tutor_sessions")
+    .insert({ ...input, mode: input.mode ?? "conversation" })
+    .select("id")
+    .single();
+  if (error) return null;
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+export async function endTutorSession(id: string, seconds: number): Promise<void> {
+  // Best-effort; never block the UI on metering.
+  await supabase
+    .from("tutor_sessions")
+    .update({ seconds: Math.max(0, Math.round(seconds)), ended_at: new Date().toISOString() })
+    .eq("id", id);
+}

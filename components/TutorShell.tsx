@@ -3,13 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
+  endTutorSession,
   getProfile,
   hasAccess,
   saveTutorAttempt,
+  startTutorSession,
   supabase,
   type Profile
 } from "@/lib/supabase";
 import { blobToWav16k } from "@/lib/tutor/wav";
+import {
+  startConversation,
+  type ActiveConversation,
+  type ConvState,
+  type LearnLang,
+  type Level,
+  type StopReason
+} from "@/lib/tutor/conversation";
 import { SignIn } from "./SignIn";
 import { Paywall } from "./Paywall";
 
@@ -40,6 +50,7 @@ interface AssessResult {
 }
 
 type Status = "idle" | "recording" | "scoring";
+type Mode = "drills" | "conversation";
 
 function scoreColor(n: number | null | undefined): string {
   if (typeof n !== "number") return "text-amber-100/60";
@@ -91,10 +102,61 @@ export function TutorShell(): JSX.Element {
       />
     );
   }
-  return <Drills />;
+  return <TutorModes />;
 }
 
-function Drills(): JSX.Element {
+function TutorModes(): JSX.Element {
+  const [mode, setMode] = useState<Mode>("drills");
+  return mode === "drills" ? (
+    <Drills mode={mode} onMode={setMode} />
+  ) : (
+    <Conversation mode={mode} onMode={setMode} />
+  );
+}
+
+function ModeToggle({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
+  return (
+    <div className="flex rounded-full border border-white/10 bg-white/5 p-0.5 text-xs">
+      <button
+        type="button"
+        onClick={() => onMode("drills")}
+        className={`rounded-full px-3 py-1.5 transition ${
+          mode === "drills" ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+        }`}
+      >
+        Drills
+      </button>
+      <button
+        type="button"
+        onClick={() => onMode("conversation")}
+        className={`rounded-full px-3 py-1.5 transition ${
+          mode === "conversation" ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+        }`}
+      >
+        Conversation
+      </button>
+    </div>
+  );
+}
+
+function TutorHeader({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
+  return (
+    <header className="flex items-center justify-between gap-2">
+      <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·TUTOR</h1>
+      <div className="flex items-center gap-2">
+        <ModeToggle mode={mode} onMode={onMode} />
+        <a
+          href="/"
+          className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/70"
+        >
+          ← Translator
+        </a>
+      </div>
+    </header>
+  );
+}
+
+function Drills({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [lessonIdx, setLessonIdx] = useState(0);
   const [drillIdx, setDrillIdx] = useState(0);
@@ -250,12 +312,7 @@ function Drills(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·TUTOR</h1>
-          <a href="/" className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/70">
-            ← Translator
-          </a>
-        </header>
+        <TutorHeader mode={mode} onMode={onMode} />
 
         {/* Lesson picker */}
         {lessons.length > 0 ? (
@@ -362,6 +419,343 @@ function Drills(): JSX.Element {
             </div>
           </section>
         ) : null}
+      </div>
+    </main>
+  );
+}
+
+// ── Conversation mode ───────────────────────────────────────────────────────
+
+interface Line {
+  role: "user" | "tutor";
+  text: string;
+}
+
+const CONV_MAX_MS = 10 * 60 * 1000; // hard session cap
+const CONV_IDLE_MS = 20 * 1000; // silence auto-off
+
+const STEER_CHIPS: { label: string; directive: string }[] = [
+  { label: "Slower", directive: "Please speak more slowly." },
+  { label: "More English", directive: "Use a bit more English to help me when I'm stuck." },
+  { label: "Kitchen words", directive: "Let's focus on kitchen and cooking vocabulary." },
+  { label: "Baseball", directive: "Let's talk about baseball." },
+  { label: "Travel", directive: "Let's focus on travel and getting around." },
+  { label: "Correct me more", directive: "Be stricter — correct even my small mistakes." }
+];
+
+function fmt(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
+  const [learn, setLearn] = useState<LearnLang>("es");
+  const [level, setLevel] = useState<Level>("intermediate");
+  const [focus, setFocus] = useState("");
+
+  const [convState, setConvState] = useState<ConvState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [live, setLive] = useState(""); // streaming tutor text buffer
+  const [elapsed, setElapsed] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [steerText, setSteerText] = useState("");
+
+  const sessRef = useRef<ActiveConversation | null>(null);
+  const meterRef = useRef<string | null>(null);
+  const liveRef = useRef("");
+  const feedRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      void sessRef.current?.stop("user");
+    };
+  }, []);
+
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
+  }, [lines, live]);
+
+  const active = convState === "connected";
+  const connecting =
+    convState === "requesting_mic" || convState === "minting" || convState === "connecting";
+
+  async function start() {
+    setError(null);
+    setNotice(null);
+    setLines([]);
+    setLive("");
+    liveRef.current = "";
+    setElapsed(0);
+    setMuted(false);
+
+    meterRef.current = await startTutorSession({
+      learn_lang: learn,
+      level,
+      focus: focus.trim() || null
+    });
+
+    try {
+      const sess = await startConversation(
+        { learn, level, focus: focus.trim(), maxDurationMs: CONV_MAX_MS, idleTimeoutMs: CONV_IDLE_MS },
+        {
+          onState: setConvState,
+          onError: (m) => setError(m),
+          onUserTranscript: (t) => setLines((prev) => [...prev, { role: "user", text: t }]),
+          onAssistantDelta: (d) => {
+            liveRef.current += d;
+            setLive(liveRef.current);
+          },
+          onAssistantDone: () => {
+            const text = liveRef.current.trim();
+            liveRef.current = "";
+            setLive("");
+            if (text) setLines((prev) => [...prev, { role: "tutor", text }]);
+          },
+          onTick: (e) => setElapsed(e),
+          onStopped: (reason: StopReason, secs: number) => {
+            sessRef.current = null;
+            if (meterRef.current) {
+              void endTutorSession(meterRef.current, secs);
+              meterRef.current = null;
+            }
+            if (reason === "cap") setNotice("Session ended at the 10-minute limit.");
+            else if (reason === "idle") setNotice("Paused after a quiet stretch. Tap Start to keep going.");
+          }
+        }
+      );
+      sessRef.current = sess;
+    } catch {
+      // onError/onStopped already fired; nothing more to do.
+    }
+  }
+
+  function end() {
+    void sessRef.current?.stop("user");
+  }
+
+  function sendSteer(directive: string) {
+    sessRef.current?.steer(directive);
+  }
+
+  function submitSteer() {
+    const t = steerText.trim();
+    if (!t) return;
+    sendSteer(t);
+    setSteerText("");
+  }
+
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    sessRef.current?.setMicEnabled(!next);
+  }
+
+  const remaining = Math.max(0, Math.round(CONV_MAX_MS / 1000) - elapsed);
+  const targetName = learn === "es" ? "Spanish" : "English";
+
+  return (
+    <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
+      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
+        <TutorHeader mode={mode} onMode={onMode} />
+
+        {!active && !connecting ? (
+          // ── Setup ──
+          <section className="flex flex-1 flex-col gap-4">
+            <div className="rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
+              <h2 className="text-xl font-semibold text-white">Talk with your tutor</h2>
+              <p className="mt-1 text-sm text-amber-50/70">
+                A hands-free voice conversation. The tutor listens, talks back, and corrects your
+                pronunciation as you go. Just start talking.
+              </p>
+
+              <label className="mt-5 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
+                I want to practice
+              </label>
+              <div className="mt-2 flex gap-2">
+                {(["es", "en"] as LearnLang[]).map((l) => (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() => setLearn(l)}
+                    className={`flex-1 rounded-2xl border px-3 py-3 text-sm font-medium transition ${
+                      learn === l
+                        ? "border-amber-300/50 bg-amber-400 text-stone-950"
+                        : "border-white/10 bg-white/5 text-amber-100/80"
+                    }`}
+                  >
+                    {l === "es" ? "Spanish · Español" : "English · Inglés"}
+                  </button>
+                ))}
+              </div>
+
+              <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
+                Level
+              </label>
+              <div className="mt-2 flex gap-2">
+                {(["beginner", "intermediate", "advanced"] as Level[]).map((lv) => (
+                  <button
+                    key={lv}
+                    type="button"
+                    onClick={() => setLevel(lv)}
+                    className={`flex-1 rounded-2xl border px-2 py-2.5 text-xs font-medium capitalize transition ${
+                      level === lv
+                        ? "border-amber-300/50 bg-amber-400 text-stone-950"
+                        : "border-white/10 bg-white/5 text-amber-100/80"
+                    }`}
+                  >
+                    {lv}
+                  </button>
+                ))}
+              </div>
+
+              <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
+                Topic (optional)
+              </label>
+              <input
+                value={focus}
+                onChange={(e) => setFocus(e.target.value)}
+                placeholder="e.g. ordering at a restaurant, baseball"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-[rgba(36,30,24,0.8)] px-3 py-3 text-base text-white outline-none placeholder:text-amber-100/30 focus:border-amber-300/50"
+              />
+            </div>
+
+            {error ? (
+              <p className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                {error}
+              </p>
+            ) : null}
+            {notice ? (
+              <p className="rounded-2xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-100/80">
+                {notice}
+              </p>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => void start()}
+              className="flex h-16 items-center justify-center gap-3 rounded-2xl border border-amber-300/30 bg-stone-50 text-lg font-semibold text-stone-900 transition active:scale-[0.99] hover:bg-white"
+            >
+              <span className="inline-block h-5 w-5 rounded-full bg-emerald-500" />
+              Start talking · {targetName}
+            </button>
+            <p className="text-center text-xs text-amber-100/40">
+              Hands-free · auto-pauses after 20s of silence · 10-min sessions
+            </p>
+          </section>
+        ) : (
+          // ── Live call ──
+          <section className="flex flex-1 flex-col gap-3">
+            <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-[rgba(20,16,14,0.86)] px-4 py-3">
+              <span className="flex items-center gap-2 text-sm">
+                <span
+                  className={`inline-block h-2.5 w-2.5 rounded-full ${
+                    active ? "animate-pulse bg-emerald-400" : "bg-amber-300"
+                  }`}
+                />
+                <span className="text-amber-100/80">
+                  {connecting ? "Connecting…" : `Live · ${targetName}`}
+                </span>
+              </span>
+              <span className="font-mono text-sm text-amber-100/70">
+                {fmt(elapsed)} <span className="text-amber-100/30">/ {fmt(remaining)} left</span>
+              </span>
+            </div>
+
+            <div
+              ref={feedRef}
+              className="flex-1 space-y-2 overflow-y-auto rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.5)] p-4"
+              style={{ maxHeight: "46vh" }}
+            >
+              {lines.length === 0 && !live ? (
+                <p className="py-8 text-center text-sm text-amber-100/40">
+                  Say hello to get started…
+                </p>
+              ) : null}
+              {lines.map((ln, i) => (
+                <div
+                  key={i}
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm ${
+                    ln.role === "tutor"
+                      ? "bg-white/5 text-emerald-50"
+                      : "ml-auto bg-amber-400/15 text-amber-50"
+                  }`}
+                >
+                  {ln.text}
+                </div>
+              ))}
+              {live ? (
+                <div className="max-w-[85%] rounded-2xl bg-white/5 px-3.5 py-2 text-sm text-emerald-50/80">
+                  {live}
+                </div>
+              ) : null}
+            </div>
+
+            {error ? (
+              <p className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-2.5 text-sm text-rose-200">
+                {error}
+              </p>
+            ) : null}
+
+            {/* Steering */}
+            <div className="flex flex-wrap gap-1.5">
+              {STEER_CHIPS.map((c) => (
+                <button
+                  key={c.label}
+                  type="button"
+                  onClick={() => sendSteer(c.directive)}
+                  disabled={!active}
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/80 transition active:scale-95 disabled:opacity-40"
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={steerText}
+                onChange={(e) => setSteerText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submitSteer()}
+                placeholder="Tell the tutor what to do…"
+                disabled={!active}
+                className="flex-1 rounded-2xl border border-white/10 bg-[rgba(36,30,24,0.8)] px-3 py-2.5 text-sm text-white outline-none placeholder:text-amber-100/30 focus:border-amber-300/50 disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={submitSteer}
+                disabled={!active || !steerText.trim()}
+                className="rounded-2xl border border-amber-300/30 bg-amber-400/90 px-4 text-sm font-medium text-stone-950 disabled:opacity-40"
+              >
+                Send
+              </button>
+            </div>
+
+            {/* Controls */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={toggleMute}
+                disabled={!active}
+                className={`flex-1 rounded-2xl border px-3 py-3 text-sm font-medium transition disabled:opacity-40 ${
+                  muted
+                    ? "border-rose-400/40 bg-rose-500/15 text-rose-200"
+                    : "border-white/10 bg-white/5 text-amber-100/80"
+                }`}
+              >
+                {muted ? "🔇 Mic off" : "🎙️ Mic on"}
+              </button>
+              <button
+                type="button"
+                onClick={end}
+                className="flex-1 rounded-2xl border border-rose-400/40 bg-rose-500/20 px-3 py-3 text-sm font-semibold text-rose-100 transition active:scale-[0.99]"
+              >
+                End conversation
+              </button>
+            </div>
+          </section>
+        )}
       </div>
     </main>
   );
