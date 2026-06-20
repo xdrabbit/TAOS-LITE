@@ -462,6 +462,7 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
   const [elapsed, setElapsed] = useState(0);
   const [muted, setMuted] = useState(false);
   const [steerText, setSteerText] = useState("");
+  const [debug, setDebug] = useState<string[]>([]);
 
   const sessRef = useRef<ActiveConversation | null>(null);
   const meterRef = useRef<string | null>(null);
@@ -490,6 +491,7 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
     liveRef.current = "";
     setElapsed(0);
     setMuted(false);
+    setDebug([]);
 
     meterRef.current = await startTutorSession({
       learn_lang: learn,
@@ -515,6 +517,7 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
             if (text) setLines((prev) => [...prev, { role: "tutor", text }]);
           },
           onTick: (e) => setElapsed(e),
+          onDebug: (line) => setDebug((prev) => [...prev.slice(-80), line]),
           onStopped: (reason: StopReason, secs: number) => {
             sessRef.current = null;
             if (meterRef.current) {
@@ -555,6 +558,18 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
 
   const remaining = Math.max(0, Math.round(CONV_MAX_MS / 1000) - elapsed);
   const targetName = learn === "es" ? "Spanish" : "English";
+
+  const debugPanel =
+    debug.length > 0 ? (
+      <details className="rounded-2xl border border-white/10 bg-black/40 p-3 text-amber-100/70" open>
+        <summary className="cursor-pointer text-xs uppercase tracking-[0.18em] text-amber-100/50">
+          Event log ({debug.length})
+        </summary>
+        <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-amber-100/80">
+          {debug.join("\n")}
+        </pre>
+      </details>
+    ) : null;
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -644,6 +659,7 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
             <p className="text-center text-xs text-amber-100/40">
               Hands-free · auto-pauses after 20s of silence · 10-min sessions
             </p>
+            {debugPanel}
           </section>
         ) : (
           // ── Live call ──
@@ -754,6 +770,7 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
                 End conversation
               </button>
             </div>
+            {debugPanel}
           </section>
         )}
       </div>

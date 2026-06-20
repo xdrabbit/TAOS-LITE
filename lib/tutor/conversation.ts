@@ -34,6 +34,7 @@ export interface ConversationEvents {
   onAssistantDone?: () => void; // tutor finished a turn
   onTick?: (elapsedSec: number) => void;
   onStopped?: (reason: StopReason, elapsedSec: number) => void;
+  onDebug?: (line: string) => void; // raw diagnostics for the on-screen log
 }
 
 export interface ActiveConversation {
@@ -76,6 +77,7 @@ export async function startConversation(
 
   const setState = (s: ConvState) => events.onState?.(s);
   const elapsedSec = () => Math.round((Date.now() - startMs) / 1000);
+  const dbg = (line: string) => events.onDebug?.(line);
 
   const clearTimers = () => {
     if (tickTimer !== null) window.clearInterval(tickTimer);
@@ -196,6 +198,7 @@ export async function startConversation(
       throw new Error(mint.details || mint.error || "Could not start the tutor session.");
     }
     baseInstructions = mint.instructions ?? "";
+    dbg(`mint ok · model=${mint.model} voice=${mint.voice}`);
 
     pc = new RTCPeerConnection();
 
@@ -209,9 +212,13 @@ export async function startConversation(
     audioEl.style.display = "none";
     document.body.appendChild(audioEl);
     pc.ontrack = (ev) => {
+      dbg(`ontrack · ${ev.track.kind} track arrived`);
       if (audioEl) {
         audioEl.srcObject = ev.streams[0] ?? new MediaStream([ev.track]);
-        void audioEl.play().catch(() => {});
+        audioEl
+          .play()
+          .then(() => dbg("audio.play() ok"))
+          .catch((e) => dbg(`audio.play() FAIL: ${e instanceof Error ? e.message : String(e)}`));
       }
       bumpIdle();
     };
@@ -220,6 +227,7 @@ export async function startConversation(
 
     pc.onconnectionstatechange = () => {
       if (!pc) return;
+      dbg(`pc: ${pc.connectionState}`);
       if (pc.connectionState === "connected") {
         setState("connected");
         // Start timers once truly connected.
@@ -240,7 +248,10 @@ export async function startConversation(
     };
 
     dc = pc.createDataChannel("oai-events");
-    dc.onopen = () => maybeGreet();
+    dc.onopen = () => {
+      dbg("dc open");
+      maybeGreet();
+    };
     dc.onmessage = ({ data }) => {
       let ev: Record<string, unknown>;
       try {
@@ -249,6 +260,19 @@ export async function startConversation(
         return;
       }
       const type = typeof ev.type === "string" ? ev.type : "";
+
+      // Log every event type. Audio deltas are noisy but their PRESENCE tells us
+      // the model is actually speaking (vs. a generation problem), so keep them.
+      if (type === "error") {
+        dbg(`evt: error · ${JSON.stringify(ev.error ?? ev)}`);
+      } else if (type === "response.done") {
+        const resp = ev.response as Record<string, unknown> | undefined;
+        const status = (resp?.status as string) ?? "?";
+        const sd = resp?.status_details ? JSON.stringify(resp.status_details) : "";
+        dbg(`evt: response.done · status=${status} ${sd}`);
+      } else {
+        dbg(`evt: ${type}`);
+      }
 
       if (type === "input_audio_buffer.speech_started") {
         bumpIdle();
@@ -295,6 +319,7 @@ export async function startConversation(
       headers: { Authorization: `Bearer ${mint.clientSecret}`, "Content-Type": "application/sdp" },
       body: offer.sdp ?? ""
     });
+    dbg(`sdp exchange: ${sdpRes.status}`);
     if (!sdpRes.ok) {
       const details = await sdpRes.text().catch(() => "");
       throw new Error(`Realtime SDP exchange failed (${sdpRes.status}). ${details}`);
