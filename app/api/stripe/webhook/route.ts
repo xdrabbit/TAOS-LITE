@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { stripe } from "@/lib/stripe";
+import { stripe, tierForPrice } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -12,12 +12,17 @@ function periodEndISO(sub: Stripe.Subscription): string | null {
 
 async function syncSubscription(sub: Stripe.Subscription, userId?: string | null) {
   const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
-  const fields = {
+  const active = sub.status === "active" || sub.status === "trialing";
+  // Which plan they bought, from the subscription's price → our tier label.
+  const priceId = sub.items?.data?.[0]?.price?.id ?? null;
+  const tier = active ? tierForPrice(priceId) : null;
+  const fields: Record<string, unknown> = {
     subscription_status: sub.status, // active | trialing | past_due | canceled | unpaid | ...
     stripe_customer_id: customerId,
     stripe_subscription_id: sub.id,
     current_period_end: periodEndISO(sub),
-    plan: sub.status === "active" || sub.status === "trialing" ? "pro" : "free",
+    plan: active ? "pro" : "free",
+    tier, // 'basic' | 'premium' | null
     updated_at: new Date().toISOString()
   };
 

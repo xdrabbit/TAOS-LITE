@@ -82,6 +82,7 @@ export interface Profile {
   stripe_customer_id: string | null;
   trial_ends_at: string;
   current_period_end: string | null;
+  tier: string | null; // 'basic' | 'premium' | null (set by the Stripe webhook)
 }
 
 export async function getProfile(): Promise<Profile | null> {
@@ -89,47 +90,79 @@ export async function getProfile(): Promise<Profile | null> {
   const { data, error } = await supabase
     .from("profiles")
     .select(
-      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end"
+      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end, tier"
     )
     .maybeSingle();
   if (error) return null;
   return (data as Profile | null) ?? null;
 }
 
-// ── Usage-based free trial ───────────────────────────────────────────────
-// New users get a usage allowance instead of a time-limited trial: a handful
-// of translations and a few minutes of the conversation tutor. Once a feature's
-// allowance is spent, that feature prompts an upgrade. Subscribing unlocks all.
-export const TRIAL_TRANSLATIONS = 25;
-export const TRIAL_TUTOR_SECONDS = 15 * 60; // 15 minutes of conversation tutor
+// ── Tiered plans with monthly-resetting quotas ───────────────────────────
+// Free: a small monthly allowance. Basic/Premium: unlimited translation, more
+// tutor minutes. Comp: unlimited everything. Quotas reset on the calendar month.
+export type Tier = "free" | "basic" | "premium" | "comp";
 
-export interface TrialUsage {
+export interface TierQuota {
+  translations: number; // per month (Infinity = unlimited)
+  tutorSeconds: number; // per month (Infinity = unlimited)
+}
+
+export const QUOTAS: Record<Tier, TierQuota> = {
+  free: { translations: 25, tutorSeconds: 15 * 60 },
+  basic: { translations: Infinity, tutorSeconds: 45 * 60 },
+  premium: { translations: Infinity, tutorSeconds: 200 * 60 },
+  comp: { translations: Infinity, tutorSeconds: Infinity }
+};
+
+export const TIER_LABEL: Record<Tier, string> = {
+  free: "Free",
+  basic: "Basic",
+  premium: "Premium",
+  comp: "Comp"
+};
+
+export interface MonthlyUsage {
   translations: number;
   tutorSeconds: number;
 }
 
-// True for paying/comped users — they bypass all usage gates.
+// A user's effective tier. Canceled/expired subscribers fall back to Free (they
+// keep the free monthly allowance rather than being locked out).
+export function getTier(p: Profile | null): Tier {
+  if (!p) return "free";
+  if (p.subscription_status === "comp") return "comp";
+  if (p.subscription_status === "active") {
+    return p.tier === "premium" ? "premium" : "basic";
+  }
+  return "free";
+}
+
+// Paid or comped → unlimited translation, no banners.
 export function isSubscriber(p: Profile | null): boolean {
-  return !!p && (p.subscription_status === "active" || p.subscription_status === "comp");
+  const t = getTier(p);
+  return t === "basic" || t === "premium" || t === "comp";
 }
 
-// Whole-app gate: subscribers and active trial users get in; the per-feature
-// usage gates below handle exhaustion. Canceled/none → paywall.
+// Every signed-in user with a profile has access (at least the free tier).
 export function hasAccess(p: Profile | null): boolean {
-  if (!p) return false;
-  return (
-    p.subscription_status === "active" ||
-    p.subscription_status === "comp" ||
-    p.subscription_status === "trialing"
-  );
+  return !!p;
 }
 
-// Counts the signed-in user's lifetime usage (RLS scopes to them). For a trial
-// user that equals their trial consumption; subscribers ignore these anyway.
-export async function getTrialUsage(): Promise<TrialUsage> {
+function startOfMonthISO(): string {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+// Usage within the current calendar month (RLS scopes to the signed-in user).
+export async function getMonthlyUsage(): Promise<MonthlyUsage> {
+  const since = startOfMonthISO();
   const [tx, ts] = await Promise.all([
-    supabase.from(TABLE).select("id", { count: "exact", head: true }),
-    supabase.from("tutor_sessions").select("seconds").eq("mode", "conversation")
+    supabase.from(TABLE).select("id", { count: "exact", head: true }).gte("created_at", since),
+    supabase
+      .from("tutor_sessions")
+      .select("seconds")
+      .eq("mode", "conversation")
+      .gte("created_at", since)
   ]);
   const translations = tx.count ?? 0;
   const rows = (ts.data ?? []) as Array<{ seconds?: number | null }>;
@@ -137,25 +170,31 @@ export async function getTrialUsage(): Promise<TrialUsage> {
   return { translations, tutorSeconds };
 }
 
-export function translationsLeft(p: Profile | null, u: TrialUsage | null): number {
-  if (isSubscriber(p)) return Infinity;
-  return Math.max(0, TRIAL_TRANSLATIONS - (u?.translations ?? 0));
+// Back-compat alias (callers may still import getTrialUsage / TrialUsage).
+export const getTrialUsage = getMonthlyUsage;
+export type TrialUsage = MonthlyUsage;
+
+export function translationsLeft(p: Profile | null, u: MonthlyUsage | null): number {
+  const cap = QUOTAS[getTier(p)].translations;
+  if (!Number.isFinite(cap)) return Infinity;
+  return Math.max(0, cap - (u?.translations ?? 0));
 }
 
-export function tutorSecondsLeft(p: Profile | null, u: TrialUsage | null): number {
-  if (isSubscriber(p)) return Infinity;
-  return Math.max(0, TRIAL_TUTOR_SECONDS - (u?.tutorSeconds ?? 0));
+export function tutorSecondsLeft(p: Profile | null, u: MonthlyUsage | null): number {
+  const cap = QUOTAS[getTier(p)].tutorSeconds;
+  if (!Number.isFinite(cap)) return Infinity;
+  return Math.max(0, cap - (u?.tutorSeconds ?? 0));
 }
 
-// Shared Stripe Checkout launcher (used by the paywall and the inline upgrade
-// prompts). Redirects the browser to Stripe on success.
-export async function startCheckout(): Promise<void> {
+// Launch Stripe Checkout for a chosen plan; redirects the browser on success.
+export async function startCheckout(plan: "basic" | "premium" = "basic"): Promise<void> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error("Please sign in again.");
   const res = await fetch("/api/stripe/checkout", {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` }
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ plan })
   });
   const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!res.ok || !payload.url) throw new Error(payload.error || "Could not start checkout.");

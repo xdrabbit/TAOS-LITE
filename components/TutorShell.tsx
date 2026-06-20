@@ -4,12 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   endTutorSession,
+  getMonthlyUsage,
   getProfile,
-  getTrialUsage,
-  hasAccess,
-  isSubscriber,
+  getTier,
   saveTutorAttempt,
-  startCheckout,
   startTutorSession,
   supabase,
   tutorSecondsLeft,
@@ -97,24 +95,23 @@ export function TutorShell(): JSX.Element {
     );
   }
   if (!session) return <SignIn />;
-  if (!hasAccess(profile)) {
-    return (
-      <Paywall
-        email={session.user.email ?? ""}
-        trialExpired={profile?.subscription_status === "trialing"}
-        onSignOut={() => void supabase.auth.signOut()}
-      />
-    );
-  }
-  return <TutorModes profile={profile} />;
+  // Everyone signed in gets in at their tier; the conversation tab shows upgrade
+  // prompts inline when this month's tutor minutes run out.
+  return <TutorModes profile={profile} email={session.user.email ?? ""} />;
 }
 
-function TutorModes({ profile }: { profile: Profile | null }): JSX.Element {
+function TutorModes({
+  profile,
+  email
+}: {
+  profile: Profile | null;
+  email: string;
+}): JSX.Element {
   const [mode, setMode] = useState<Mode>("drills");
   return mode === "drills" ? (
     <Drills mode={mode} onMode={setMode} />
   ) : (
-    <Conversation mode={mode} onMode={setMode} profile={profile} />
+    <Conversation mode={mode} onMode={setMode} profile={profile} email={email} />
   );
 }
 
@@ -456,16 +453,21 @@ function fmt(sec: number): string {
 function Conversation({
   mode,
   onMode,
-  profile
+  profile,
+  email
 }: {
   mode: Mode;
   onMode: (m: Mode) => void;
   profile: Profile | null;
+  email: string;
 }): JSX.Element {
-  const subscriber = isSubscriber(profile);
-  const [secsLeft, setSecsLeft] = useState<number>(subscriber ? Infinity : 0);
-  const [usageReady, setUsageReady] = useState<boolean>(subscriber);
-  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  // Only comp is truly unlimited; Free/Basic/Premium all have a monthly minute
+  // quota (15 / 45 / 200), so we meter everyone except comp.
+  const tier = getTier(profile);
+  const unlimited = tier === "comp";
+  const [secsLeft, setSecsLeft] = useState<number>(unlimited ? Infinity : 0);
+  const [usageReady, setUsageReady] = useState<boolean>(unlimited);
+  const [showPaywall, setShowPaywall] = useState(false);
 
   const [learn, setLearn] = useState<LearnLang>("es");
   const [level, setLevel] = useState<Level>("intermediate");
@@ -491,15 +493,15 @@ function Conversation({
     };
   }, []);
 
-  // Load remaining free tutor minutes (subscribers are unlimited).
+  // Load this month's remaining tutor minutes for the user's tier.
   const refreshUsage = async () => {
-    if (subscriber) {
+    if (unlimited) {
       setSecsLeft(Infinity);
       setUsageReady(true);
       return;
     }
     try {
-      const u = await getTrialUsage();
+      const u = await getMonthlyUsage();
       setSecsLeft(tutorSecondsLeft(profile, u));
     } catch {
       setSecsLeft(0);
@@ -511,25 +513,14 @@ function Conversation({
   useEffect(() => {
     void refreshUsage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subscriber]);
+  }, [unlimited]);
 
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [lines, live]);
 
-  async function upgrade() {
-    setUpgradeBusy(true);
-    setError(null);
-    try {
-      await startCheckout();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start checkout.");
-      setUpgradeBusy(false);
-    }
-  }
-
-  const trialBlocked = !subscriber && usageReady && secsLeft <= 0;
-  const trialMinLeft = Number.isFinite(secsLeft) ? Math.ceil(secsLeft / 60) : Infinity;
+  const quotaBlocked = !unlimited && usageReady && secsLeft <= 0;
+  const minLeft = Number.isFinite(secsLeft) ? Math.ceil(secsLeft / 60) : Infinity;
 
   const active = convState === "connected";
   const connecting =
@@ -545,10 +536,10 @@ function Conversation({
     setMuted(false);
 
     if (!usageReady) return; // wait until we know the remaining allowance
-    if (trialBlocked) return; // free minutes used up — UI shows upgrade instead
+    if (quotaBlocked) return; // minutes used up — UI shows upgrade instead
 
-    // Cap a trial session to whatever free minutes remain (subscribers: full 10).
-    const cap = subscriber ? CONV_MAX_MS : Math.min(CONV_MAX_MS, Math.max(0, secsLeft) * 1000);
+    // Cap the session to whatever minutes remain this month (comp: full 10).
+    const cap = unlimited ? CONV_MAX_MS : Math.min(CONV_MAX_MS, Math.max(0, secsLeft) * 1000);
     const { data: sessionData } = await supabase.auth.getSession();
     const authToken = sessionData.session?.access_token;
 
@@ -589,14 +580,15 @@ function Conversation({
               void endTutorSession(meterRef.current, secs);
               meterRef.current = null;
             }
-            // Re-read remaining trial minutes after the session is logged.
+            // Re-read this month's remaining minutes after the session is logged.
             void refreshUsage();
-            if (reason === "cap") {
-              setNotice(
-                subscriber
-                  ? "Session ended at the 10-minute limit."
-                  : "That used your free tutor minutes. Subscribe to keep talking."
-              );
+            // secsLeft here is the pre-session remaining (closure); if this turn
+            // consumed the rest, they're out for the month.
+            const outOfMinutes = !unlimited && secsLeft - secs <= 1;
+            if (outOfMinutes) {
+              setNotice("That used your tutor minutes for this month. Upgrade to keep talking.");
+            } else if (reason === "cap") {
+              setNotice("Session ended at the 10-minute limit.");
             } else if (reason === "idle") {
               setNotice("Paused after a quiet stretch. Tap Start to keep going.");
             }
@@ -632,6 +624,17 @@ function Conversation({
 
   const remaining = Math.max(0, Math.round(CONV_MAX_MS / 1000) - elapsed);
   const targetName = learn === "es" ? "Spanish" : "English";
+
+  if (showPaywall) {
+    return (
+      <Paywall
+        email={email}
+        currentTier={tier}
+        onClose={() => setShowPaywall(false)}
+        onSignOut={() => void supabase.auth.signOut()}
+      />
+    );
+  }
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -710,16 +713,19 @@ function Conversation({
               </p>
             ) : null}
 
-            {trialBlocked ? (
+            {quotaBlocked ? (
               <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-center">
-                <p className="text-sm text-rose-100">Your free tutor minutes are used up.</p>
+                <p className="text-sm text-rose-100">
+                  {tier === "free"
+                    ? "Your free tutor minutes for this month are used up."
+                    : "You've used this month's tutor minutes."}
+                </p>
                 <button
                   type="button"
-                  onClick={() => void upgrade()}
-                  disabled={upgradeBusy}
-                  className="mt-3 w-full rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300 disabled:opacity-60"
+                  onClick={() => setShowPaywall(true)}
+                  className="mt-3 w-full rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300"
                 >
-                  {upgradeBusy ? "Opening…" : "Subscribe · $5.99/mo"}
+                  {tier === "free" ? "See plans" : "Upgrade for more"}
                 </button>
               </div>
             ) : (
@@ -733,11 +739,11 @@ function Conversation({
                   Start talking · {targetName}
                 </button>
                 <p className="text-center text-xs text-amber-100/40">
-                  {subscriber
+                  {unlimited
                     ? "Hands-free · auto-pauses after 20s of silence · 10-min sessions"
                     : !usageReady
-                      ? "Free trial · checking your minutes…"
-                      : `Free trial · ${trialMinLeft} tutor min left · auto-pauses after 20s of silence`}
+                      ? "Checking your minutes…"
+                      : `${minLeft} tutor min left this month · auto-pauses after 20s of silence`}
                 </p>
               </>
             )}

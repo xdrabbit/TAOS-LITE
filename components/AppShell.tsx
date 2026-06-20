@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { getProfile, hasAccess, supabase, type Profile } from "@/lib/supabase";
+import { getProfile, supabase, type Profile } from "@/lib/supabase";
 import { SignIn } from "./SignIn";
-import { Paywall } from "./Paywall";
 import { TranslatorShell } from "./TranslatorShell";
 
 export function AppShell(): JSX.Element {
@@ -76,16 +75,8 @@ export function AppShell(): JSX.Element {
     return <SignIn />;
   }
 
-  if (!hasAccess(profile)) {
-    return (
-      <Paywall
-        email={session.user.email ?? ""}
-        trialExpired={profile?.subscription_status === "trialing"}
-        onSignOut={signOut}
-      />
-    );
-  }
-
+  // Everyone signed in enters at their tier (free included). Upgrade prompts are
+  // shown inline by TranslatorShell / TutorShell when a quota runs out.
   return (
     <TranslatorShell email={session.user.email ?? ""} profile={profile} onSignOut={signOut} />
   );

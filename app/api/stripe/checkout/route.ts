@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { stripe, STRIPE_PRICE_ID } from "@/lib/stripe";
+import { stripe, priceForPlan, type PlanId } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
 
@@ -14,6 +14,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!user) {
       return NextResponse.json({ error: "Not signed in." }, { status: 401 });
     }
+
+    const body = (await req.json().catch(() => ({}))) as { plan?: string };
+    const plan: PlanId = body.plan === "premium" ? "premium" : "basic";
 
     const { data: profile } = await supabaseAdmin
       .from("profiles")
@@ -38,7 +41,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      line_items: [{ price: priceForPlan(plan), quantity: 1 }],
       client_reference_id: user.id,
       allow_promotion_codes: true,
       success_url: `${origin}/?checkout=success`,

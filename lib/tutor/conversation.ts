@@ -198,11 +198,9 @@ export async function startConversation(
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
-      // Map the trial/subscribe gate to a friendly message.
-      if (mint.error === "trial_exhausted")
-        throw new Error("Your free tutor minutes are used up. Subscribe to keep going.");
-      if (mint.error === "subscribe_required")
-        throw new Error("Subscribe to use the conversation tutor.");
+      // Map the quota gate to a friendly message.
+      if (mint.error === "quota_exhausted")
+        throw new Error(mint.details || "You've used this month's tutor minutes.");
       throw new Error(mint.details || mint.error || "Could not start the tutor session.");
     }
     baseInstructions = mint.instructions ?? "";

@@ -2,15 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  getTrialUsage,
+  getMonthlyUsage,
+  getTier,
   isSubscriber,
   saveTranslation,
-  startCheckout,
   translationsLeft,
-  type Profile,
-  type TrialUsage
+  type MonthlyUsage,
+  type Profile
 } from "@/lib/supabase";
 import { HistoryDrawer } from "./HistoryDrawer";
+import { Paywall } from "./Paywall";
 
 type LangCode = "en" | "es";
 type Tone = "casual" | "detailed";
@@ -150,8 +151,8 @@ export function TranslatorShell({
   onSignOut: () => void;
 }): JSX.Element {
   const subscriber = isSubscriber(profile);
-  const [usage, setUsage] = useState<TrialUsage | null>(null);
-  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  const [usage, setUsage] = useState<MonthlyUsage | null>(null);
+  const [showPaywall, setShowPaywall] = useState(false);
   const transLeft = translationsLeft(profile, usage);
   const trialBlocked = !subscriber && transLeft <= 0;
 
@@ -201,28 +202,17 @@ export function TranslatorShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load the user's trial usage (skip for subscribers — they're unlimited).
+  // Load this month's usage (skip for subscribers — they're unlimited).
   useEffect(() => {
     if (subscriber) return;
     let active = true;
-    getTrialUsage()
+    getMonthlyUsage()
       .then((u) => active && setUsage(u))
       .catch(() => active && setUsage({ translations: 0, tutorSeconds: 0 }));
     return () => {
       active = false;
     };
   }, [subscriber]);
-
-  async function upgrade() {
-    setUpgradeBusy(true);
-    setError(null);
-    try {
-      await startCheckout();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start checkout.");
-      setUpgradeBusy(false);
-    }
-  }
 
   function ensureAudioEl(): HTMLAudioElement | null {
     if (!audioRef.current) {
@@ -554,6 +544,17 @@ export function TranslatorShell({
   const recording = status === "recording";
   const processing = status === "processing";
 
+  if (showPaywall) {
+    return (
+      <Paywall
+        email={email}
+        currentTier={getTier(profile)}
+        onClose={() => setShowPaywall(false)}
+        onSignOut={onSignOut}
+      />
+    );
+  }
+
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
@@ -595,16 +596,15 @@ export function TranslatorShell({
           >
             <span>
               {trialBlocked
-                ? "Free translations used up"
-                : `Free trial · ${transLeft} translation${transLeft === 1 ? "" : "s"} left`}
+                ? "Free translations used up this month"
+                : `Free · ${transLeft} translation${transLeft === 1 ? "" : "s"} left this month`}
             </span>
             <button
               type="button"
-              onClick={() => void upgrade()}
-              disabled={upgradeBusy}
-              className="rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-stone-950 disabled:opacity-60"
+              onClick={() => setShowPaywall(true)}
+              className="rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-stone-950"
             >
-              {upgradeBusy ? "Opening…" : "Upgrade · $5.99"}
+              Upgrade
             </button>
           </div>
         ) : null}

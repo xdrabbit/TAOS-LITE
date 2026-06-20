@@ -5,12 +5,21 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-// Mirror of the client trial allowance — enforced here so a user can't bypass
-// the UI cap and run unlimited (expensive) realtime minutes.
-const TRIAL_TUTOR_SECONDS = 15 * 60;
+// Monthly tutor-minute quota per tier — enforced here so a user can't bypass the
+// UI cap and run unlimited (expensive) realtime minutes. Mirror of lib/supabase.
+const TUTOR_SECONDS_BY_TIER: Record<string, number> = {
+  free: 15 * 60,
+  basic: 45 * 60,
+  premium: 200 * 60
+};
 
-// Returns an error response if the caller has used up their free tutor minutes
-// and isn't a subscriber; otherwise null (allowed).
+function startOfMonthISO(): string {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+// Returns an error response if the caller has used up this month's tutor minutes
+// for their tier; otherwise null (allowed). Comp/unlimited always pass.
 async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | null> {
   const user = await getUserFromRequest(req);
   if (!user) {
@@ -18,30 +27,40 @@ async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | nul
   }
   const { data: profile } = await supabaseAdmin
     .from("profiles")
-    .select("subscription_status")
+    .select("subscription_status, tier")
     .eq("id", user.id)
     .maybeSingle();
-  const status = (profile?.subscription_status as string | undefined) ?? "trialing";
-  if (status === "active" || status === "comp") return null; // unlimited
+  const status = (profile?.subscription_status as string | undefined) ?? "free";
+  if (status === "comp") return null; // unlimited
 
-  if (status !== "trialing") {
-    return NextResponse.json(
-      { error: "subscribe_required", details: "Subscribe to use the conversation tutor." },
-      { status: 402 }
-    );
-  }
+  // Effective tier: active subscribers use their tier; everyone else is free.
+  const tier =
+    status === "active"
+      ? (profile?.tier as string | undefined) === "premium"
+        ? "premium"
+        : "basic"
+      : "free";
+  const cap = TUTOR_SECONDS_BY_TIER[tier] ?? TUTOR_SECONDS_BY_TIER.free;
+
   const { data: rows } = await supabaseAdmin
     .from("tutor_sessions")
     .select("seconds")
     .eq("user_id", user.id)
-    .eq("mode", "conversation");
+    .eq("mode", "conversation")
+    .gte("created_at", startOfMonthISO());
   const used = ((rows ?? []) as Array<{ seconds?: number | null }>).reduce(
     (a, r) => a + (typeof r.seconds === "number" ? r.seconds : 0),
     0
   );
-  if (used >= TRIAL_TUTOR_SECONDS) {
+  if (used >= cap) {
     return NextResponse.json(
-      { error: "trial_exhausted", details: "Your free tutor minutes are used up." },
+      {
+        error: "quota_exhausted",
+        details:
+          tier === "free"
+            ? "Your free tutor minutes for this month are used up."
+            : "You've used this month's tutor minutes. Upgrade for more."
+      },
       { status: 402 }
     );
   }
