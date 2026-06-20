@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGE_OPTIONS } from "@/lib/realtime/languages";
-import { supabase } from "@/lib/supabase";
 
 function labelFor(code: string): string {
   return LANGUAGE_OPTIONS.find((o) => o.code === code)?.label ?? code.toUpperCase();
@@ -53,10 +52,6 @@ export function AtomShell(): JSX.Element {
   const [walled, setWalled] = useState(false);
   const [remaining, setRemaining] = useState(SESSION_MS);
 
-  const [email, setEmail] = useState("");
-  const [leadBusy, setLeadBusy] = useState(false);
-  const [leadSent, setLeadSent] = useState(false);
-  const [leadError, setLeadError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -304,25 +299,6 @@ export function AtomShell(): JSX.Element {
     else if (status !== "processing") void startRecording();
   }
 
-  async function joinWaitlist() {
-    const value = email.trim();
-    if (!value || !value.includes("@")) {
-      setLeadError("Enter a valid email.");
-      return;
-    }
-    setLeadError(null);
-    setLeadBusy(true);
-    try {
-      const { error } = await supabase.from("taos_leads").insert({ email: value, source: "atom" });
-      if (error) throw error;
-      setLeadSent(true);
-    } catch {
-      setLeadError("Couldn't save that — try again.");
-    } finally {
-      setLeadBusy(false);
-    }
-  }
-
   const recording = status === "recording";
   const processing = status === "processing";
   const low = remaining <= 60 * 1000;
@@ -448,35 +424,17 @@ export function AtomShell(): JSX.Element {
               Your free 10 minutes are up
             </h2>
             <p className="mt-2 text-sm text-amber-100/70">
-              Sign up for the full TAOS-LITE — unlimited translation, spoken voices, and saved history.
+              Keep translating with the full TAOS-LITE — unlimited, with spoken voices and saved history.
             </p>
-
-            {leadSent ? (
-              <p className="mt-6 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-4 text-emerald-100">
-                Thanks! We&apos;ll email you early access.
-              </p>
-            ) : (
-              <div className="mt-6 flex flex-col gap-3">
-                <input
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-center text-lg text-white outline-none focus:border-amber-300/50"
-                />
-                <button
-                  type="button"
-                  onClick={() => void joinWaitlist()}
-                  disabled={leadBusy}
-                  className="rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300 disabled:opacity-60"
-                >
-                  {leadBusy ? "Sending…" : "Get early access"}
-                </button>
-                {leadError ? <p className="text-sm text-rose-300">{leadError}</p> : null}
-              </div>
-            )}
+            <a
+              href="/"
+              className="mt-6 block rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300"
+            >
+              Start free trial →
+            </a>
+            <p className="mt-3 text-[11px] text-amber-100/40">
+              7 days free, then $7.99/mo. Cancel anytime.
+            </p>
           </div>
         </div>
       ) : null}
