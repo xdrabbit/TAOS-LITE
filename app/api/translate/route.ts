@@ -37,13 +37,19 @@ function buildInstructions(sourceLabel: string, targetLabel: string, tone: Tone)
   );
 }
 
-async function transcribe(apiKey: string, file: File, sourceLabel: string): Promise<string> {
+async function transcribe(apiKey: string, file: File, sourceLabel?: string): Promise<string> {
   const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
   const form = new FormData();
   form.append("file", file, file.name || "audio.webm");
   form.append("model", model);
-  // A language hint sharpens accuracy; the prompt nudges punctuation/casing.
-  form.append("prompt", `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation.`);
+  // A language hint sharpens accuracy; omit it in auto-detect mode so the model
+  // is free to recognize whichever language was spoken.
+  form.append(
+    "prompt",
+    sourceLabel
+      ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation.`
+      : "Transcribe verbatim with natural punctuation."
+  );
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -105,6 +111,64 @@ async function paraphrase(
   return content;
 }
 
+// Auto-detect mode: the model decides whether the transcript is English or
+// Spanish and translates to the OTHER, returning both so the client knows the
+// resolved direction (for voice + display).
+async function paraphraseAuto(
+  apiKey: string,
+  text: string,
+  tone: Tone
+): Promise<{ detected: "en" | "es"; translation: string }> {
+  const model = process.env.OPENAI_PARAPHRASE_MODEL?.trim() || "gpt-4.1-mini";
+  const toneLine =
+    tone === "detailed"
+      ? "This is an IMPORTANT conversation: preserve nuance, numbers, names, and emotion."
+      : "This is CASUAL conversation: warm, concise, friend-style; trim filler.";
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      temperature: tone === "detailed" ? 0.2 : 0.4,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            `The user's text is in either English or Spanish. Detect which. ` +
+            `Then render its MEANING in the OTHER language as a natural, FIRST-PERSON concept paraphrase ` +
+            `(never word-for-word, never narrate "he says"). ${toneLine} ` +
+            `Respond ONLY with JSON: {"lang":"en"|"es","translation":"<text in the other language>"}.`
+        },
+        { role: "user", content: text }
+      ]
+    }),
+    cache: "no-store"
+  });
+
+  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!res.ok) {
+    const detail =
+      payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
+    throw new Error(`Translation failed: ${detail}`);
+  }
+  const choices = Array.isArray(payload?.choices) ? payload?.choices : [];
+  const first = choices[0] as Record<string, unknown> | undefined;
+  const message = first?.message as Record<string, unknown> | undefined;
+  const content = typeof message?.content === "string" ? message.content : "";
+  let parsed: { lang?: string; translation?: string } = {};
+  try {
+    parsed = JSON.parse(content) as { lang?: string; translation?: string };
+  } catch {
+    /* fall through to defaults */
+  }
+  const detected: "en" | "es" = parsed.lang === "es" ? "es" : "en";
+  const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
+  if (!translation) throw new Error("Translation response was empty.");
+  return { detected, translation };
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -124,6 +188,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!(audio instanceof File) || audio.size === 0) {
       return NextResponse.json({ error: "An audio recording is required." }, { status: 400 });
     }
+
+    // Auto-detect direction: transcribe with no language hint, then let the
+    // model decide EN vs ES and translate to the other.
+    if (sourceLanguage === "auto") {
+      const original = await transcribe(apiKey, audio);
+      if (!original) {
+        return NextResponse.json(
+          { error: "Nothing was heard. Try recording again." },
+          { status: 422 }
+        );
+      }
+      const { detected, translation } = await paraphraseAuto(apiKey, original, tone);
+      return NextResponse.json({
+        original,
+        translation,
+        sourceLanguage: detected,
+        targetLanguage: detected === "en" ? "es" : "en",
+        tone,
+        autoDetected: true
+      });
+    }
+
     if (!isSupportedLanguageCode(sourceLanguage) || !isSupportedLanguageCode(targetLanguage)) {
       return NextResponse.json({ error: "Unsupported language pair." }, { status: 400 });
     }

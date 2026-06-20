@@ -143,6 +143,7 @@ export function TranslatorShell({
   const [tone, setTone] = useState<Tone>("casual");
   const [engine, setEngine] = useState<Engine>("elevenlabs");
   const [autoPlay, setAutoPlay] = useState(true);
+  const [autoDetect, setAutoDetect] = useState(false);
 
   const [status, setStatus] = useState<Status>("idle");
   const [original, setOriginal] = useState("");
@@ -411,12 +412,12 @@ export function TranslatorShell({
     // Keep the clip so "Flip" can re-run it the other way without re-recording.
     lastBlobRef.current = blob;
     lastMimeRef.current = mime;
-    await translateBlob(blob, mime, source, target);
+    await translateBlob(blob, mime, autoDetect ? "auto" : source, autoDetect ? "auto" : target);
   }
 
   // Shared translate routine — used by a normal turn and by Flip (same audio,
   // opposite direction).
-  async function translateBlob(blob: Blob, mime: string, src: LangCode, tgt: LangCode) {
+  async function translateBlob(blob: Blob, mime: string, src: string, tgt: string) {
     setOriginal("");
     setTranslation("");
     setStatus("processing");
@@ -431,19 +432,32 @@ export function TranslatorShell({
       const payload = (await res.json().catch(() => ({}))) as {
         original?: string;
         translation?: string;
+        sourceLanguage?: string;
+        targetLanguage?: string;
         error?: string;
         details?: string;
       };
       if (!res.ok) {
         throw new Error(payload.details || payload.error || s.translateFailed);
       }
+      // In auto mode the server resolves the real direction; use it for voice,
+      // the on-screen direction, and history.
+      const resolvedSrc: LangCode =
+        payload.sourceLanguage === "es" || payload.sourceLanguage === "en"
+          ? payload.sourceLanguage
+          : src === "en"
+            ? "en"
+            : "es";
+      const resolvedTgt: LangCode = resolvedSrc === "es" ? "en" : "es";
+      if (src === "auto") setSource(resolvedSrc);
+
       setOriginal(typeof payload.original === "string" ? payload.original : "");
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
       setStatus("done");
       if (payload.translation) {
         void saveTranslation({
-          source_lang: src,
-          target_lang: tgt,
+          source_lang: resolvedSrc,
+          target_lang: resolvedTgt,
           tone,
           original_text: payload.original ?? "",
           translation_text: payload.translation,
@@ -451,7 +465,7 @@ export function TranslatorShell({
         }).catch(() => {});
       }
       if (autoPlay && payload.translation) {
-        void speak(payload.translation, src, tgt);
+        void speak(payload.translation, resolvedSrc, resolvedTgt);
       }
     } catch (e) {
       console.error("[translate] pipeline failed", e);
@@ -523,23 +537,39 @@ export function TranslatorShell({
           </div>
         </header>
 
-        {/* Who is speaking — labelled in the active speaker's language */}
-        <button
-          onClick={swap}
-          type="button"
-          className="flex items-center justify-between rounded-3xl border border-white/10 bg-[rgba(36,30,24,0.8)] p-4 text-left transition active:scale-[0.99]"
-        >
-          <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">{s.speakingNow}</div>
-            <div className="text-2xl font-semibold text-white">
-              {speaker.who} · {speaker.label}
+        {/* Who is speaking — manual swap card, or an Auto-detect indicator */}
+        {autoDetect ? (
+          <div className="flex items-center justify-between rounded-3xl border border-amber-300/20 bg-amber-400/5 p-4">
+            <div>
+              <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
+                Auto-detect · Detección automática
+              </div>
+              <div className="text-2xl font-semibold text-white">
+                {status === "done" ? `${speaker.who} · ${speaker.label}` : "EN ⇄ ES"}
+              </div>
             </div>
+            <span className="text-2xl text-amber-300">✨</span>
           </div>
-          <div className="flex flex-col items-center gap-1 text-amber-300">
-            <span className="text-2xl">⇄</span>
-            <span className="text-[10px] uppercase tracking-wider text-amber-100/50">{s.swap}</span>
-          </div>
-        </button>
+        ) : (
+          <button
+            onClick={swap}
+            type="button"
+            className="flex items-center justify-between rounded-3xl border border-white/10 bg-[rgba(36,30,24,0.8)] p-4 text-left transition active:scale-[0.99]"
+          >
+            <div>
+              <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
+                {s.speakingNow}
+              </div>
+              <div className="text-2xl font-semibold text-white">
+                {speaker.who} · {speaker.label}
+              </div>
+            </div>
+            <div className="flex flex-col items-center gap-1 text-amber-300">
+              <span className="text-2xl">⇄</span>
+              <span className="text-[10px] uppercase tracking-wider text-amber-100/50">{s.swap}</span>
+            </div>
+          </button>
+        )}
 
         {/* Tone toggle (shared, bilingual) */}
         <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
@@ -566,17 +596,19 @@ export function TranslatorShell({
               </span>
               {translation ? (
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={flipLast}
-                    disabled={processing}
-                    title="Wrong direction? Re-translate the same recording the other way"
-                    aria-label="Flip direction / Voltear"
-                    className="flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-amber-200 transition disabled:opacity-50"
-                  >
-                    <span className="text-base">⇄</span>
-                    <span className="text-[11px]">Flip · Voltear</span>
-                  </button>
+                  {!autoDetect ? (
+                    <button
+                      type="button"
+                      onClick={flipLast}
+                      disabled={processing}
+                      title="Wrong direction? Re-translate the same recording the other way"
+                      aria-label="Flip direction / Voltear"
+                      className="flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-amber-200 transition disabled:opacity-50"
+                    >
+                      <span className="text-base">⇄</span>
+                      <span className="text-[11px]">Flip · Voltear</span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => {
@@ -634,7 +666,13 @@ export function TranslatorShell({
                 recording ? "h-5 w-5 bg-stone-900/85" : "h-6 w-6 bg-amber-500"
               }`}
             />
-            {recording ? s.stop : processing ? s.working : `${s.speak} ${speaker.label}`}
+            {recording
+              ? s.stop
+              : processing
+                ? s.working
+                : autoDetect
+                  ? "Speak · Hablar"
+                  : `${s.speak} ${speaker.label}`}
           </button>
 
           {wrappingUp && recording ? (
@@ -642,6 +680,16 @@ export function TranslatorShell({
               {s.wrapUp}
             </p>
           ) : null}
+
+          <label className="flex items-center gap-2 text-sm text-amber-100/70">
+            <input
+              type="checkbox"
+              checked={autoDetect}
+              onChange={(e) => setAutoDetect(e.target.checked)}
+              className="h-4 w-4 accent-amber-400"
+            />
+            Auto-detect language · Detectar idioma
+          </label>
 
           <div className="flex items-center justify-between gap-3 text-sm">
             <label className="flex items-center gap-2 text-amber-100/70">
