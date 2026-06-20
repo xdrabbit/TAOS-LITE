@@ -5,10 +5,14 @@ import type { Session } from "@supabase/supabase-js";
 import {
   endTutorSession,
   getProfile,
+  getTrialUsage,
   hasAccess,
+  isSubscriber,
   saveTutorAttempt,
+  startCheckout,
   startTutorSession,
   supabase,
+  tutorSecondsLeft,
   type Profile
 } from "@/lib/supabase";
 import { blobToWav16k } from "@/lib/tutor/wav";
@@ -102,15 +106,15 @@ export function TutorShell(): JSX.Element {
       />
     );
   }
-  return <TutorModes />;
+  return <TutorModes profile={profile} />;
 }
 
-function TutorModes(): JSX.Element {
+function TutorModes({ profile }: { profile: Profile | null }): JSX.Element {
   const [mode, setMode] = useState<Mode>("drills");
   return mode === "drills" ? (
     <Drills mode={mode} onMode={setMode} />
   ) : (
-    <Conversation mode={mode} onMode={setMode} />
+    <Conversation mode={mode} onMode={setMode} profile={profile} />
   );
 }
 
@@ -449,7 +453,20 @@ function fmt(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
+function Conversation({
+  mode,
+  onMode,
+  profile
+}: {
+  mode: Mode;
+  onMode: (m: Mode) => void;
+  profile: Profile | null;
+}): JSX.Element {
+  const subscriber = isSubscriber(profile);
+  const [secsLeft, setSecsLeft] = useState<number>(subscriber ? Infinity : 0);
+  const [usageReady, setUsageReady] = useState<boolean>(subscriber);
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+
   const [learn, setLearn] = useState<LearnLang>("es");
   const [level, setLevel] = useState<Level>("intermediate");
   const [focus, setFocus] = useState("");
@@ -474,9 +491,45 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
     };
   }, []);
 
+  // Load remaining free tutor minutes (subscribers are unlimited).
+  const refreshUsage = async () => {
+    if (subscriber) {
+      setSecsLeft(Infinity);
+      setUsageReady(true);
+      return;
+    }
+    try {
+      const u = await getTrialUsage();
+      setSecsLeft(tutorSecondsLeft(profile, u));
+    } catch {
+      setSecsLeft(0);
+    } finally {
+      setUsageReady(true);
+    }
+  };
+
+  useEffect(() => {
+    void refreshUsage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscriber]);
+
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [lines, live]);
+
+  async function upgrade() {
+    setUpgradeBusy(true);
+    setError(null);
+    try {
+      await startCheckout();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start checkout.");
+      setUpgradeBusy(false);
+    }
+  }
+
+  const trialBlocked = !subscriber && usageReady && secsLeft <= 0;
+  const trialMinLeft = Number.isFinite(secsLeft) ? Math.ceil(secsLeft / 60) : Infinity;
 
   const active = convState === "connected";
   const connecting =
@@ -491,6 +544,14 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
     setElapsed(0);
     setMuted(false);
 
+    if (!usageReady) return; // wait until we know the remaining allowance
+    if (trialBlocked) return; // free minutes used up — UI shows upgrade instead
+
+    // Cap a trial session to whatever free minutes remain (subscribers: full 10).
+    const cap = subscriber ? CONV_MAX_MS : Math.min(CONV_MAX_MS, Math.max(0, secsLeft) * 1000);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const authToken = sessionData.session?.access_token;
+
     meterRef.current = await startTutorSession({
       learn_lang: learn,
       level,
@@ -499,7 +560,14 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
 
     try {
       const sess = await startConversation(
-        { learn, level, focus: focus.trim(), maxDurationMs: CONV_MAX_MS, idleTimeoutMs: CONV_IDLE_MS },
+        {
+          learn,
+          level,
+          focus: focus.trim(),
+          maxDurationMs: cap,
+          idleTimeoutMs: CONV_IDLE_MS,
+          authToken
+        },
         {
           onState: setConvState,
           onError: (m) => setError(m),
@@ -521,8 +589,17 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
               void endTutorSession(meterRef.current, secs);
               meterRef.current = null;
             }
-            if (reason === "cap") setNotice("Session ended at the 10-minute limit.");
-            else if (reason === "idle") setNotice("Paused after a quiet stretch. Tap Start to keep going.");
+            // Re-read remaining trial minutes after the session is logged.
+            void refreshUsage();
+            if (reason === "cap") {
+              setNotice(
+                subscriber
+                  ? "Session ended at the 10-minute limit."
+                  : "That used your free tutor minutes. Subscribe to keep talking."
+              );
+            } else if (reason === "idle") {
+              setNotice("Paused after a quiet stretch. Tap Start to keep going.");
+            }
           }
         }
       );
@@ -633,17 +710,37 @@ function Conversation({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void 
               </p>
             ) : null}
 
-            <button
-              type="button"
-              onClick={() => void start()}
-              className="flex h-16 items-center justify-center gap-3 rounded-2xl border border-amber-300/30 bg-stone-50 text-lg font-semibold text-stone-900 transition active:scale-[0.99] hover:bg-white"
-            >
-              <span className="inline-block h-5 w-5 rounded-full bg-emerald-500" />
-              Start talking · {targetName}
-            </button>
-            <p className="text-center text-xs text-amber-100/40">
-              Hands-free · auto-pauses after 20s of silence · 10-min sessions
-            </p>
+            {trialBlocked ? (
+              <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-center">
+                <p className="text-sm text-rose-100">Your free tutor minutes are used up.</p>
+                <button
+                  type="button"
+                  onClick={() => void upgrade()}
+                  disabled={upgradeBusy}
+                  className="mt-3 w-full rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300 disabled:opacity-60"
+                >
+                  {upgradeBusy ? "Opening…" : "Subscribe · $5.99/mo"}
+                </button>
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void start()}
+                  className="flex h-16 items-center justify-center gap-3 rounded-2xl border border-amber-300/30 bg-stone-50 text-lg font-semibold text-stone-900 transition active:scale-[0.99] hover:bg-white"
+                >
+                  <span className="inline-block h-5 w-5 rounded-full bg-emerald-500" />
+                  Start talking · {targetName}
+                </button>
+                <p className="text-center text-xs text-amber-100/40">
+                  {subscriber
+                    ? "Hands-free · auto-pauses after 20s of silence · 10-min sessions"
+                    : !usageReady
+                      ? "Free trial · checking your minutes…"
+                      : `Free trial · ${trialMinLeft} tutor min left · auto-pauses after 20s of silence`}
+                </p>
+              </>
+            )}
           </section>
         ) : (
           // ── Live call ──

@@ -96,14 +96,70 @@ export async function getProfile(): Promise<Profile | null> {
   return (data as Profile | null) ?? null;
 }
 
-// Gate: active/comp subscribers always in; trial users in until trial_ends_at.
+// ── Usage-based free trial ───────────────────────────────────────────────
+// New users get a usage allowance instead of a time-limited trial: a handful
+// of translations and a few minutes of the conversation tutor. Once a feature's
+// allowance is spent, that feature prompts an upgrade. Subscribing unlocks all.
+export const TRIAL_TRANSLATIONS = 25;
+export const TRIAL_TUTOR_SECONDS = 15 * 60; // 15 minutes of conversation tutor
+
+export interface TrialUsage {
+  translations: number;
+  tutorSeconds: number;
+}
+
+// True for paying/comped users — they bypass all usage gates.
+export function isSubscriber(p: Profile | null): boolean {
+  return !!p && (p.subscription_status === "active" || p.subscription_status === "comp");
+}
+
+// Whole-app gate: subscribers and active trial users get in; the per-feature
+// usage gates below handle exhaustion. Canceled/none → paywall.
 export function hasAccess(p: Profile | null): boolean {
   if (!p) return false;
-  if (p.subscription_status === "active" || p.subscription_status === "comp") return true;
-  if (p.subscription_status === "trialing") {
-    return !p.trial_ends_at || new Date(p.trial_ends_at).getTime() > Date.now();
-  }
-  return false;
+  return (
+    p.subscription_status === "active" ||
+    p.subscription_status === "comp" ||
+    p.subscription_status === "trialing"
+  );
+}
+
+// Counts the signed-in user's lifetime usage (RLS scopes to them). For a trial
+// user that equals their trial consumption; subscribers ignore these anyway.
+export async function getTrialUsage(): Promise<TrialUsage> {
+  const [tx, ts] = await Promise.all([
+    supabase.from(TABLE).select("id", { count: "exact", head: true }),
+    supabase.from("tutor_sessions").select("seconds").eq("mode", "conversation")
+  ]);
+  const translations = tx.count ?? 0;
+  const rows = (ts.data ?? []) as Array<{ seconds?: number | null }>;
+  const tutorSeconds = rows.reduce((a, r) => a + (typeof r.seconds === "number" ? r.seconds : 0), 0);
+  return { translations, tutorSeconds };
+}
+
+export function translationsLeft(p: Profile | null, u: TrialUsage | null): number {
+  if (isSubscriber(p)) return Infinity;
+  return Math.max(0, TRIAL_TRANSLATIONS - (u?.translations ?? 0));
+}
+
+export function tutorSecondsLeft(p: Profile | null, u: TrialUsage | null): number {
+  if (isSubscriber(p)) return Infinity;
+  return Math.max(0, TRIAL_TUTOR_SECONDS - (u?.tutorSeconds ?? 0));
+}
+
+// Shared Stripe Checkout launcher (used by the paywall and the inline upgrade
+// prompts). Redirects the browser to Stripe on success.
+export async function startCheckout(): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/stripe/checkout", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!res.ok || !payload.url) throw new Error(payload.error || "Could not start checkout.");
+  window.location.href = payload.url;
 }
 
 export interface TutorAttemptInput {

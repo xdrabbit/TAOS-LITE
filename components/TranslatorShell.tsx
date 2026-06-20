@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { saveTranslation } from "@/lib/supabase";
+import {
+  getTrialUsage,
+  isSubscriber,
+  saveTranslation,
+  startCheckout,
+  translationsLeft,
+  type Profile,
+  type TrialUsage
+} from "@/lib/supabase";
 import { HistoryDrawer } from "./HistoryDrawer";
 
 type LangCode = "en" | "es";
@@ -134,11 +142,19 @@ function fileNameFor(mime: string): string {
 
 export function TranslatorShell({
   email,
+  profile,
   onSignOut
 }: {
   email: string;
+  profile: Profile | null;
   onSignOut: () => void;
 }): JSX.Element {
+  const subscriber = isSubscriber(profile);
+  const [usage, setUsage] = useState<TrialUsage | null>(null);
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  const transLeft = translationsLeft(profile, usage);
+  const trialBlocked = !subscriber && transLeft <= 0;
+
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
   const [tone, setTone] = useState<Tone>("casual");
   const [engine, setEngine] = useState<Engine>("elevenlabs");
@@ -184,6 +200,29 @@ export function TranslatorShell({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load the user's trial usage (skip for subscribers — they're unlimited).
+  useEffect(() => {
+    if (subscriber) return;
+    let active = true;
+    getTrialUsage()
+      .then((u) => active && setUsage(u))
+      .catch(() => active && setUsage({ translations: 0, tutorSeconds: 0 }));
+    return () => {
+      active = false;
+    };
+  }, [subscriber]);
+
+  async function upgrade() {
+    setUpgradeBusy(true);
+    setError(null);
+    try {
+      await startCheckout();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start checkout.");
+      setUpgradeBusy(false);
+    }
+  }
 
   function ensureAudioEl(): HTMLAudioElement | null {
     if (!audioRef.current) {
@@ -335,6 +374,7 @@ export function TranslatorShell({
 
   async function startRecording() {
     setError(null);
+    if (trialBlocked) return; // free translations used up — show upgrade instead
     blessAudio();
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -463,6 +503,13 @@ export function TranslatorShell({
           translation_text: payload.translation,
           engine
         }).catch(() => {});
+        // Count this translation toward the free-trial allowance.
+        if (!subscriber) {
+          setUsage((u) => ({
+            translations: (u?.translations ?? 0) + 1,
+            tutorSeconds: u?.tutorSeconds ?? 0
+          }));
+        }
       }
       if (autoPlay && payload.translation) {
         void speak(payload.translation, resolvedSrc, resolvedTgt);
@@ -536,6 +583,31 @@ export function TranslatorShell({
             </button>
           </div>
         </header>
+
+        {/* Free-trial allowance banner (hidden for subscribers) */}
+        {!subscriber && Number.isFinite(transLeft) ? (
+          <div
+            className={`flex items-center justify-between rounded-2xl border px-4 py-2.5 text-sm ${
+              trialBlocked
+                ? "border-rose-400/30 bg-rose-500/10 text-rose-100"
+                : "border-amber-300/20 bg-amber-400/5 text-amber-100/80"
+            }`}
+          >
+            <span>
+              {trialBlocked
+                ? "Free translations used up"
+                : `Free trial · ${transLeft} translation${transLeft === 1 ? "" : "s"} left`}
+            </span>
+            <button
+              type="button"
+              onClick={() => void upgrade()}
+              disabled={upgradeBusy}
+              className="rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-stone-950 disabled:opacity-60"
+            >
+              {upgradeBusy ? "Opening…" : "Upgrade · $5.99"}
+            </button>
+          </div>
+        ) : null}
 
         {/* Who is speaking — manual swap card, or an Auto-detect indicator */}
         {autoDetect ? (
@@ -652,7 +724,7 @@ export function TranslatorShell({
             ref={recordBtnRef}
             type="button"
             onClick={toggleRecord}
-            disabled={processing}
+            disabled={processing || trialBlocked}
             className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold transition active:scale-[0.99] disabled:opacity-60 ${
               recording
                 ? `bg-amber-400 text-stone-950 shadow-[0_0_34px_rgba(251,191,36,0.6)] ${

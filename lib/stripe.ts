@@ -7,7 +7,7 @@ export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
   typescript: true
 });
 
-// The subscription price the paywall sells. Defaults to the test price Tom
-// created; override per environment (live price for production).
+// The subscription price the paywall sells ($5.99/mo). Defaults to the test
+// price; override per environment (live price for production).
 export const STRIPE_PRICE_ID =
-  process.env.STRIPE_PRICE_ID?.trim() || "price_1Tk8GZHolcC19vGUuQxbOhkM";
+  process.env.STRIPE_PRICE_ID?.trim() || "price_1TkTtGHolcC19vGUnn5y0Lvs";

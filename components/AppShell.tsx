@@ -86,5 +86,7 @@ export function AppShell(): JSX.Element {
     );
   }
 
-  return <TranslatorShell email={session.user.email ?? ""} onSignOut={signOut} />;
+  return (
+    <TranslatorShell email={session.user.email ?? ""} profile={profile} onSignOut={signOut} />
+  );
 }

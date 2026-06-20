@@ -24,6 +24,7 @@ export interface ConversationConfig {
   focus?: string;
   maxDurationMs?: number; // hard cap; default 10 min
   idleTimeoutMs?: number; // silence auto-off; default 20 s
+  authToken?: string; // Supabase access token, for the server-side trial gate
 }
 
 export interface ConversationEvents {
@@ -188,13 +189,20 @@ export async function startConversation(
     });
 
     setState("minting");
+    const mintHeaders: Record<string, string> = { "Content-Type": "application/json" };
+    if (config.authToken) mintHeaders.Authorization = `Bearer ${config.authToken}`;
     const mintRes = await fetch("/api/tutor/realtime", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: mintHeaders,
       body: JSON.stringify({ learn: config.learn, level: config.level, focus: config.focus ?? "" })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
+      // Map the trial/subscribe gate to a friendly message.
+      if (mint.error === "trial_exhausted")
+        throw new Error("Your free tutor minutes are used up. Subscribe to keep going.");
+      if (mint.error === "subscribe_required")
+        throw new Error("Subscribe to use the conversation tutor.");
       throw new Error(mint.details || mint.error || "Could not start the tutor session.");
     }
     baseInstructions = mint.instructions ?? "";

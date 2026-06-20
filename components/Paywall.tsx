@@ -40,17 +40,18 @@ export function Paywall({
       <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
         <h1 className="text-2xl font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
         <p className="mt-1 text-sm text-amber-100/70">
-          {trialExpired ? "Your free trial has ended." : "Subscribe to keep translating."}
+          {trialExpired ? "Your free trial is used up." : "Subscribe to unlock everything."}
         </p>
 
         <ul className="mt-5 flex flex-col gap-2 text-sm text-amber-50/80">
-          <li>✓ Unlimited live translation, any language pair</li>
-          <li>✓ Spoken playback (natural voices)</li>
+          <li>✓ Unlimited live translation</li>
+          <li>✓ Unlimited conversation tutor (talk & get corrected)</li>
+          <li>✓ Pronunciation drills + progress</li>
           <li>✓ Private, saved history</li>
         </ul>
 
         <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-center">
-          <span className="text-2xl font-semibold text-white">$7.99</span>
+          <span className="text-2xl font-semibold text-white">$5.99</span>
           <span className="text-sm text-amber-100/60"> / month</span>
         </div>
 

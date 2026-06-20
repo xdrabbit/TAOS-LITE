@@ -1,7 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getUserFromRequest } from "@/lib/authServer";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+
+// Mirror of the client trial allowance — enforced here so a user can't bypass
+// the UI cap and run unlimited (expensive) realtime minutes.
+const TRIAL_TUTOR_SECONDS = 15 * 60;
+
+// Returns an error response if the caller has used up their free tutor minutes
+// and isn't a subscriber; otherwise null (allowed).
+async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | null> {
+  const user = await getUserFromRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Please sign in to use the tutor." }, { status: 401 });
+  }
+  const { data: profile } = await supabaseAdmin
+    .from("profiles")
+    .select("subscription_status")
+    .eq("id", user.id)
+    .maybeSingle();
+  const status = (profile?.subscription_status as string | undefined) ?? "trialing";
+  if (status === "active" || status === "comp") return null; // unlimited
+
+  if (status !== "trialing") {
+    return NextResponse.json(
+      { error: "subscribe_required", details: "Subscribe to use the conversation tutor." },
+      { status: 402 }
+    );
+  }
+  const { data: rows } = await supabaseAdmin
+    .from("tutor_sessions")
+    .select("seconds")
+    .eq("user_id", user.id)
+    .eq("mode", "conversation");
+  const used = ((rows ?? []) as Array<{ seconds?: number | null }>).reduce(
+    (a, r) => a + (typeof r.seconds === "number" ? r.seconds : 0),
+    0
+  );
+  if (used >= TRIAL_TUTOR_SECONDS) {
+    return NextResponse.json(
+      { error: "trial_exhausted", details: "Your free tutor minutes are used up." },
+      { status: 402 }
+    );
+  }
+  return null;
+}
 
 // GA Realtime endpoints. Overridable via env in case OpenAI moves them.
 const CLIENT_SECRETS_URL =
@@ -56,6 +101,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 500 }
     );
   }
+
+  // Enforce the free-trial minute cap before spending on a realtime session.
+  const denied = await checkTutorAllowance(req);
+  if (denied) return denied;
 
   const body = (await req.json().catch(() => ({}))) as {
     learn?: string;
