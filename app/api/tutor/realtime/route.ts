@@ -67,7 +67,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     body.level === "beginner" ? "beginner" : body.level === "advanced" ? "advanced" : "intermediate";
   const focus = typeof body.focus === "string" ? body.focus.slice(0, 200).trim() : "";
 
-  const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime-mini";
+  // IMPORTANT: do NOT fall back to OPENAI_REALTIME_MODEL — that env is set to
+  // the translation-only model (gpt-realtime-translate) left over from the old
+  // realtime translator, which can't hold a conversation (it 404s on
+  // inference_stream). The tutor needs a conversational speech-to-speech model.
+  const model = process.env.OPENAI_TUTOR_REALTIME_MODEL?.trim() || "gpt-realtime-mini";
   const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || "marin";
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
