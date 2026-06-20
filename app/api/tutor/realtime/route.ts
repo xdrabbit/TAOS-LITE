@@ -78,16 +78,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     type: "realtime",
     model,
     instructions,
+    // REQUIRED for spoken replies. Without this the model only transcribes the
+    // learner and never talks back (it defaults to text-only for some models).
+    output_modalities: ["audio"],
     audio: {
       input: {
         transcription: { model: transcribeModel },
-        // Server VAD = hands-free: the tutor replies when the learner stops
-        // talking. ~700ms of silence ends a turn.
+        // Server VAD = hands-free: the tutor auto-replies when the learner stops
+        // talking. ~700ms of silence ends a turn; create_response makes the
+        // model answer each turn without an explicit response.create.
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 300,
-          silence_duration_ms: 700
+          silence_duration_ms: 700,
+          create_response: true,
+          interrupt_response: true
         }
       },
       output: { voice }

@@ -106,6 +106,7 @@ export async function startConversation(
     if (audioEl) {
       audioEl.pause();
       audioEl.srcObject = null;
+      audioEl.remove();
     }
     setState("idle");
     events.onStopped?.(reason, elapsedSec());
@@ -203,6 +204,10 @@ export async function startConversation(
     audioEl = document.createElement("audio");
     audioEl.autoplay = true;
     (audioEl as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
+    // Some browsers won't play a detached media element; keep it in the DOM but
+    // hidden. Removed again in cleanup.
+    audioEl.style.display = "none";
+    document.body.appendChild(audioEl);
     pc.ontrack = (ev) => {
       if (audioEl) {
         audioEl.srcObject = ev.streams[0] ?? new MediaStream([ev.track]);
