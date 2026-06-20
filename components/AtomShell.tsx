@@ -57,6 +57,7 @@ export function AtomShell(): JSX.Element {
   const [leadBusy, setLeadBusy] = useState(false);
   const [leadSent, setLeadSent] = useState(false);
   const [leadError, setLeadError] = useState<string | null>(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -64,6 +65,9 @@ export function AtomShell(): JSX.Element {
   const mimeRef = useRef("");
   const tickRef = useRef<number | null>(null);
   const turnTimerRef = useRef<number | null>(null);
+  const lastBlobRef = useRef<Blob | null>(null);
+  const lastMimeRef = useRef("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const sourceLabel = labelFor(source);
   const targetLabel = labelFor(target);
@@ -222,13 +226,20 @@ export function AtomShell(): JSX.Element {
       setStatus("idle");
       return;
     }
+    lastBlobRef.current = blob;
+    lastMimeRef.current = mime;
+    await translateBlob(blob, mime, source, target);
+  }
+
+  async function translateBlob(blob: Blob, mime: string, src: string, tgt: string) {
     setOriginal("");
     setTranslation("");
+    setStatus("processing");
     try {
       const form = new FormData();
       form.append("audio", blob, fileNameFor(mime));
-      form.append("sourceLanguage", source);
-      form.append("targetLanguage", target);
+      form.append("sourceLanguage", src);
+      form.append("targetLanguage", tgt);
       form.append("tone", "casual");
       const res = await fetch("/api/translate", { method: "POST", body: form });
       const payload = (await res.json().catch(() => ({}))) as {
@@ -244,6 +255,46 @@ export function AtomShell(): JSX.Element {
     } catch (e) {
       setStatus("error");
       setError(e instanceof Error ? e.message : "Translation failed.");
+    }
+  }
+
+  // Re-run the last recording the other way — no re-recording.
+  function flipLast() {
+    const blob = lastBlobRef.current;
+    if (!blob || status === "recording" || status === "processing") return;
+    const ns = target; // new source = old target
+    const nt = source; // new target = old source
+    setSource(ns);
+    setTarget(nt);
+    setError(null);
+    void translateBlob(blob, lastMimeRef.current || "audio/webm", ns, nt);
+  }
+
+  // On-demand voice on the free tier: a plain OpenAI voice (the paid app uses
+  // the cloned voices). Tap-to-hear keeps cost down vs auto-play.
+  async function hear() {
+    if (!translation) return;
+    if (!audioRef.current && typeof Audio !== "undefined") audioRef.current = new Audio();
+    const a = audioRef.current;
+    if (!a) return;
+    try {
+      a.play().catch(() => {});
+      a.pause();
+      setIsSpeaking(true);
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: translation, engine: "openai" })
+      });
+      if (!res.ok) {
+        setIsSpeaking(false);
+        return;
+      }
+      a.src = URL.createObjectURL(await res.blob());
+      a.onended = () => setIsSpeaking(false);
+      await a.play();
+    } catch {
+      setIsSpeaking(false);
     }
   }
 
@@ -314,8 +365,32 @@ export function AtomShell(): JSX.Element {
         {/* Result */}
         <section className="flex flex-1 flex-col">
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
-            <div className="mb-2 text-xs uppercase tracking-[0.18em] text-emerald-100/50">
-              In {targetLabel}
+            <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
+              <span>In {targetLabel}</span>
+              {translation ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={flipLast}
+                    disabled={processing}
+                    title="Wrong direction? Re-translate the same recording the other way"
+                    className="flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-amber-200 disabled:opacity-50"
+                  >
+                    <span className="text-base">⇄</span>
+                    <span className="text-[11px]">Flip</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void hear()}
+                    className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 ${
+                      isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
+                    }`}
+                  >
+                    <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
+                    <span className="text-[11px]">Hear</span>
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-1 items-center">
               <p className="text-pretty text-[clamp(1.8rem,7vw,2.8rem)] font-semibold leading-tight tracking-tight text-white">
@@ -361,7 +436,7 @@ export function AtomShell(): JSX.Element {
             {recording ? "Stop & Translate" : processing ? "Working…" : `Speak ${sourceLabel}`}
           </button>
           <p className="text-center text-[11px] text-amber-100/40">
-            Free preview · no voice playback · nothing saved
+            Free preview · tap 🔈 to hear · nothing saved
           </p>
         </section>
       </div>

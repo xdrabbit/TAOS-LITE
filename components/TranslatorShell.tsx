@@ -156,6 +156,8 @@ export function TranslatorShell({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mimeRef = useRef<string>("");
+  const lastBlobRef = useRef<Blob | null>(null);
+  const lastMimeRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -301,7 +303,7 @@ export function TranslatorShell({
     stopRamp();
   }
 
-  async function speak(text: string) {
+  async function speak(text: string, src: LangCode = source, tgt: LangCode = target) {
     if (!text) return;
     const a = ensureAudioEl();
     if (!a) return;
@@ -310,7 +312,7 @@ export function TranslatorShell({
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, engine, sourceLanguage: source, targetLanguage: target })
+        body: JSON.stringify({ text, engine, sourceLanguage: src, targetLanguage: tgt })
       });
       if (!res.ok) {
         const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
@@ -406,15 +408,23 @@ export function TranslatorShell({
       setError(s.noAudio);
       return;
     }
+    // Keep the clip so "Flip" can re-run it the other way without re-recording.
+    lastBlobRef.current = blob;
+    lastMimeRef.current = mime;
+    await translateBlob(blob, mime, source, target);
+  }
 
+  // Shared translate routine — used by a normal turn and by Flip (same audio,
+  // opposite direction).
+  async function translateBlob(blob: Blob, mime: string, src: LangCode, tgt: LangCode) {
     setOriginal("");
     setTranslation("");
-
+    setStatus("processing");
     try {
       const form = new FormData();
       form.append("audio", blob, fileNameFor(mime));
-      form.append("sourceLanguage", source);
-      form.append("targetLanguage", target);
+      form.append("sourceLanguage", src);
+      form.append("targetLanguage", tgt);
       form.append("tone", tone);
 
       const res = await fetch("/api/translate", { method: "POST", body: form });
@@ -431,11 +441,9 @@ export function TranslatorShell({
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
       setStatus("done");
       if (payload.translation) {
-        // Best-effort save to the private, RLS-protected history. Never block
-        // the conversation on a save hiccup.
         void saveTranslation({
-          source_lang: source,
-          target_lang: target,
+          source_lang: src,
+          target_lang: tgt,
           tone,
           original_text: payload.original ?? "",
           translation_text: payload.translation,
@@ -443,13 +451,26 @@ export function TranslatorShell({
         }).catch(() => {});
       }
       if (autoPlay && payload.translation) {
-        void speak(payload.translation);
+        void speak(payload.translation, src, tgt);
       }
     } catch (e) {
       console.error("[translate] pipeline failed", e);
       setStatus("error");
       setError(e instanceof Error ? e.message : s.translateFailed);
     }
+  }
+
+  // Re-translate the LAST recording in the opposite direction — fixes the
+  // "wrong person's side was selected" mix-up with no re-recording.
+  function flipLast() {
+    const blob = lastBlobRef.current;
+    if (!blob || status === "recording" || status === "processing") return;
+    blessAudio();
+    const newSource: LangCode = source === "es" ? "en" : "es";
+    const newTarget: LangCode = newSource === "es" ? "en" : "es";
+    setSource(newSource);
+    setError(null);
+    void translateBlob(blob, lastMimeRef.current || "audio/webm", newSource, newTarget);
   }
 
   function toggleRecord() {
@@ -544,20 +565,33 @@ export function TranslatorShell({
                 {STRINGS[target].forLabel} {listener.who} · {listener.label}
               </span>
               {translation ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    blessAudio();
-                    void speak(translation);
-                  }}
-                  className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
-                    isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
-                  }`}
-                  aria-label="Play translation / Reproducir traducción"
-                >
-                  <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
-                  <span className="text-[11px]">Play · Oír</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={flipLast}
+                    disabled={processing}
+                    title="Wrong direction? Re-translate the same recording the other way"
+                    aria-label="Flip direction / Voltear"
+                    className="flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-amber-200 transition disabled:opacity-50"
+                  >
+                    <span className="text-base">⇄</span>
+                    <span className="text-[11px]">Flip · Voltear</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      blessAudio();
+                      void speak(translation);
+                    }}
+                    className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
+                      isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
+                    }`}
+                    aria-label="Play translation / Reproducir traducción"
+                  >
+                    <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
+                    <span className="text-[11px]">Play · Oír</span>
+                  </button>
+                </div>
               ) : null}
             </div>
             <div className="flex flex-1 items-center">
