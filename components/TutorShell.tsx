@@ -87,6 +87,23 @@ export function TutorShell(): JSX.Element {
     };
   }, []);
 
+  // Returning from a pack purchase: the webhook credits minutes a moment later,
+  // so re-poll the profile briefly to pick up the new bonus balance.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!new URLSearchParams(window.location.search).has("pack")) return;
+    let n = 0;
+    const id = window.setInterval(() => {
+      n += 1;
+      void getProfile().then(setProfile);
+      if (n >= 5) {
+        window.clearInterval(id);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }, 1500);
+    return () => window.clearInterval(id);
+  }, []);
+
   if (!ready) {
     return (
       <main className="flex min-h-screen items-center justify-center">
@@ -513,7 +530,7 @@ function Conversation({
   useEffect(() => {
     void refreshUsage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlimited]);
+  }, [profile, unlimited]);
 
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { startCheckout, supabase, type Tier } from "@/lib/supabase";
+import { startCheckout, startPackCheckout, supabase, type Tier } from "@/lib/supabase";
 
 interface Plan {
   id: "basic" | "premium";
@@ -53,6 +53,17 @@ export function Paywall({
       } else {
         await startCheckout(plan);
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start checkout.");
+      setBusy(null);
+    }
+  }
+
+  async function buyPack(pack: "100" | "200") {
+    setBusy(`pack-${pack}`);
+    setError(null);
+    try {
+      await startPackCheckout(pack);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start checkout.");
       setBusy(null);
@@ -149,9 +160,32 @@ export function Paywall({
           })}
         </div>
 
-        <p className="mt-3 text-center text-xs text-amber-100/40">
-          Need more than 200 min? Add-on packs are coming soon.
-        </p>
+        {isPaid ? (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+            <p className="text-sm font-medium text-amber-100/90">Need more tutor minutes this month?</p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => void buyPack("100")}
+                disabled={busy !== null}
+                className="flex-1 rounded-xl border border-amber-300/30 bg-white/5 px-3 py-2 text-sm text-amber-100 disabled:opacity-60"
+              >
+                {busy === "pack-100" ? "Opening…" : "+100 min · $9.99"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void buyPack("200")}
+                disabled={busy !== null}
+                className="flex-1 rounded-xl border border-amber-300/30 bg-white/5 px-3 py-2 text-sm text-amber-100 disabled:opacity-60"
+              >
+                {busy === "pack-200" ? "Opening…" : "+200 min · $17.99"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-amber-100/40">
+              Packs add minutes for the rest of this month.
+            </p>
+          </div>
+        ) : null}
 
         <div className="mt-4 flex items-center justify-between text-xs text-amber-100/50">
           {isPaid ? (

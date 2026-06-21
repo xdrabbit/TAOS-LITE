@@ -83,6 +83,8 @@ export interface Profile {
   trial_ends_at: string;
   current_period_end: string | null;
   tier: string | null; // 'basic' | 'premium' | null (set by the Stripe webhook)
+  bonus_seconds: number | null; // add-on pack balance for bonus_period
+  bonus_period: string | null; // 'YYYY-MM' the bonus applies to
 }
 
 export async function getProfile(): Promise<Profile | null> {
@@ -90,7 +92,7 @@ export async function getProfile(): Promise<Profile | null> {
   const { data, error } = await supabase
     .from("profiles")
     .select(
-      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end, tier"
+      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end, tier, bonus_seconds, bonus_period"
     )
     .maybeSingle();
   if (error) return null;
@@ -153,6 +155,16 @@ function startOfMonthISO(): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
+export function monthKey(d = new Date()): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// Add-on pack minutes only count if they were bought for the current month.
+export function bonusSeconds(p: Profile | null): number {
+  if (!p || p.bonus_period !== monthKey()) return 0;
+  return typeof p.bonus_seconds === "number" ? p.bonus_seconds : 0;
+}
+
 // Usage within the current calendar month (RLS scopes to the signed-in user).
 export async function getMonthlyUsage(): Promise<MonthlyUsage> {
   const since = startOfMonthISO();
@@ -183,7 +195,8 @@ export function translationsLeft(p: Profile | null, u: MonthlyUsage | null): num
 export function tutorSecondsLeft(p: Profile | null, u: MonthlyUsage | null): number {
   const cap = QUOTAS[getTier(p)].tutorSeconds;
   if (!Number.isFinite(cap)) return Infinity;
-  return Math.max(0, cap - (u?.tutorSeconds ?? 0));
+  // Monthly quota + any add-on pack minutes bought this month.
+  return Math.max(0, cap + bonusSeconds(p) - (u?.tutorSeconds ?? 0));
 }
 
 // Launch Stripe Checkout for a chosen plan; redirects the browser on success.
@@ -195,6 +208,21 @@ export async function startCheckout(plan: "basic" | "premium" = "basic"): Promis
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ plan })
+  });
+  const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!res.ok || !payload.url) throw new Error(payload.error || "Could not start checkout.");
+  window.location.href = payload.url;
+}
+
+// Buy a one-time add-on minute pack (paid users only). Redirects to Stripe.
+export async function startPackCheckout(pack: "100" | "200" = "100"): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/stripe/pack", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ pack })
   });
   const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!res.ok || !payload.url) throw new Error(payload.error || "Could not start checkout.");

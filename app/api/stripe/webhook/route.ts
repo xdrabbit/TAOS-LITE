@@ -34,6 +34,31 @@ async function syncSubscription(sub: Stripe.Subscription, userId?: string | null
   }
 }
 
+function monthKey(d = new Date()): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// Credit add-on pack minutes to the current month's bonus balance (month-scoped:
+// a pack tops up the current month and is superseded next month).
+async function creditBonus(userId: string, seconds: number) {
+  const period = monthKey();
+  const { data: p } = await supabaseAdmin
+    .from("profiles")
+    .select("bonus_seconds, bonus_period")
+    .eq("id", userId)
+    .maybeSingle();
+  const cur =
+    (p?.bonus_period as string | null) === period ? ((p?.bonus_seconds as number | null) ?? 0) : 0;
+  await supabaseAdmin
+    .from("profiles")
+    .update({
+      bonus_seconds: cur + seconds,
+      bonus_period: period,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", userId);
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret || !process.env.STRIPE_SECRET_KEY) {
@@ -54,6 +79,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
+        // One-time add-on pack purchase → credit bonus minutes.
+        if (session.mode === "payment" && session.metadata?.kind === "pack") {
+          const minutes = parseInt(session.metadata.pack_minutes ?? "0", 10);
+          const userId = (session.client_reference_id ?? session.metadata.user_id) as string | null;
+          if (minutes > 0 && userId) await creditBonus(userId, minutes * 60);
+          break;
+        }
         const subId =
           typeof session.subscription === "string"
             ? session.subscription

@@ -32,3 +32,27 @@ export function tierForPrice(priceId: string | null | undefined): "basic" | "pre
 
 // Back-compat: some callers still import STRIPE_PRICE_ID.
 export const STRIPE_PRICE_ID = STRIPE_PRICE_BASIC;
+
+// One-time add-on minute packs (month-scoped bonus). Buyable by paying users
+// when they run out of their monthly tutor minutes.
+export interface Pack {
+  price: string;
+  minutes: number;
+  amount: string;
+  label: string;
+}
+export const STRIPE_PACKS: Record<string, Pack> = {
+  "100": {
+    price: process.env.STRIPE_PACK_100?.trim() || "price_1TkZV3HolcC19vGUE6ALKSQe",
+    minutes: 100,
+    amount: "$9.99",
+    label: "100 tutor minutes"
+  },
+  "200": {
+    price: process.env.STRIPE_PACK_200?.trim() || "price_1TkZV5HolcC19vGUu9QAX0rG",
+    minutes: 200,
+    amount: "$17.99",
+    label: "200 tutor minutes"
+  }
+};
+export type PackId = keyof typeof STRIPE_PACKS;

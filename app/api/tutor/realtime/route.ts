@@ -18,6 +18,11 @@ function startOfMonthISO(): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
+function monthKey(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 // Returns an error response if the caller has used up this month's tutor minutes
 // for their tier; otherwise null (allowed). Comp/unlimited always pass.
 async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | null> {
@@ -27,7 +32,7 @@ async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | nul
   }
   const { data: profile } = await supabaseAdmin
     .from("profiles")
-    .select("subscription_status, tier")
+    .select("subscription_status, tier, bonus_seconds, bonus_period")
     .eq("id", user.id)
     .maybeSingle();
   const status = (profile?.subscription_status as string | undefined) ?? "free";
@@ -40,7 +45,12 @@ async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | nul
         ? "premium"
         : "basic"
       : "free";
-  const cap = TUTOR_SECONDS_BY_TIER[tier] ?? TUTOR_SECONDS_BY_TIER.free;
+  // Monthly quota + any add-on pack minutes bought this month.
+  const bonus =
+    (profile?.bonus_period as string | undefined) === monthKey()
+      ? ((profile?.bonus_seconds as number | undefined) ?? 0)
+      : 0;
+  const cap = (TUTOR_SECONDS_BY_TIER[tier] ?? TUTOR_SECONDS_BY_TIER.free) + bonus;
 
   const { data: rows } = await supabaseAdmin
     .from("tutor_sessions")
