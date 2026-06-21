@@ -171,8 +171,16 @@ export function Landing({ onSignIn }: { onSignIn: () => void }): JSX.Element {
           </button>
         </section>
 
-        <footer className="mt-10 text-center text-xs text-amber-100/30">
-          © {new Date().getFullYear()} TAOS · Real-time translation & language tutoring
+        <footer className="mt-10 flex flex-col items-center gap-1 text-center">
+          <a
+            href="/about"
+            className="text-sm text-amber-100/70 underline-offset-2 hover:underline"
+          >
+            Made for Lizmariett Marquez <span aria-hidden>❤️</span>
+          </a>
+          <span className="text-xs text-amber-100/30">
+            © {new Date().getFullYear()} TAOS · Real-time translation &amp; language tutoring
+          </span>
         </footer>
       </div>
     </main>
