@@ -4,12 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getProfile, supabase, type Profile } from "@/lib/supabase";
 import { SignIn } from "./SignIn";
+import { Landing } from "./Landing";
 import { TranslatorShell } from "./TranslatorShell";
 
 export function AppShell(): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
+  const [showSignIn, setShowSignIn] = useState(false);
 
   const refreshProfile = useCallback(async () => {
     const p = await getProfile();
@@ -72,7 +74,9 @@ export function AppShell(): JSX.Element {
   }
 
   if (!session) {
-    return <SignIn />;
+    // Logged-out visitors see the marketing landing; "Sign in" / "Start free"
+    // reveal the actual auth screen.
+    return showSignIn ? <SignIn /> : <Landing onSignIn={() => setShowSignIn(true)} />;
   }
 
   // Everyone signed in enters at their tier (free included). Upgrade prompts are
