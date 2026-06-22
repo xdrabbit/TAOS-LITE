@@ -8,8 +8,8 @@ type LangCode = "en" | "es";
 
 // A multilingual-capable default voice so the same voice reads EN and ES well.
 const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (works with multilingual model)
-const ELEVENLABS_TOM_VOICE = "uOQZaXDzEW5WoyNfLPne"; // Tom's clone — reads EN->ES
-const ELEVENLABS_LIZ_VOICE = "tpOaz7u8rY4nup9rRUmh"; // Liz's clone — reads ES->EN
+const ELEVENLABS_TOM_VOICE = "tpOaz7u8rY4nup9rRUmh"; // Tom's male clone
+const ELEVENLABS_LIZ_VOICE = "uOQZaXDzEW5WoyNfLPne"; // Liz's female clone
 const DEFAULT_OPENAI_VOICE = "nova";
 
 function audioResponse(buffer: ArrayBuffer): NextResponse {
@@ -23,13 +23,14 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
 }
 
 function elevenLabsVoiceId(sourceLanguage?: LangCode, targetLanguage?: LangCode): string {
-  // Tom speaks EN -> Liz hears Spanish in Tom's voice.
+  // The voice follows the SPEAKER, so each person hears their partner's real
+  // voice speaking their own language. (No env override here — it was forcing
+  // the ES->EN side to the wrong clone.)
   if (sourceLanguage === "en" && targetLanguage === "es") {
-    return ELEVENLABS_TOM_VOICE;
+    return ELEVENLABS_TOM_VOICE; // Tom speaks English -> Spanish in Tom's voice
   }
-  // Liz speaks ES -> Tom hears English in Liz's voice.
   if (sourceLanguage === "es" && targetLanguage === "en") {
-    return process.env.ELEVENLABS_VOICE_ID_ES_EN?.trim() || ELEVENLABS_LIZ_VOICE;
+    return ELEVENLABS_LIZ_VOICE; // Liz speaks Spanish -> English in Liz's voice
   }
   return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
 }
