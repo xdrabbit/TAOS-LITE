@@ -49,13 +49,40 @@ const PLANS: {
   }
 ];
 
+// Smiley TAOS — the brand mascot (the friendly face that lives in the "O").
+function TaosMascot({ className }: { className?: string }): JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 120 120"
+      className={className}
+      role="img"
+      aria-label="TAOS mascot"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient id="taosFace" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#1c1712" />
+          <stop offset="100%" stopColor="#0e0b08" />
+        </linearGradient>
+      </defs>
+      <rect x="12" y="14" width="96" height="92" rx="34" fill="url(#taosFace)" stroke="#fbbf24" strokeWidth="4" />
+      <circle cx="46" cy="54" r="6.5" fill="#fbbf24" />
+      <circle cx="74" cy="54" r="6.5" fill="#fbbf24" />
+      <path d="M40 66 Q60 88 80 66" fill="none" stroke="#fbbf24" strokeWidth="6.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Landing({ onSignIn }: { onSignIn: () => void }): JSX.Element {
   return (
     <main className="min-h-screen px-5 pb-16 pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto max-w-3xl">
         {/* Header */}
         <header className="flex items-center justify-between py-2">
-          <span className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</span>
+          <span className="flex items-center gap-2 text-lg font-semibold tracking-tight text-amber-200">
+            <TaosMascot className="h-7 w-7" />
+            TAOS·LITE
+          </span>
           <button
             type="button"
             onClick={onSignIn}
@@ -66,15 +93,20 @@ export function Landing({ onSignIn }: { onSignIn: () => void }): JSX.Element {
         </header>
 
         {/* Hero */}
-        <section className="flex flex-col items-center gap-5 py-12 text-center">
+        <section className="flex flex-col items-center gap-5 py-10 text-center">
+          <TaosMascot className="h-24 w-24 drop-shadow-[0_0_34px_rgba(251,191,36,0.35)]" />
           <h1 className="text-pretty text-[clamp(2.2rem,8vw,3.6rem)] font-semibold leading-[1.05] tracking-tight text-white">
             Talk across languages,
             <br />
             then actually learn one.
           </h1>
           <p className="max-w-xl text-balance text-lg text-amber-50/70">
-            Real-time voice translation plus an AI tutor that talks back and fixes your
-            pronunciation. Speak, be understood, and improve — all in one app.
+            The easiest way for two people to understand each other on one phone. Real-time voice
+            that keeps your meaning and tone — not robotic word-for-word — plus an AI tutor that
+            talks back. Made for couples, families, and caregivers.
+          </p>
+          <p className="text-xs uppercase tracking-[0.25em] text-amber-200/70">
+            Speak · Translate · Learn
           </p>
           <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
             <button
