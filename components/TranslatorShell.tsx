@@ -169,6 +169,13 @@ export function TranslatorShell({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [wrappingUp, setWrappingUp] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+
+  // Avatar initial derived from the signed-in email (the only identity the
+  // component receives — Profile has no name field). Falls back to a generic
+  // user icon when the email yields no alphanumeric character.
+  const avatarInitial = (email.match(/[a-z0-9]/i)?.[0] ?? "").toUpperCase();
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -213,6 +220,26 @@ export function TranslatorShell({
       active = false;
     };
   }, [subscriber]);
+
+  // Close the account menu on outside pointer press or Escape. Only wired while
+  // the menu is open so there's no idle global listener.
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (accountMenuRef.current && !accountMenuRef.current.contains(e.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setAccountMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [accountMenuOpen]);
 
   function ensureAudioEl(): HTMLAudioElement | null {
     if (!audioRef.current) {
@@ -579,21 +606,61 @@ export function TranslatorShell({
             >
               Tutor
             </a>
-            <button
-              type="button"
-              onClick={() => setHistoryOpen(true)}
-              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100"
-            >
-              History · Historial
-            </button>
-            <button
-              type="button"
-              onClick={onSignOut}
-              title={email}
-              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/70"
-            >
-              Sign out · Salir
-            </button>
+            <div ref={accountMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setAccountMenuOpen((o) => !o)}
+                aria-label="Account menu"
+                aria-haspopup="menu"
+                aria-expanded={accountMenuOpen}
+                title={email}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-xs font-semibold text-amber-200 transition active:scale-95"
+              >
+                {avatarInitial || (
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="h-4 w-4"
+                  >
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M4 21c0-4 3.5-6 8-6s8 2 8 6" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
+              {accountMenuOpen ? (
+                <div
+                  role="menu"
+                  aria-label="Account"
+                  className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      setHistoryOpen(true);
+                    }}
+                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    History · Historial
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      onSignOut();
+                    }}
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100/70 transition hover:bg-amber-400/10"
+                  >
+                    Sign out · Salir
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </header>
 
