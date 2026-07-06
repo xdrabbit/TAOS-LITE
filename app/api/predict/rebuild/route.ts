@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { supabaseAdmin, hasServiceRoleKey } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
 // The build core is plain ESM JS (shared with scripts/build-predict-model.mjs).
 import { buildAllModels, DIRECTIONS } from "@/lib/predict/model.mjs";
@@ -32,6 +32,20 @@ async function fetchAllRows(): Promise<Array<{ original_text: string; created_at
 }
 
 async function rebuild(): Promise<NextResponse> {
+  // Both the history read and the model write below go through the service-role
+  // client. Without the key it degrades to a placeholder and Supabase rejects
+  // every request with "Invalid API key" (surfacing as "Failed to store
+  // models."). Fail loudly and unambiguously instead.
+  if (!hasServiceRoleKey) {
+    console.error(
+      "[predict/rebuild] SUPABASE_SERVICE_ROLE_KEY is not set — cannot read history or write models."
+    );
+    return NextResponse.json(
+      { error: "Server is missing SUPABASE_SERVICE_ROLE_KEY.", details: "Set SUPABASE_SERVICE_ROLE_KEY in the deployment environment." },
+      { status: 500 }
+    );
+  }
+
   const raw = await fetchAllRows();
   const now = Date.now();
   const models = buildAllModels(raw, now);
@@ -49,6 +63,13 @@ async function rebuild(): Promise<NextResponse> {
     .from(MODEL_TABLE)
     .upsert(upserts, { onConflict: "direction" });
   if (error) {
+    // Surface the real Supabase error in the server logs so misconfig (bad key,
+    // constraint violation, schema drift) is diagnosable rather than opaque.
+    console.error(
+      `[predict/rebuild] upsert to ${MODEL_TABLE} failed: ${error.message}` +
+        (error.code ? ` (code ${error.code})` : "") +
+        (error.hint ? ` — hint: ${error.hint}` : "")
+    );
     return NextResponse.json({ error: "Failed to store models.", details: error.message }, { status: 502 });
   }
 
