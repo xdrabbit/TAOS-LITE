@@ -562,6 +562,18 @@ export function TranslatorShell({
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
           <div className="flex items-center gap-2">
             <a
+              href="/live"
+              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+            >
+              Live
+            </a>
+            <a
+              href="/translate"
+              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+            >
+              Translate
+            </a>
+            <a
               href="/tutor"
               className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
