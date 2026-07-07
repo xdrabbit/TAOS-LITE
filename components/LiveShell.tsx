@@ -7,8 +7,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // We run on-device speech-to-text via the Web Speech API and, on each finalized
 // chunk, ask POST /api/live-translate for a short English CONCEPT summary — not
 // a word-for-word translation. Concepts stream into a glanceable feed, newest
-// on top. No new server deps, no new API keys, no mic upload leaves the device
-// except the recognized text.
+// on top. An optional Voice toggle reads each concept aloud through the
+// existing /api/tts (ElevenLabs clones — Liz's voice reads EN concepts of her
+// Spanish). No new server deps, no new API keys, no mic upload leaves the
+// device except the recognized text.
 
 // Endpoint direction values (see app/api/live-translate/route.ts).
 type Direction = "es-en" | "en-es";
@@ -28,6 +30,18 @@ const DIRECTIONS: Record<Direction, DirectionMeta> = {
 // Rolling context sent to the endpoint so its guesses improve as the call goes
 // on. Keep the last N summaries; the endpoint also caps this server-side.
 const MAX_CONTEXT = 10;
+
+// Voice readout: map the endpoint direction to /api/tts language fields so the
+// existing voice-follows-speaker logic picks the right clone (Liz's voice reads
+// EN concepts of her Spanish, Tom's reads ES concepts of his English).
+const TTS_LANGS: Record<Direction, { sourceLanguage: "es" | "en"; targetLanguage: "es" | "en" }> = {
+  "es-en": { sourceLanguage: "es", targetLanguage: "en" },
+  "en-es": { sourceLanguage: "en", targetLanguage: "es" }
+};
+
+// In a live conversation a backlog of spoken summaries is worse than a gap —
+// the screen already shows everything. Keep only the newest few pending.
+const MAX_SPEECH_QUEUE = 2;
 
 interface ConceptEntry {
   id: number;
@@ -63,6 +77,8 @@ export function LiveShell(): JSX.Element {
   const [interim, setInterim] = useState("");
   const [feed, setFeed] = useState<ConceptEntry[]>([]);
   const [error, setError] = useState<LiveError | null>(null);
+  const [voiceOn, setVoiceOn] = useState(false);
+  const [speakingConcept, setSpeakingConcept] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   // Mirror of `listening` for use inside recognition callbacks (which close over
@@ -74,6 +90,13 @@ export function LiveShell(): JSX.Element {
   const contextRef = useRef<string[]>([]);
   // Monotonic id source for feed entries (StrictMode-safe, no collisions).
   const idRef = useRef(0);
+  // Voice readout plumbing. `voiceOnRef` mirrors `voiceOn` for use inside async
+  // chains; the queue holds concepts waiting for TTS, newest-capped.
+  const voiceOnRef = useRef(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const speechQueueRef = useRef<{ text: string; direction: Direction }[]>([]);
+  const playingRef = useRef(false);
 
   useEffect(() => {
     directionRef.current = direction;
@@ -82,6 +105,108 @@ export function LiveShell(): JSX.Element {
   useEffect(() => {
     if (!getRecognitionCtor()) setSupported(false);
   }, []);
+
+  const ensureAudioEl = useCallback((): HTMLAudioElement | null => {
+    if (!audioRef.current) {
+      audioRef.current = typeof Audio !== "undefined" ? new Audio() : null;
+    }
+    return audioRef.current;
+  }, []);
+
+  // Calling play() inside the user gesture "blesses" the element so later
+  // programmatic play() (after async TTS fetch) is allowed on iOS Safari.
+  const blessAudio = useCallback(() => {
+    const a = ensureAudioEl();
+    if (!a) return;
+    a.play().catch(() => {});
+    a.pause();
+  }, [ensureAudioEl]);
+
+  // Pull the next queued concept through /api/tts and play it. Strictly one at
+  // a time; each finished (or failed) playback drains the next.
+  const drainSpeechQueue = useCallback(() => {
+    if (playingRef.current) return;
+    const next = speechQueueRef.current.shift();
+    if (!next) {
+      setSpeakingConcept(false);
+      return;
+    }
+    playingRef.current = true;
+    setSpeakingConcept(true);
+
+    fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: next.text, ...TTS_LANGS[next.direction] })
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
+          throw new Error(p.details || p.error || "Voice playback failed.");
+        }
+        return res.blob();
+      })
+      .then((blob) => {
+        if (!voiceOnRef.current) return; // toggled off while the audio was in flight
+        const a = ensureAudioEl();
+        if (!a) return;
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        const url = URL.createObjectURL(blob);
+        objectUrlRef.current = url;
+        a.src = url;
+        return new Promise<void>((resolve) => {
+          // `pause` also fires at natural end and on toggle-off, so it alone
+          // would suffice — `ended`/`error` are belt-and-braces.
+          a.onended = () => resolve();
+          a.onpause = () => resolve();
+          a.onerror = () => resolve();
+          a.play().catch(() => resolve());
+        });
+      })
+      .catch((e) => {
+        // Voice is a bonus layer — a failed readout never interrupts the feed.
+        setError({
+          message: e instanceof Error ? e.message : "Voice playback failed.",
+          fatal: false
+        });
+      })
+      .finally(() => {
+        playingRef.current = false;
+        drainSpeechQueue();
+      });
+  }, [ensureAudioEl]);
+
+  const enqueueSpeech = useCallback(
+    (text: string) => {
+      if (!voiceOnRef.current) return;
+      const q = speechQueueRef.current;
+      q.push({ text, direction: directionRef.current });
+      while (q.length > MAX_SPEECH_QUEUE) q.shift(); // drop stale, keep newest
+      drainSpeechQueue();
+    },
+    [drainSpeechQueue]
+  );
+
+  const toggleVoice = useCallback(() => {
+    const next = !voiceOnRef.current;
+    voiceOnRef.current = next;
+    setVoiceOn(next);
+    if (next) {
+      blessAudio(); // we're inside the tap — unlock iOS playback now
+    } else {
+      speechQueueRef.current = [];
+      playingRef.current = false;
+      setSpeakingConcept(false);
+      const a = audioRef.current;
+      if (a) {
+        try {
+          a.pause();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }, [blessAudio]);
 
   // Fire a single concept lookup for one finalized chunk. Fire-and-render: we
   // do NOT queue or await in order — results are prepended as they return, so a
@@ -120,6 +245,7 @@ export function LiveShell(): JSX.Element {
           { id: (idRef.current += 1), concept, isGuess: Boolean(payload.isGuess), at: Date.now() },
           ...prev
         ]);
+        enqueueSpeech(concept);
       })
       .catch((e) => {
         // A single failed lookup shouldn't stop the call — surface it quietly.
@@ -128,7 +254,7 @@ export function LiveShell(): JSX.Element {
           fatal: false
         });
       });
-  }, []);
+  }, [enqueueSpeech]);
 
   const stopListening = useCallback(() => {
     listeningRef.current = false;
@@ -273,6 +399,17 @@ export function LiveShell(): JSX.Element {
           /* ignore */
         }
       }
+      voiceOnRef.current = false;
+      speechQueueRef.current = [];
+      const a = audioRef.current;
+      if (a) {
+        try {
+          a.pause();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
   }, []);
 
@@ -340,16 +477,37 @@ export function LiveShell(): JSX.Element {
         <section className="flex flex-1 flex-col gap-2">
           <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
             <span>Concepts</span>
-            {feed.length > 0 ? (
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={clearAll}
-                className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] normal-case tracking-normal text-amber-100/70"
+                onClick={toggleVoice}
+                aria-pressed={voiceOn}
+                className={`rounded-full border px-3 py-1 text-[11px] normal-case tracking-normal transition ${
+                  voiceOn
+                    ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
+                    : "border-white/10 bg-white/5 text-amber-100/70"
+                }`}
               >
-                Clear
+                {voiceOn ? (speakingConcept ? "🔊 Voice · speaking" : "🔊 Voice on") : "🔇 Voice off"}
               </button>
-            ) : null}
+              {feed.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] normal-case tracking-normal text-amber-100/70"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
           </div>
+
+          {voiceOn ? (
+            <p className="rounded-2xl border border-emerald-300/15 bg-emerald-400/5 px-4 py-2 text-xs text-emerald-100/60">
+              Concepts are read aloud as they arrive. Headphones or an earpiece work best so the mic
+              doesn&apos;t pick the voice back up.
+            </p>
+          ) : null}
 
           <div className="flex min-h-[38vh] flex-1 flex-col gap-2">
             {/* Live listening affordance sits at the top so it's near new concepts */}
