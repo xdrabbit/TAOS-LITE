@@ -73,3 +73,17 @@ false` + 1-3s summaries keep the ear current.
 3. Character breaks: if the model ever answers/chats, tighten instructions in
    `buildInterpreterInstructions` (route file) — no client change needed.
 4. Cost check after a long session (OpenAI usage dashboard).
+
+## Addendum (same day, after first field test)
+
+Tom's live test surfaced two issues, both fixed:
+
+1. **Overlapping summary voices** — server-auto responses (`create_response: true`) fired at
+   every VAD pause and their audio piled up in the WebRTC output buffer. Now the **client** owns
+   response creation: VAD commits only increment a pending counter, and the next `response.create`
+   fires when the previous summary has finished generating (`response.done`) AND playing
+   (`output_audio_buffer.stopped`, 12s unstick fallback). Turns that stack up while a summary
+   plays are coalesced into ONE fresh summary — backlog-drop by construction.
+2. **Spanish bleeding into English output** — mini-model instruction drift. The output-language
+   rule now leads the prompt in caps, is repeated at the end, and explicitly forbids the source
+   language. Verified over WS: two rapid ES utterances → two serialized, English-only summaries.

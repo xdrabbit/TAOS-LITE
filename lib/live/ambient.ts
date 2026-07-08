@@ -77,6 +77,17 @@ export async function startAmbientLive(
   // Accumulates transcript deltas so onSummaryDone can fall back to them if the
   // done event ever arrives without a transcript payload.
   let summaryBuffer = "";
+  // Response gating (the session is minted with create_response: false).
+  // Server-auto-created responses overlapped: a new summary's audio started
+  // while the previous one was still draining out of the WebRTC buffer. So WE
+  // create responses: turns committed by VAD only increment `pendingTurns`,
+  // and the next response fires when the previous one has finished BOTH
+  // generating (response.done) and playing (output_audio_buffer.stopped).
+  // Everything committed in the meantime is coalesced into one fresh summary.
+  let pendingTurns = 0;
+  let responseActive = false;
+  let audioPlaying = false;
+  let audioStuckTimer: number | null = null;
   const startMs = Date.now();
 
   const setState = (s: AmbientState) => events.onState?.(s);
@@ -85,8 +96,10 @@ export async function startAmbientLive(
   const clearTimers = () => {
     if (tickTimer !== null) window.clearInterval(tickTimer);
     if (idleTimer !== null) window.clearTimeout(idleTimer);
+    if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
     tickTimer = null;
     idleTimer = null;
+    audioStuckTimer = null;
   };
 
   const stop = async (reason: AmbientStopReason = "user") => {
@@ -124,6 +137,21 @@ export async function startAmbientLive(
 
   const setMuted = (muted: boolean) => {
     if (audioEl) audioEl.muted = muted;
+  };
+
+  const clearAudioStuckTimer = () => {
+    if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
+    audioStuckTimer = null;
+  };
+
+  // Fire the next micro-summary if there is committed speech waiting and the
+  // previous summary is fully finished. Called from every gate-state change.
+  const maybeRespond = () => {
+    if (stopped || pendingTurns === 0 || responseActive || audioPlaying) return;
+    if (!dc || dc.readyState !== "open") return;
+    pendingTurns = 0; // everything committed so far is covered by this response
+    responseActive = true;
+    dc.send(JSON.stringify({ type: "response.create" }));
   };
 
   try {
@@ -212,6 +240,41 @@ export async function startAmbientLive(
       const type = typeof ev.type === "string" ? ev.type : "";
 
       if (type === "input_audio_buffer.speech_started") {
+        bumpIdle();
+        return;
+      }
+      // VAD finished a turn and committed its audio to the conversation.
+      if (type === "input_audio_buffer.committed") {
+        pendingTurns += 1;
+        maybeRespond();
+        bumpIdle();
+        return;
+      }
+      if (type === "response.done") {
+        responseActive = false;
+        // Over WebRTC the audio can still be draining; output_audio_buffer
+        // events release that side of the gate. Belt-and-braces: if the
+        // "stopped" event never arrives, unstick after 12s (summaries are
+        // capped well below that).
+        if (audioPlaying) {
+          clearAudioStuckTimer();
+          audioStuckTimer = window.setTimeout(() => {
+            audioPlaying = false;
+            maybeRespond();
+          }, 12_000);
+        }
+        maybeRespond();
+        return;
+      }
+      if (type === "output_audio_buffer.started") {
+        audioPlaying = true;
+        bumpIdle();
+        return;
+      }
+      if (type === "output_audio_buffer.stopped" || type === "output_audio_buffer.cleared") {
+        audioPlaying = false;
+        clearAudioStuckTimer();
+        maybeRespond();
         bumpIdle();
         return;
       }

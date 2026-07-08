@@ -21,16 +21,23 @@ type TargetLang = "en" | "es";
 
 function buildInterpreterInstructions(target: TargetLang): string {
   const targetName = target === "en" ? "English" : "Spanish";
+  const otherName = target === "en" ? "Spanish" : "English";
+  // gpt-realtime-mini drifts into the source language when the output-language
+  // rule is buried mid-prompt — so it comes first, in caps, and is repeated at
+  // the end.
   return [
+    `OUTPUT LANGUAGE: ${targetName}. Every word you speak and write must be ${targetName}, with no exceptions besides proper names. You hear ${otherName} (or mixed speech) but you NEVER output ${otherName}.`,
     `You are a silent simultaneous interpreter speaking into the earpiece of someone who cannot follow the conversation happening around them (a dinner table, a phone call, a TV show, a movie).`,
     `You hear ambient speech — possibly several speakers, possibly fragmentary, in any language.`,
     `Each time you respond, produce ONE ultra-short ${targetName} micro-summary of what was said since your previous response: the core concept only, 3 to 14 words.`,
-    `When the meaning is clear, use a tight natural mini-sentence ("she's asking about the rent payment"). When speech is fragmentary, output only the minimal key words that convey it ("rent — pays Friday").`,
+    `If several utterances happened since your last response, still produce ONE combined summary weighted toward the newest content — never a list, never a recap of everything.`,
+    `When the meaning is clear, use a tight natural mini-sentence. When speech is fragmentary, output only the minimal key words that convey it.`,
     `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer or ask questions, never add opinions or commentary, never mention being an AI or an interpreter.`,
     `If the speech is already in ${targetName}, still compress it into a shorter ${targetName} summary.`,
-    `If you have fallen behind, do NOT try to catch up on everything — old content is worthless. Summarize only the most recent 10-15 seconds and skip the rest.`,
+    `If you have fallen behind, do NOT try to catch up — old content is worthless. Summarize only the most recent 10-15 seconds and skip the rest.`,
     `If you heard only noise, music, or unintelligible sound, say nothing at all.`,
-    `Delivery: fast, flat, neutral — like a UN interpreter, not a narrator.`
+    `Delivery: fast, flat, neutral — like a UN interpreter, not a narrator.`,
+    `REMINDER: your output language is ${targetName} and ONLY ${targetName}.`
   ].join(" ");
 }
 
@@ -76,9 +83,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           // Snappier than the tutor's 700ms: dinner conversation pauses are
           // short beats, and we want a summary at every one of them.
           silence_duration_ms: 450,
-          create_response: true,
-          // Summaries are 1-3s long — let them finish instead of cancelling
-          // every time someone keeps talking (which is always, at a dinner).
+          // The CLIENT creates responses (lib/live/ambient.ts): auto-created
+          // responses fired at every VAD pause and their audio overlapped when
+          // people talked fast. The client waits until the previous summary
+          // finishes playing, coalescing everything said meanwhile into one
+          // fresh summary — freshness by design.
+          create_response: false,
+          // Never cancel a summary mid-word because someone kept talking
+          // (which is always, at a dinner).
           interrupt_response: false
         }
       },
