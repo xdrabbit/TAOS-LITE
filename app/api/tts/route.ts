@@ -38,14 +38,20 @@ function elevenLabsVoiceId(sourceLanguage?: LangCode, targetLanguage?: LangCode)
 async function elevenLabs(
   text: string,
   sourceLanguage?: LangCode,
-  targetLanguage?: LangCode
+  targetLanguage?: LangCode,
+  latency?: "flash"
 ): Promise<NextResponse> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
   }
   const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage);
-  const model = process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5"; // low-latency, multilingual
+  // /live sends latency:"flash" — trade a little clone fidelity for the
+  // lowest-latency model so spoken concepts don't lag the conversation.
+  const model =
+    latency === "flash"
+      ? process.env.ELEVENLABS_FLASH_MODEL?.trim() || "eleven_flash_v2_5"
+      : process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5"; // low-latency, multilingual
 
   const res = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
@@ -104,9 +110,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       engine?: string;
       sourceLanguage?: LangCode;
       targetLanguage?: LangCode;
+      latency?: string;
     };
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const engine: Engine = body.engine === "openai" ? "openai" : "elevenlabs";
+    const latency = body.latency === "flash" ? ("flash" as const) : undefined;
 
     if (!text) {
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
@@ -114,7 +122,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     return engine === "openai"
       ? openai(text)
-      : elevenLabs(text, body.sourceLanguage, body.targetLanguage);
+      : elevenLabs(text, body.sourceLanguage, body.targetLanguage, latency);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json({ error: "TTS failed.", details: message }, { status: 500 });
