@@ -87,6 +87,19 @@ function getRecognitionCtor(): SpeechRecognitionConstructor | null {
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
+// Minimal Screen Wake Lock typing — self-contained so the build doesn't depend
+// on the DOM lib version shipping these (iOS Safari 16.4+ supports the API).
+interface ScreenWakeSentinel {
+  release(): Promise<void>;
+}
+function getWakeLock(): { request(type: "screen"): Promise<ScreenWakeSentinel> } | null {
+  if (typeof navigator === "undefined") return null;
+  const nav = navigator as Navigator & {
+    wakeLock?: { request(type: "screen"): Promise<ScreenWakeSentinel> };
+  };
+  return nav.wakeLock ?? null;
+}
+
 function formatTime(at: number): string {
   try {
     return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -152,6 +165,11 @@ export function LiveShell(): JSX.Element {
   const interimChangedAtRef = useRef(0);
   const flushedRef = useRef<string | null>(null);
   const flushTimerRef = useRef<number | null>(null);
+
+  // Screen wake lock: while live mode runs the phone must not sleep — the user
+  // is reading the feed, and on iOS a locked screen suspends the page and
+  // kills the session entirely.
+  const wakeLockRef = useRef<ScreenWakeSentinel | null>(null);
 
   // Voice readout plumbing (device engine).
   const voiceOnRef = useRef(true);
@@ -576,6 +594,46 @@ export function LiveShell(): JSX.Element {
   // ── Shared controls ───────────────────────────────────────────────────────
 
   const running = engine === "ambient" ? ambientActive : listening;
+
+  // Hold a screen wake lock while running (either engine). The OS releases the
+  // lock whenever the page is hidden, so re-acquire on return if still live.
+  const runningRef = useRef(false);
+  useEffect(() => {
+    runningRef.current = running;
+    if (running) {
+      getWakeLock()
+        ?.request("screen")
+        .then((sentinel) => {
+          if (runningRef.current) wakeLockRef.current = sentinel;
+          else void sentinel.release().catch(() => {});
+        })
+        .catch(() => {
+          /* unsupported or denied (e.g. low battery) — nothing to do */
+        });
+    } else {
+      void wakeLockRef.current?.release().catch(() => {});
+      wakeLockRef.current = null;
+    }
+  }, [running]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible" || !runningRef.current) return;
+      getWakeLock()
+        ?.request("screen")
+        .then((sentinel) => {
+          if (runningRef.current) wakeLockRef.current = sentinel;
+          else void sentinel.release().catch(() => {});
+        })
+        .catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      void wakeLockRef.current?.release().catch(() => {});
+      wakeLockRef.current = null;
+    };
+  }, []);
 
   const handlePrimary = useCallback(() => {
     if (engineRef.current === "ambient") {

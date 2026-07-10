@@ -87,3 +87,18 @@ Tom's live test surfaced two issues, both fixed:
 2. **Spanish bleeding into English output** — mini-model instruction drift. The output-language
    rule now leads the prompt in caps, is repeated at the end, and explicitly forbids the source
    language. Verified over WS: two rapid ES utterances → two serialized, English-only summaries.
+
+## Addendum 2 (2026-07-09, iPhone field test round 2)
+
+1. **iPhone screen-sleep killed sessions** — Screen Wake Lock held while either engine runs
+   (re-acquired on visibilitychange; iOS releases it when the page hides). Reading the feed with
+   voice off no longer fights the screensaver, and the session no longer dies on lock.
+2. **Hallucinating into silence** — VAD noise-triggers (clinks/coughs) committed empty turns and
+   the model invented summaries for them. Turns now only become pending once their input
+   transcription confirms real words (`/[\p{L}\p{N}]{2,}/u`); empty/junk transcripts request no
+   response at all. Plus an explicit NEVER-invent line in the prompt and VAD threshold 0.5 → 0.6.
+3. **Choppy / off-topic** — VAD `silence_duration_ms` 450 → 600 (fragments made disjointed
+   summaries) and default model upgraded `gpt-realtime-mini` → **`gpt-realtime`** (~3x cost,
+   ~$1-2/hr dense speech; `OPENAI_LIVE_REALTIME_MODEL=gpt-realtime-mini` reverts). Verified over
+   WS: transcript-gated flow on the full model, serialized English-only summaries, ~1.5s
+   commit-to-summary.

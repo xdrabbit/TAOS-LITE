@@ -35,7 +35,7 @@ function buildInterpreterInstructions(target: TargetLang): string {
     `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer or ask questions, never add opinions or commentary, never mention being an AI or an interpreter.`,
     `If the speech is already in ${targetName}, still compress it into a shorter ${targetName} summary.`,
     `If you have fallen behind, do NOT try to catch up — old content is worthless. Summarize only the most recent 10-15 seconds and skip the rest.`,
-    `If you heard only noise, music, or unintelligible sound, say nothing at all.`,
+    `NEVER invent content. Summarize ONLY what was actually said. If you heard only noise, music, silence, or unintelligible sound, output nothing at all — no filler, no guesses, no pleasantries. An empty response is always better than an invented one.`,
     `Delivery: fast, flat, neutral — like a UN interpreter, not a narrator.`,
     `REMINDER: your output language is ${targetName} and ONLY ${targetName}.`
   ].join(" ");
@@ -53,10 +53,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json().catch(() => ({}))) as { target?: string };
   const target: TargetLang = body.target === "es" ? "es" : "en";
 
-  // gpt-realtime-mini keeps a 2-hour dinner affordable; env-overridable to the
-  // full gpt-realtime for quality. Do NOT reuse OPENAI_REALTIME_MODEL — that
-  // env holds the old translation-only model (see app/api/tutor/realtime).
-  const model = process.env.OPENAI_LIVE_REALTIME_MODEL?.trim() || "gpt-realtime-mini";
+  // Full gpt-realtime: the mini tier drifted off-topic and hallucinated into
+  // silence at the 7/8 field test. Costs roughly 3x mini (~$1-2/hr of dense
+  // speech) — set OPENAI_LIVE_REALTIME_MODEL=gpt-realtime-mini to go back. Do
+  // NOT reuse OPENAI_REALTIME_MODEL — that env holds the old translation-only
+  // model (see app/api/tutor/realtime).
+  const model = process.env.OPENAI_LIVE_REALTIME_MODEL?.trim() || "gpt-realtime";
   const voice = process.env.OPENAI_LIVE_REALTIME_VOICE?.trim() || "marin";
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
@@ -78,11 +80,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         transcription: { model: transcribeModel },
         turn_detection: {
           type: "server_vad",
-          threshold: 0.5,
+          // 0.6: fewer false triggers from clinks/coughs/room noise — those
+          // committed empty turns and fed the hallucination problem.
+          threshold: 0.6,
           prefix_padding_ms: 300,
-          // Snappier than the tutor's 700ms: dinner conversation pauses are
-          // short beats, and we want a summary at every one of them.
-          silence_duration_ms: 450,
+          // 600ms: 450 chopped speech into fragments and the summaries came
+          // out disjointed. Still snappier than the tutor's 700ms.
+          silence_duration_ms: 600,
           // The CLIENT creates responses (lib/live/ambient.ts): auto-created
           // responses fired at every VAD pause and their audio overlapped when
           // people talked fast. The client waits until the previous summary

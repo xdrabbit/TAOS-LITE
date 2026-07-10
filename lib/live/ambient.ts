@@ -80,10 +80,12 @@ export async function startAmbientLive(
   // Response gating (the session is minted with create_response: false).
   // Server-auto-created responses overlapped: a new summary's audio started
   // while the previous one was still draining out of the WebRTC buffer. So WE
-  // create responses: turns committed by VAD only increment `pendingTurns`,
-  // and the next response fires when the previous one has finished BOTH
-  // generating (response.done) and playing (output_audio_buffer.stopped).
-  // Everything committed in the meantime is coalesced into one fresh summary.
+  // create responses: a turn increments `pendingTurns` only once its input
+  // transcription confirms real words (VAD noise-triggers must not spawn
+  // hallucinated summaries), and the next response fires when the previous one
+  // has finished BOTH generating (response.done) and playing
+  // (output_audio_buffer.stopped). Everything pending is coalesced into one
+  // fresh summary.
   let pendingTurns = 0;
   let responseActive = false;
   let audioPlaying = false;
@@ -243,10 +245,12 @@ export async function startAmbientLive(
         bumpIdle();
         return;
       }
-      // VAD finished a turn and committed its audio to the conversation.
+      // VAD finished a turn and committed its audio to the conversation. Do
+      // NOT count it as pending yet — wait for its transcription below. VAD
+      // false-triggers (coughs, clinks, room noise) commit audio whose
+      // transcript comes back empty, and summarizing those made the model
+      // hallucinate content into the silence.
       if (type === "input_audio_buffer.committed") {
-        pendingTurns += 1;
-        maybeRespond();
         bumpIdle();
         return;
       }
@@ -280,7 +284,14 @@ export async function startAmbientLive(
       }
       if (type === "conversation.item.input_audio_transcription.completed") {
         const t = typeof ev.transcript === "string" ? ev.transcript.trim() : "";
-        if (t) events.onHeard?.(t);
+        // Only turns with real words become pending summaries. Requiring some
+        // letters/digits filters the "…"/"[inaudible]"-style junk transcripts
+        // that noise-triggered turns produce.
+        if (t && /[\p{L}\p{N}]{2,}/u.test(t)) {
+          events.onHeard?.(t);
+          pendingTurns += 1;
+          maybeRespond();
+        }
         bumpIdle();
         return;
       }
