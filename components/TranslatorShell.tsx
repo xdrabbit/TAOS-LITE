@@ -601,6 +601,12 @@ export function TranslatorShell({
               Call
             </a>
             <a
+              href="/chat"
+              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+            >
+              Chat
+            </a>
+            <a
               href="/translate"
               className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
