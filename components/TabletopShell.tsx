@@ -1,19 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live";
+import type { TabletopDirection } from "@/lib/tabletop/instructions";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
 // reads right-side-up for the person across the table; the BOTTOM half faces
 // the phone's owner. One end is English, the other Spanish (swappable).
 // Turn-taking is explicit, chess-style: TAP to start talking, TAP again when
-// done — then the recording is transcribed + translated (/api/translate) and
-// the other end sees (and hears) it in their language. No hold-to-talk, no
-// VAD guessing: in a loud party room, the button IS the turn.
+// done. Two engines:
+//  • "live" (default) — a persistent GA Realtime session translates the turn
+//    AS THE PERSON SPEAKS: text streams onto the listener's pane phrase by
+//    phrase (lib/tabletop/live.ts), and the whole turn is spoken aloud via
+//    /api/tts when the turn ends.
+//  • "classic" — the proven batch path: record the turn, then one
+//    /api/translate round-trip. Fallback for flaky rooms.
 
 type Lang = "en" | "es";
+type Engine = "live" | "classic";
 type TurnState =
   | { kind: "idle" }
+  | { kind: "connecting"; side: Lang }
   | { kind: "recording"; side: Lang }
   | { kind: "processing"; side: Lang };
 
@@ -25,7 +33,8 @@ interface Exchange {
   at: number;
 }
 
-const MAX_TURN_SEC = 60;
+const MAX_TURN_SEC_CLASSIC = 60;
+const MAX_TURN_SEC_LIVE = 120;
 
 const L: Record<
   Lang,
@@ -35,6 +44,7 @@ const L: Record<
     tapDone: string;
     listening: string;
     translating: string;
+    connecting: string;
     theySaid: string;
     youSaid: string;
     idleHint: string;
@@ -46,6 +56,7 @@ const L: Record<
     tapDone: "TAP WHEN DONE",
     listening: "Listening to the other side…",
     translating: "Translating…",
+    connecting: "Connecting…",
     theySaid: "They said",
     youSaid: "You said",
     idleHint: "Lay the phone flat between you"
@@ -56,6 +67,7 @@ const L: Record<
     tapDone: "TOCA AL TERMINAR",
     listening: "Escuchando al otro lado…",
     translating: "Traduciendo…",
+    connecting: "Conectando…",
     theySaid: "Dijo",
     youSaid: "Dijiste",
     idleHint: "Pon el teléfono entre ustedes"
@@ -84,10 +96,14 @@ function getWakeLock(): { request(type: "screen"): Promise<ScreenWakeSentinel> }
 export function TabletopShell(): JSX.Element {
   // Which language faces the TOP (rotated) end; the bottom end is the other.
   const [topLang, setTopLang] = useState<Lang>("es");
+  const [engine, setEngine] = useState<Engine>("live");
   const [turn, setTurn] = useState<TurnState>({ kind: "idle" });
   const [voiceOn, setVoiceOn] = useState(true);
   const [recordSec, setRecordSec] = useState(0);
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  // Live-engine streaming text for the CURRENT turn.
+  const [liveHeard, setLiveHeard] = useState("");
+  const [liveTranslation, setLiveTranslation] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -98,6 +114,12 @@ export function TabletopShell(): JSX.Element {
   const playerRef = useRef<HTMLAudioElement | null>(null);
   const wakeLockRef = useRef<ScreenWakeSentinel | null>(null);
   const voiceOnRef = useRef(true);
+  const liveRef = useRef<ActiveTabletopLive | null>(null);
+  const turnRef = useRef<TurnState>({ kind: "idle" });
+
+  useEffect(() => {
+    turnRef.current = turn;
+  }, [turn]);
 
   useEffect(() => {
     voiceOnRef.current = voiceOn;
@@ -130,20 +152,39 @@ export function TabletopShell(): JSX.Element {
     };
   }, []);
 
-  const cleanupRecording = useCallback(() => {
+  const startTimer = useCallback((capSec: number) => {
+    if (timerRef.current !== null) window.clearInterval(timerRef.current);
+    setRecordSec(0);
+    timerRef.current = window.setInterval(() => {
+      setRecordSec((s) => s + 1);
+    }, 1000);
+    void capSec; // cap handled by the effect below so it sees fresh state
+  }, []);
+
+  const stopTimer = useCallback(() => {
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
     timerRef.current = null;
+    setRecordSec(0);
+  }, []);
+
+  const cleanupRecording = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     recorderRef.current = null;
     chunksRef.current = [];
-    setRecordSec(0);
-  }, []);
+    stopTimer();
+  }, [stopTimer]);
 
-  useEffect(() => cleanupRecording, [cleanupRecording]);
+  useEffect(() => {
+    return () => {
+      cleanupRecording();
+      liveRef.current?.stop();
+      liveRef.current = null;
+    };
+  }, [cleanupRecording]);
 
   const speak = useCallback(async (ex: Exchange) => {
-    if (!voiceOnRef.current) return;
+    if (!voiceOnRef.current || !ex.translation) return;
     try {
       const res = await fetch("/api/tts", {
         method: "POST",
@@ -169,7 +210,82 @@ export function TabletopShell(): JSX.Element {
     }
   }, []);
 
-  const finishTurn = useCallback(
+  const pushExchange = useCallback(
+    (ex: Exchange) => {
+      setExchanges((prev) => [...prev.slice(-19), ex]);
+      void speak(ex);
+    },
+    [speak]
+  );
+
+  // ── Live engine ───────────────────────────────────────────────────────────
+
+  const startLiveTurn = useCallback(
+    async (side: Lang) => {
+      setError(null);
+      playerRef.current?.pause();
+      playerRef.current = null;
+      setLiveHeard("");
+      setLiveTranslation("");
+      const direction: TabletopDirection = side === "en" ? "en-es" : "es-en";
+      try {
+        if (!liveRef.current) {
+          setTurn({ kind: "connecting", side });
+          liveRef.current = await startTabletopLive({
+            onError: (msg) => setError(msg),
+            onState: (s) => {
+              // The session auto-disconnects after long idle; reflect nothing
+              // in the UI unless a turn is active (next tap reconnects).
+              if (s === "idle") liveRef.current = null;
+            },
+            onHeard: (text) => setLiveHeard(text),
+            onTranslationDelta: (d) => setLiveTranslation((t) => t + d)
+          });
+        }
+        liveRef.current.beginTurn(direction);
+        setTurn({ kind: "recording", side });
+        startTimer(MAX_TURN_SEC_LIVE);
+      } catch {
+        liveRef.current = null;
+        setTurn({ kind: "idle" });
+        stopTimer();
+        setError((prev) => prev ?? "Live mode failed — try classic mode.");
+      }
+    },
+    [startTimer, stopTimer]
+  );
+
+  const endLiveTurn = useCallback(
+    async (side: Lang) => {
+      const session = liveRef.current;
+      if (!session) {
+        setTurn({ kind: "idle" });
+        return;
+      }
+      setTurn({ kind: "processing", side });
+      stopTimer();
+      try {
+        const result = await session.endTurn();
+        if (result.translation || result.heard) {
+          pushExchange({
+            from: side,
+            original: result.heard,
+            translation: result.translation,
+            at: Date.now()
+          });
+        }
+      } finally {
+        setLiveHeard("");
+        setLiveTranslation("");
+        setTurn({ kind: "idle" });
+      }
+    },
+    [stopTimer, pushExchange]
+  );
+
+  // ── Classic engine (batch /api/translate) ─────────────────────────────────
+
+  const finishClassicTurn = useCallback(
     async (side: Lang, blob: Blob) => {
       setTurn({ kind: "processing", side });
       try {
@@ -187,27 +303,24 @@ export function TabletopShell(): JSX.Element {
         if (!res.ok || !payload.translation) {
           throw new Error(payload.error || "Translation failed. Try again.");
         }
-        const ex: Exchange = {
+        setError(null);
+        pushExchange({
           from: side,
           original: payload.original ?? "",
           translation: payload.translation,
           at: Date.now()
-        };
-        setExchanges((prev) => [...prev.slice(-19), ex]);
-        setError(null);
-        void speak(ex);
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Translation failed. Try again.");
       } finally {
         setTurn({ kind: "idle" });
       }
     },
-    [speak]
+    [pushExchange]
   );
 
-  const startTurn = useCallback(
+  const startClassicTurn = useCallback(
     async (side: Lang) => {
-      if (turn.kind !== "idle") return;
       setError(null);
       playerRef.current?.pause();
       playerRef.current = null;
@@ -235,18 +348,12 @@ export function TabletopShell(): JSX.Element {
             setTurn({ kind: "idle" });
             return;
           }
-          void finishTurn(side, new Blob(chunks, { type }));
+          void finishClassicTurn(side, new Blob(chunks, { type }));
         };
 
         recorder.start(250);
         setTurn({ kind: "recording", side });
-        setRecordSec(0);
-        timerRef.current = window.setInterval(() => {
-          setRecordSec((s) => {
-            if (s + 1 >= MAX_TURN_SEC) recorderRef.current?.stop();
-            return s + 1;
-          });
-        }, 1000);
+        startTimer(MAX_TURN_SEC_CLASSIC);
       } catch (e) {
         cleanupRecording();
         setTurn({ kind: "idle" });
@@ -259,21 +366,46 @@ export function TabletopShell(): JSX.Element {
         );
       }
     },
-    [turn.kind, cleanupRecording, finishTurn]
+    [cleanupRecording, finishClassicTurn, startTimer]
   );
 
-  const stopTurn = useCallback(() => {
-    cancelledRef.current = false;
-    recorderRef.current?.stop();
-  }, []);
+  // Turn caps, engine-appropriate.
+  useEffect(() => {
+    if (turn.kind !== "recording") return;
+    const cap = engine === "live" ? MAX_TURN_SEC_LIVE : MAX_TURN_SEC_CLASSIC;
+    if (recordSec < cap) return;
+    if (engine === "live") void endLiveTurn(turn.side);
+    else recorderRef.current?.stop();
+  }, [recordSec, turn, engine, endLiveTurn]);
 
   const tap = useCallback(
     (side: Lang) => {
-      if (turn.kind === "idle") void startTurn(side);
-      else if (turn.kind === "recording" && turn.side === side) stopTurn();
+      const t = turnRef.current;
+      if (t.kind === "idle") {
+        if (engine === "live") void startLiveTurn(side);
+        else void startClassicTurn(side);
+      } else if (t.kind === "recording" && t.side === side) {
+        if (engine === "live") void endLiveTurn(side);
+        else {
+          cancelledRef.current = false;
+          recorderRef.current?.stop();
+        }
+      }
     },
-    [turn, startTurn, stopTurn]
+    [engine, startLiveTurn, startClassicTurn, endLiveTurn]
   );
+
+  const switchEngine = useCallback(() => {
+    if (turnRef.current.kind !== "idle") return;
+    setEngine((e) => {
+      if (e === "live") {
+        liveRef.current?.stop();
+        liveRef.current = null;
+        return "classic";
+      }
+      return "live";
+    });
+  }, []);
 
   // Latest lines relevant to a pane, in ITS language.
   const paneLines = useCallback(
@@ -288,10 +420,14 @@ export function TabletopShell(): JSX.Element {
   const renderPane = (lang: Lang, rotated: boolean): JSX.Element => {
     const t = L[lang];
     const { theirs, mine } = paneLines(lang);
+    const isConnecting = turn.kind === "connecting" && turn.side === lang;
     const isRecording = turn.kind === "recording" && turn.side === lang;
     const isProcessing = turn.kind === "processing" && turn.side === lang;
-    const otherBusy =
-      (turn.kind === "recording" || turn.kind === "processing") && turn.side !== lang;
+    const otherBusy = turn.kind !== "idle" && turn.side !== lang;
+    // Live streaming: while the OTHER side talks, this pane streams the
+    // translation as it is generated.
+    const streamingIn = engine === "live" && otherBusy && liveTranslation;
+    const cap = engine === "live" ? MAX_TURN_SEC_LIVE : MAX_TURN_SEC_CLASSIC;
 
     return (
       <section
@@ -302,14 +438,24 @@ export function TabletopShell(): JSX.Element {
           {isRecording ? (
             <span className="flex items-center gap-2 text-xs text-red-300">
               <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-400" />
-              {recordSec}s / {MAX_TURN_SEC}s
+              {recordSec}s / {cap}s
             </span>
           ) : null}
         </div>
 
-        {/* What the other person said, in MY language — the main read. */}
+        {/* What the other person said (or is saying), in MY language. */}
         <div className="flex-1 overflow-y-auto">
-          {theirs ? (
+          {streamingIn ? (
+            <>
+              <div className="text-[11px] uppercase tracking-widest text-emerald-300/70">
+                {t.theySaid} · live
+              </div>
+              <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
+                {liveTranslation}
+                <span className="animate-pulse text-emerald-300">▍</span>
+              </div>
+            </>
+          ) : theirs ? (
             <>
               <div className="text-[11px] uppercase tracking-widest text-amber-100/40">
                 {t.theySaid}
@@ -323,7 +469,14 @@ export function TabletopShell(): JSX.Element {
               {t.idleHint}
             </div>
           )}
-          {mine ? (
+          {isRecording && engine === "live" && liveHeard ? (
+            <div className="mt-3 border-t border-white/10 pt-2">
+              <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
+                {t.youSaid}
+              </div>
+              <div className="text-sm text-amber-100/60">{liveHeard}</div>
+            </div>
+          ) : !streamingIn && mine ? (
             <div className="mt-3 border-t border-white/10 pt-2">
               <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
                 {t.youSaid}
@@ -336,24 +489,26 @@ export function TabletopShell(): JSX.Element {
         <button
           type="button"
           onClick={() => tap(lang)}
-          disabled={otherBusy || isProcessing}
+          disabled={otherBusy || isProcessing || isConnecting}
           className={`rounded-2xl px-4 py-5 text-lg font-bold tracking-wide transition ${
             isRecording
               ? "animate-pulse bg-red-500 text-stone-50"
-              : isProcessing
+              : isProcessing || isConnecting
                 ? "bg-white/10 text-amber-100/60"
                 : otherBusy
                   ? "bg-white/5 text-amber-100/30"
                   : "bg-emerald-400 text-stone-950"
           }`}
         >
-          {isRecording
-            ? t.tapDone
-            : isProcessing
-              ? t.translating
-              : otherBusy
-                ? t.listening
-                : t.tapToTalk}
+          {isConnecting
+            ? t.connecting
+            : isRecording
+              ? t.tapDone
+              : isProcessing
+                ? t.translating
+                : otherBusy
+                  ? t.listening
+                  : t.tapToTalk}
         </button>
       </section>
     );
@@ -377,6 +532,14 @@ export function TabletopShell(): JSX.Element {
           className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70 disabled:opacity-40"
         >
           ⇅ swap ends
+        </button>
+        <button
+          type="button"
+          onClick={switchEngine}
+          disabled={turn.kind !== "idle"}
+          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70 disabled:opacity-40"
+        >
+          {engine === "live" ? "⚡ live" : "📼 classic"}
         </button>
         <button
           type="button"
