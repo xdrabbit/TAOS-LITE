@@ -242,7 +242,14 @@ export function TabletopShell(): JSX.Element {
             onTranslationDelta: (d) => setLiveTranslation((t) => t + d)
           });
         }
-        liveRef.current.beginTurn(direction);
+        if (!liveRef.current.beginTurn(direction)) {
+          // Session went stale (e.g. idle disconnect raced us) — drop it so
+          // the next tap reconnects fresh.
+          liveRef.current.stop();
+          liveRef.current = null;
+          setTurn({ kind: "idle" });
+          return;
+        }
         setTurn({ kind: "recording", side });
         startTimer(MAX_TURN_SEC_LIVE);
       } catch {

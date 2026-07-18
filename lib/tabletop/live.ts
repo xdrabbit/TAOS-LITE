@@ -35,8 +35,8 @@ export interface TurnResult {
 }
 
 export interface ActiveTabletopLive {
-  /** Point the interpreter at a direction and open the mic. */
-  beginTurn: (direction: TabletopDirection) => void;
+  /** Point the interpreter at a direction and open the mic. False = not ready. */
+  beginTurn: (direction: TabletopDirection) => boolean;
   /** Close the mic, wait for in-flight phrases, resolve the whole turn. */
   endTurn: () => Promise<TurnResult>;
   stop: () => void;
@@ -233,10 +233,48 @@ export async function startTabletopLive(
     }
     await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
 
+    // Do NOT resolve until the data channel is actually open: beginTurn's
+    // first session.update must not race the handshake. (First field test:
+    // the first turn silently no-oped because dc was still "connecting".)
+    await new Promise<void>((resolve, reject) => {
+      const channel = dc;
+      if (!channel) {
+        reject(new Error("No data channel."));
+        return;
+      }
+      if (channel.readyState === "open") {
+        resolve();
+        return;
+      }
+      const timeout = window.setTimeout(
+        () => reject(new Error("Live connection timed out — try again or use classic mode.")),
+        15000
+      );
+      channel.addEventListener(
+        "open",
+        () => {
+          window.clearTimeout(timeout);
+          resolve();
+        },
+        { once: true }
+      );
+      pc?.addEventListener("connectionstatechange", () => {
+        if (pc && (pc.connectionState === "failed" || pc.connectionState === "closed")) {
+          window.clearTimeout(timeout);
+          reject(new Error("Live connection failed — try again or use classic mode."));
+        }
+      });
+    });
+
     const micTrack = micStream.getAudioTracks()[0] ?? null;
 
-    const beginTurn = (direction: TabletopDirection) => {
-      if (stopped || !dc || dc.readyState !== "open" || !micTrack) return;
+    const beginTurn = (direction: TabletopDirection): boolean => {
+      if (stopped || !dc || dc.readyState !== "open" || !micTrack) {
+        // Never fail silently: the UI shows "recording" the moment this is
+        // called, so a no-op here looks like a dead feature.
+        events.onError?.("Not connected yet — tap again in a second.");
+        return false;
+      }
       clearIdle();
       turnOpen = true;
       heardParts = [];
@@ -251,6 +289,7 @@ export async function startTabletopLive(
       );
       micTrack.enabled = true;
       void audioSender?.replaceTrack(micTrack);
+      return true;
     };
 
     const endTurn = async (): Promise<TurnResult> => {
