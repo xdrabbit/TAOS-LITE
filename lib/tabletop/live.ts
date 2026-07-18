@@ -64,7 +64,6 @@ export async function startTabletopLive(
   let pc: RTCPeerConnection | null = null;
   let dc: RTCDataChannel | null = null;
   let micStream: MediaStream | null = null;
-  let audioSender: RTCRtpSender | null = null;
   let stopped = false;
   let idleTimer: number | null = null;
 
@@ -154,9 +153,15 @@ export async function startTabletopLive(
     }
 
     pc = new RTCPeerConnection();
-    // Sendonly audio transceiver, starting EMPTY — the mic attaches per turn.
-    const transceiver = pc.addTransceiver("audio", { direction: "sendonly" });
-    audioSender = transceiver.sender;
+    // Attach the mic BEFORE the offer, exactly like the proven /live path —
+    // a trackless sendonly transceiver negotiated dead on the first field
+    // test (audio never flowed even though the session connected). The track
+    // starts muted; beginTurn/endTurn toggle track.enabled. Between turns
+    // this streams (cheap) silence, bounded by the 5-min idle disconnect.
+    const upfrontTrack = micStream.getAudioTracks()[0] ?? null;
+    if (!upfrontTrack) throw new Error("No microphone track.");
+    upfrontTrack.enabled = false;
+    pc.addTrack(upfrontTrack, micStream);
 
     pc.onconnectionstatechange = () => {
       if (!pc || stopped) return;
@@ -288,17 +293,15 @@ export async function startTabletopLive(
         })
       );
       micTrack.enabled = true;
-      void audioSender?.replaceTrack(micTrack);
       return true;
     };
 
     const endTurn = async (): Promise<TurnResult> => {
       turnOpen = false;
-      // Mute (silence frames keep flowing) so VAD closes the last phrase…
+      // Mute — silence frames keep flowing so VAD closes the last phrase, and
+      // the track stays attached (detaching is what broke audio flow).
       if (micTrack) micTrack.enabled = false;
       await new Promise((r) => setTimeout(r, ENDTURN_VAD_GRACE_MS));
-      // …then detach entirely: idle table time streams nothing.
-      await audioSender?.replaceTrack(null).catch(() => {});
       // Wait for in-flight phrase translations to finish.
       if (activeResponses > 0) {
         await Promise.race([
