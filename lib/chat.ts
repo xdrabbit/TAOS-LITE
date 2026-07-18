@@ -12,6 +12,8 @@ export interface ChatMessageRow {
   id: string;
   thread_id: string;
   sender_id: string;
+  kind: "text" | "voice";
+  audio_path: string | null;
   body: string;
   body_translated: string | null;
   source_lang: string | null;
@@ -79,6 +81,42 @@ export async function sendMessage(threadId: string, body: string): Promise<ChatM
     throw new Error(payload.error || "Could not send the message.");
   }
   return payload.message;
+}
+
+export async function sendVoiceMessage(
+  threadId: string,
+  blob: Blob,
+  mimeType: string
+): Promise<ChatMessageRow> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const form = new FormData();
+  form.append("threadId", threadId);
+  form.append("audio", new File([blob], "voice", { type: mimeType }));
+  const res = await fetch("/api/chat/voice", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    message?: ChatMessageRow;
+    error?: string;
+  };
+  if (!res.ok || !payload.message) {
+    throw new Error(payload.error || "Could not send the voice message.");
+  }
+  return payload.message;
+}
+
+// Short-lived signed URL for a voice note's audio (storage RLS restricts this
+// to members of the thread in the path).
+export async function getVoiceUrl(audioPath: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("chat-voice")
+    .createSignedUrl(audioPath, 3600);
+  if (error || !data?.signedUrl) throw error ?? new Error("Could not load the audio.");
+  return data.signedUrl;
 }
 
 // Live INSERT stream for the thread. Returns an unsubscribe function.
