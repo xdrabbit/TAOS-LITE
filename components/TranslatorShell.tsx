@@ -170,12 +170,14 @@ export function TranslatorShell({
   const [wrappingUp, setWrappingUp] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [togetherMenuOpen, setTogetherMenuOpen] = useState(false);
 
   // Avatar initial derived from the signed-in email (the only identity the
   // component receives — Profile has no name field). Falls back to a generic
   // user icon when the email yields no alphanumeric character.
   const avatarInitial = (email.match(/[a-z0-9]/i)?.[0] ?? "").toUpperCase();
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const togetherMenuRef = useRef<HTMLDivElement | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -240,6 +242,26 @@ export function TranslatorShell({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [accountMenuOpen]);
+
+  // Same close-on-outside/Escape behavior for the Together (Call/Chat/Table)
+  // menu — the header collapsed those pills into one so it fits a phone width.
+  useEffect(() => {
+    if (!togetherMenuOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (togetherMenuRef.current && !togetherMenuRef.current.contains(e.target as Node)) {
+        setTogetherMenuOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setTogetherMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [togetherMenuOpen]);
 
   function ensureAudioEl(): HTMLAudioElement | null {
     if (!audioRef.current) {
@@ -594,24 +616,48 @@ export function TranslatorShell({
             >
               Live
             </a>
-            <a
-              href="/call"
-              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Call
-            </a>
-            <a
-              href="/chat"
-              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Chat
-            </a>
-            <a
-              href="/tabletop"
-              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Table
-            </a>
+            {/* Call / Chat / Table stacked under one pill — six pills overflowed
+                a phone width and made the whole page slide sideways. */}
+            <div ref={togetherMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setTogetherMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={togetherMenuOpen}
+                className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              >
+                Together ▾
+              </button>
+              {togetherMenuOpen ? (
+                <div
+                  role="menu"
+                  aria-label="Together"
+                  className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
+                >
+                  <a
+                    href="/call"
+                    role="menuitem"
+                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Call · Llamada
+                  </a>
+                  <a
+                    href="/chat"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Chat · Chat
+                  </a>
+                  <a
+                    href="/tabletop"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Table · Mesa
+                  </a>
+                </div>
+              ) : null}
+            </div>
             <a
               href="/translate"
               className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
