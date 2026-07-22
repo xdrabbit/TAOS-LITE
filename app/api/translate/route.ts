@@ -9,6 +9,18 @@ export const maxDuration = 300;
 
 type Tone = "casual" | "detailed";
 
+// Production 2026-07-19: an OpenAI call stalled and this function hung the
+// full 300s until Vercel killed it — the phone's fetch died with Safari's
+// opaque "Load failed". Cap each upstream call well under maxDuration so a
+// stall becomes a fast, retryable JSON error instead of a dead socket.
+// Transcription gets longer: it re-uploads up to 5 minutes of audio.
+const TRANSCRIBE_TIMEOUT_MS = 120000;
+const PARAPHRASE_TIMEOUT_MS = 60000;
+
+function isTimeout(e: unknown): boolean {
+  return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
+}
+
 function parseTone(value: FormDataEntryValue | null): Tone {
   return value === "detailed" ? "detailed" : "casual";
 }
@@ -55,7 +67,8 @@ async function transcribe(apiKey: string, file: File, sourceLabel?: string): Pro
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS)
   });
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -91,7 +104,8 @@ async function paraphrase(
         { role: "user", content: text }
       ]
     }),
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(PARAPHRASE_TIMEOUT_MS)
   });
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -144,7 +158,8 @@ async function paraphraseAuto(
         { role: "user", content: text }
       ]
     }),
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(PARAPHRASE_TIMEOUT_MS)
   });
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -241,6 +256,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       tone
     });
   } catch (error) {
+    if (isTimeout(error)) {
+      return NextResponse.json(
+        { error: "The translation service took too long. Please try again." },
+        { status: 504 }
+      );
+    }
     const message = error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json({ error: "Translation pipeline failed.", details: message }, {
       status: 502
