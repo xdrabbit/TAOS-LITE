@@ -37,6 +37,12 @@ export interface InterpreterEvents {
   onTranslationDelta?: (delta: string) => void;
   /** The translation finished; `text` is its full transcript. */
   onTranslationDone?: (text: string) => void;
+  /**
+   * The interpreter's translated AUDIO started/stopped playing on THIS phone.
+   * Relay it to the partner: they are the one who can talk over it (they
+   * can't hear this side), so their phone shows the "hold on" indicator.
+   */
+  onSpeaking?: (speaking: boolean) => void;
 }
 
 export interface ActiveInterpreter {
@@ -81,6 +87,14 @@ export async function startCallInterpreter(
 
   const setState = (s: InterpreterState) => events.onState?.(s);
 
+  // Single funnel for the audio-playing flag so every transition (started,
+  // stopped, cleared, unstick fallback, stop) reaches onSpeaking exactly once.
+  const setAudioPlaying = (playing: boolean) => {
+    if (audioPlaying === playing) return;
+    audioPlaying = playing;
+    events.onSpeaking?.(playing);
+  };
+
   const clearTimers = () => {
     if (capTimer !== null) window.clearTimeout(capTimer);
     if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
@@ -110,6 +124,7 @@ export async function startCallInterpreter(
       audioEl.srcObject = null;
       audioEl.remove();
     }
+    setAudioPlaying(false);
     setState("idle");
   };
 
@@ -197,7 +212,7 @@ export async function startCallInterpreter(
         if (audioPlaying) {
           clearAudioStuckTimer();
           audioStuckTimer = window.setTimeout(() => {
-            audioPlaying = false;
+            setAudioPlaying(false);
             maybeRespond();
           }, 20_000);
         }
@@ -205,11 +220,11 @@ export async function startCallInterpreter(
         return;
       }
       if (type === "output_audio_buffer.started") {
-        audioPlaying = true;
+        setAudioPlaying(true);
         return;
       }
       if (type === "output_audio_buffer.stopped" || type === "output_audio_buffer.cleared") {
-        audioPlaying = false;
+        setAudioPlaying(false);
         clearAudioStuckTimer();
         maybeRespond();
         return;

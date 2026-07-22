@@ -42,6 +42,12 @@ export interface CallEvents {
   onRemoteAudioTrack?: (track: MediaStreamTrack) => void;
   /** The partner hung up or dropped. The room stays open for a rejoin. */
   onPeerLeft?: () => void;
+  /**
+   * The PARTNER's interpreter started/stopped speaking a translation on their
+   * phone. While true, anything said here talks over that translation — the
+   * UI shows a "hold on" indicator.
+   */
+  onPeerInterpreterSpeaking?: (speaking: boolean) => void;
 }
 
 export interface ActiveCall {
@@ -51,11 +57,13 @@ export interface ActiveCall {
   setVideo: (on: boolean) => Promise<void>;
   /** Adjust how loud the partner's ORIGINAL voice plays (0..1). */
   setRemoteVolume: (volume: number) => void;
+  /** Tell the partner whether THIS phone's interpreter is speaking right now. */
+  sendInterpreterSpeaking: (speaking: boolean) => void;
 }
 
 interface SignalMessage {
   from: string;
-  kind: "description" | "candidate" | "bye";
+  kind: "description" | "candidate" | "bye" | "interpreter";
   data?: unknown;
 }
 
@@ -284,6 +292,9 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     if (ended) return;
     otherPeerId = null;
     teardownPeer();
+    // Their interpreter can't be speaking to us anymore — never strand the
+    // "hold on" indicator across a drop/rejoin.
+    events.onPeerInterpreterSpeaking?.(false);
     events.onPeerLeft?.();
     setState("waiting");
   };
@@ -338,6 +349,10 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       if (msg.kind === "bye") handlePeerGone();
       else if (msg.kind === "description") void handleDescription(msg.data);
       else if (msg.kind === "candidate") void handleCandidate(msg.data);
+      else if (msg.kind === "interpreter") {
+        const speaking = Boolean((msg.data as { speaking?: boolean } | undefined)?.speaking);
+        events.onPeerInterpreterSpeaking?.(speaking);
+      }
     });
 
     channel.on("presence", { event: "sync" }, () => {
@@ -411,6 +426,9 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       setRemoteVolume: (volume: number) => {
         remoteVolume = Math.min(1, Math.max(0, volume));
         if (remoteAudioEl) remoteAudioEl.volume = remoteVolume;
+      },
+      sendInterpreterSpeaking: (speaking: boolean) => {
+        if (!ended && otherPeerId) sendSignal({ kind: "interpreter", data: { speaking } });
       }
     };
   } catch (error) {
