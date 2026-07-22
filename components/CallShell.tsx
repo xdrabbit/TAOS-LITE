@@ -98,6 +98,9 @@ export function CallShell(): JSX.Element {
   const [feed, setFeed] = useState<CaptionLine[]>([]);
   const [liveText, setLiveText] = useState("");
   const [liveHeard, setLiveHeard] = useState<string | null>(null);
+  // True while the PARTNER's phone is playing a translation of what was said
+  // here — speaking now would talk over it and clip it for them.
+  const [peerInterpreterSpeaking, setPeerInterpreterSpeaking] = useState(false);
 
   const callRef = useRef<ActiveCall | null>(null);
   const interpreterRef = useRef<ActiveInterpreter | null>(null);
@@ -110,6 +113,23 @@ export function CallShell(): JSX.Element {
   const nextIdRef = useRef(1);
   const timerRef = useRef<number | null>(null);
   const heardQueueRef = useRef<string[]>([]);
+  const peerSpeakingGuardRef = useRef<number | null>(null);
+
+  // A lost "stopped" broadcast must never strand the hold-on indicator, so
+  // every "speaking" signal re-arms a generous auto-clear.
+  const setPeerSpeaking = useCallback((speaking: boolean) => {
+    if (peerSpeakingGuardRef.current !== null) {
+      window.clearTimeout(peerSpeakingGuardRef.current);
+      peerSpeakingGuardRef.current = null;
+    }
+    setPeerInterpreterSpeaking(speaking);
+    if (speaking) {
+      peerSpeakingGuardRef.current = window.setTimeout(
+        () => setPeerInterpreterSpeaking(false),
+        25_000
+      );
+    }
+  }, []);
 
   // Prefill the room code from a shared /call?room=XYZ link.
   useEffect(() => {
@@ -156,6 +176,10 @@ export function CallShell(): JSX.Element {
         { target: targetRef.current, inputTrack: track, muted: !voiceOnRef.current },
         {
           onError: (msg) => setNotice(`Interpreter: ${msg}`),
+          // This phone's interpreter speaks translations of the PARTNER's
+          // words — so it's the partner who must not talk over it. Relay the
+          // state so their phone can show the hold-on indicator.
+          onSpeaking: (speaking) => callRef.current?.sendInterpreterSpeaking(speaking),
           onHeard: (text) => {
             heardQueueRef.current.push(text);
             setLiveHeard(text);
@@ -206,7 +230,16 @@ export function CallShell(): JSX.Element {
     setRemoteHasVideo(false);
     setLiveText("");
     setLiveHeard(null);
-  }, [stopInterpreter]);
+    setPeerSpeaking(false);
+  }, [stopInterpreter, setPeerSpeaking]);
+
+  useEffect(() => {
+    return () => {
+      if (peerSpeakingGuardRef.current !== null) {
+        window.clearTimeout(peerSpeakingGuardRef.current);
+      }
+    };
+  }, []);
 
   const join = useCallback(async () => {
     const code = normalizeRoomCode(room);
@@ -256,6 +289,7 @@ export function CallShell(): JSX.Element {
             }
           },
           onRemoteAudioTrack: (track) => startInterpreterFor(track),
+          onPeerInterpreterSpeaking: (speaking) => setPeerSpeaking(speaking),
           onPeerLeft: () => {
             stopInterpreter();
             setNotice("Your partner left the call. Waiting for them to rejoin…");
@@ -271,7 +305,7 @@ export function CallShell(): JSX.Element {
     } catch {
       endCall();
     }
-  }, [room, withVideo, startInterpreterFor, stopInterpreter, endCall]);
+  }, [room, withVideo, startInterpreterFor, stopInterpreter, endCall, setPeerSpeaking]);
 
   const createRoom = useCallback(() => {
     setRoom(generateRoomCode());
@@ -486,6 +520,17 @@ export function CallShell(): JSX.Element {
                 <span className="text-amber-100/50">· {room}</span>
               </div>
             </div>
+
+            {/* Hold-on indicator: the partner's phone is still speaking the
+                translation of what was said here — talking now clips it. */}
+            {peerInterpreterSpeaking ? (
+              <div className="flex items-center gap-2 rounded-2xl border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-sm text-amber-200">
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-300" />
+                {target === "es"
+                  ? "El intérprete les sigue hablando — un momento…"
+                  : "Interpreter is still speaking to them — one sec…"}
+              </div>
+            ) : null}
 
             {/* Captions */}
             {captionsOn ? (
