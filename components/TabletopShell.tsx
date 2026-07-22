@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live";
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
+import { fetchWithRetry } from "@/lib/net";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -186,15 +187,23 @@ export function TabletopShell(): JSX.Element {
   const speak = useCallback(async (ex: Exchange) => {
     if (!voiceOnRef.current || !ex.translation) return;
     try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: ex.translation,
-          sourceLanguage: ex.from,
-          targetLanguage: ex.from === "en" ? "es" : "en"
-        })
-      });
+      const res = await fetchWithRetry(
+        "/api/tts",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: ex.translation,
+            sourceLanguage: ex.from,
+            targetLanguage: ex.from === "en" ? "es" : "en",
+            // Tabletop pairing is the reverse of the shared voice-follows-speaker
+            // mapping: spoken Spanish reads out in Tom's voice, spoken English
+            // in Liz's.
+            voice: ex.from === "es" ? "tom" : "liz"
+          })
+        },
+        { retries: 1, timeoutMs: 30000 }
+      );
       if (!res.ok) return;
       const url = URL.createObjectURL(await res.blob());
       playerRef.current?.pause();

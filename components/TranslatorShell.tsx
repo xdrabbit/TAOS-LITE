@@ -12,6 +12,7 @@ import {
 } from "@/lib/supabase";
 import { HistoryDrawer } from "./HistoryDrawer";
 import { Paywall } from "./Paywall";
+import { fetchWithRetry, isConnectionError } from "@/lib/net";
 
 type LangCode = "en" | "es";
 type Tone = "casual" | "detailed";
@@ -55,6 +56,7 @@ const STRINGS: Record<
     micDenied: string;
     ttsFailed: string;
     translateFailed: string;
+    connectionLost: string;
     noAudio: string;
   }
 > = {
@@ -74,6 +76,7 @@ const STRINGS: Record<
     micDenied: "Microphone permission was denied. Enable it in Safari settings and retry.",
     ttsFailed: "Voice playback failed.",
     translateFailed: "Translation failed.",
+    connectionLost: "Connection problem — check your signal and try again.",
     noAudio: "No audio was captured. Check the mic and try again."
   },
   es: {
@@ -92,6 +95,7 @@ const STRINGS: Record<
     micDenied: "Se denegó el permiso del micrófono. Actívalo en los ajustes de Safari e inténtalo de nuevo.",
     ttsFailed: "No se pudo reproducir la voz.",
     translateFailed: "No se pudo traducir.",
+    connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
     noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo."
   }
 };
@@ -388,11 +392,15 @@ export function TranslatorShell({
     if (!a) return;
     try {
       setIsSpeaking(true);
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, engine, sourceLanguage: src, targetLanguage: tgt })
-      });
+      const res = await fetchWithRetry(
+        "/api/tts",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, engine, sourceLanguage: src, targetLanguage: tgt })
+        },
+        { retries: 2, timeoutMs: 60000 }
+      );
       if (!res.ok) {
         const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
         throw new Error(p.details || p.error || s.ttsFailed);
@@ -407,7 +415,9 @@ export function TranslatorShell({
     } catch (e) {
       console.error("[tts] playback failed", e);
       setIsSpeaking(false);
-      setError(e instanceof Error ? e.message : s.ttsFailed);
+      // A dead connection surfaces as Safari's bare "Load failed" — swap in a
+      // message that actually tells the person what to do.
+      setError(isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.ttsFailed);
     }
   }
 
@@ -507,7 +517,15 @@ export function TranslatorShell({
       form.append("targetLanguage", tgt);
       form.append("tone", tone);
 
-      const res = await fetch("/api/translate", { method: "POST", body: form });
+      // Retry + a client-side timeout: a mid-flight connection drop (Safari's
+      // "Load failed") gets one silent re-send before anyone sees an error.
+      // One retry only — each attempt re-runs the whole transcribe+translate
+      // pipeline. The timeout comfortably exceeds the server's upstream caps.
+      const res = await fetchWithRetry(
+        "/api/translate",
+        { method: "POST", body: form },
+        { retries: 1, timeoutMs: 210000 }
+      );
       const payload = (await res.json().catch(() => ({}))) as {
         original?: string;
         translation?: string;
@@ -556,7 +574,9 @@ export function TranslatorShell({
     } catch (e) {
       console.error("[translate] pipeline failed", e);
       setStatus("error");
-      setError(e instanceof Error ? e.message : s.translateFailed);
+      setError(
+        isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.translateFailed
+      );
     }
   }
 
