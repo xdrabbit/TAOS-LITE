@@ -5,6 +5,16 @@ export const maxDuration = 60;
 
 type Engine = "elevenlabs" | "openai";
 type LangCode = "en" | "es";
+type VoiceOverride = "tom" | "liz";
+
+// Bound the upstream synthesis call well under maxDuration (60s): a stalled
+// provider must become a fast, retryable JSON error, not a hung request the
+// phone eventually reports as Safari's opaque "Load failed".
+const SYNTH_TIMEOUT_MS = 45000;
+
+function isTimeout(e: unknown): boolean {
+  return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
+}
 
 // A multilingual-capable default voice so the same voice reads EN and ES well.
 const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (works with multilingual model)
@@ -22,7 +32,16 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
   });
 }
 
-function elevenLabsVoiceId(sourceLanguage?: LangCode, targetLanguage?: LangCode): string {
+function elevenLabsVoiceId(
+  sourceLanguage?: LangCode,
+  targetLanguage?: LangCode,
+  voice?: VoiceOverride
+): string {
+  // Tabletop asks for the opposite pairing (spoken Spanish reads out in Tom's
+  // voice, spoken English in Liz's), so it names the clone explicitly instead
+  // of relying on the direction mapping below.
+  if (voice === "tom") return ELEVENLABS_TOM_VOICE;
+  if (voice === "liz") return ELEVENLABS_LIZ_VOICE;
   // The voice follows the SPEAKER, so each person hears their partner's real
   // voice speaking their own language. (No env override here — it was forcing
   // the ES->EN side to the wrong clone.)
@@ -39,13 +58,14 @@ async function elevenLabs(
   text: string,
   sourceLanguage?: LangCode,
   targetLanguage?: LangCode,
-  latency?: "flash"
+  latency?: "flash",
+  voice?: VoiceOverride
 ): Promise<NextResponse> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
   }
-  const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage);
+  const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage, voice);
   // /live sends latency:"flash" — trade a little clone fidelity for the
   // lowest-latency model so spoken concepts don't lag the conversation.
   const model =
@@ -67,7 +87,8 @@ async function elevenLabs(
         model_id: model,
         voice_settings: { stability: 0.4, similarity_boost: 0.8 }
       }),
-      cache: "no-store"
+      cache: "no-store",
+      signal: AbortSignal.timeout(SYNTH_TIMEOUT_MS)
     }
   );
 
@@ -93,7 +114,8 @@ async function openai(text: string): Promise<NextResponse> {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ model, voice, input: text, response_format: "mp3" }),
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(SYNTH_TIMEOUT_MS)
   });
 
   if (!res.ok) {
@@ -111,19 +133,30 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       sourceLanguage?: LangCode;
       targetLanguage?: LangCode;
       latency?: string;
+      voice?: string;
     };
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const engine: Engine = body.engine === "openai" ? "openai" : "elevenlabs";
     const latency = body.latency === "flash" ? ("flash" as const) : undefined;
+    const voice: VoiceOverride | undefined =
+      body.voice === "tom" || body.voice === "liz" ? body.voice : undefined;
 
     if (!text) {
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
     }
 
+    // `await` (not a bare returned promise) so a thrown timeout lands in the
+    // catch below rather than escaping the handler as a generic 500.
     return engine === "openai"
-      ? openai(text)
-      : elevenLabs(text, body.sourceLanguage, body.targetLanguage, latency);
+      ? await openai(text)
+      : await elevenLabs(text, body.sourceLanguage, body.targetLanguage, latency, voice);
   } catch (error) {
+    if (isTimeout(error)) {
+      return NextResponse.json(
+        { error: "The voice service took too long. Please try again." },
+        { status: 504 }
+      );
+    }
     const message = error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json({ error: "TTS failed.", details: message }, { status: 500 });
   }
