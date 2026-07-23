@@ -73,6 +73,15 @@ async function transcribe(apiKey: string, file: File, sourceLabel?: string): Pro
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
   if (!res.ok) {
+    // A micro-clip (rapid double-tap) or a mangled upload comes back as
+    // "Audio file might be corrupted or unsupported". That's not a failure
+    // worth showing raw JSON for — treat it as "nothing was heard" so the
+    // caller returns its gentle bilingual retry message.
+    const err = payload?.error as Record<string, unknown> | undefined;
+    const msg = typeof err?.message === "string" ? err.message : "";
+    if (/corrupted or unsupported|could not be decoded|file is empty/i.test(msg)) {
+      return "";
+    }
     const detail =
       payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
     throw new Error(`Transcription failed: ${detail}`);
@@ -210,7 +219,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const original = await transcribe(apiKey, audio);
       if (!original) {
         return NextResponse.json(
-          { error: "Nothing was heard. Try recording again." },
+          { error: "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo." },
           { status: 422 }
         );
       }
@@ -241,7 +250,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const original = await transcribe(apiKey, audio, sourceLabel);
     if (!original) {
       return NextResponse.json(
-        { error: "Nothing was heard. Try recording again." },
+        { error: "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo." },
         { status: 422 }
       );
     }

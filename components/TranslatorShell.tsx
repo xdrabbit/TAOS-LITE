@@ -58,6 +58,7 @@ const STRINGS: Record<
     translateFailed: string;
     connectionLost: string;
     noAudio: string;
+    tooShort: string;
   }
 > = {
   en: {
@@ -77,7 +78,8 @@ const STRINGS: Record<
     ttsFailed: "Voice playback failed.",
     translateFailed: "Translation failed.",
     connectionLost: "Connection problem — check your signal and try again.",
-    noAudio: "No audio was captured. Check the mic and try again."
+    noAudio: "No audio was captured. Check the mic and try again.",
+    tooShort: "Too short — tap, say a full thought, then tap again."
   },
   es: {
     speak: "Hablar",
@@ -96,7 +98,8 @@ const STRINGS: Record<
     ttsFailed: "No se pudo reproducir la voz.",
     translateFailed: "No se pudo traducir.",
     connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
-    noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo."
+    noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
+    tooShort: "Muy corto — toca, di una idea completa y toca otra vez."
   }
 };
 
@@ -113,6 +116,12 @@ const TONE_LABEL: Record<Tone, string> = {
 // `maxDuration` (300s) — a longer turn can't be transcribed + paraphrased in
 // time and the turn fails silently. Change to 150000 for a 2.5-minute cap.
 const MAX_TURN_DURATION_MS = 300000; // 5 minutes
+
+// A stop within this window is an accidental rapid double-tap, not a turn.
+// Sub-second clips carry no usable speech, and the really short ones don't
+// even have complete container headers — OpenAI rejects those as "corrupted
+// or unsupported". Catch them before they leave the phone.
+const MIN_TURN_DURATION_MS = 600;
 
 // Visual "wrap up" ramp on the record button. NO audio cues — the mic and
 // speaker are both live during a turn, so the only safe signal is visual.
@@ -489,6 +498,12 @@ export function TranslatorShell({
     const blob = new Blob(chunksRef.current, { type: mime });
     recorderRef.current = null;
     chunksRef.current = [];
+    const turnMs = performance.now() - recordStartRef.current;
+    if (turnMs < MIN_TURN_DURATION_MS) {
+      setStatus("error");
+      setError(s.tooShort);
+      return;
+    }
     if (blob.size === 0) {
       // Previously this returned to idle silently — a long turn that lost its
       // audio (e.g. the page was suspended) produced no translation and no

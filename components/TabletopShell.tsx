@@ -351,6 +351,7 @@ export function TabletopShell(): JSX.Element {
         recorderRef.current = recorder;
         chunksRef.current = [];
         cancelledRef.current = false;
+        const startedAt = performance.now();
 
         recorder.ondataavailable = (ev) => {
           if (ev.data.size > 0) chunksRef.current.push(ev.data);
@@ -360,7 +361,10 @@ export function TabletopShell(): JSX.Element {
           const type = recorder.mimeType || mime || "audio/webm";
           const cancelled = cancelledRef.current;
           cleanupRecording();
-          if (cancelled || !chunks.length) {
+          // A sub-second turn is an accidental double-tap: the clip has no
+          // usable speech (the shortest ones get rejected upstream as
+          // corrupted), so drop it quietly instead of erroring at the party.
+          if (cancelled || !chunks.length || performance.now() - startedAt < 600) {
             setTurn({ kind: "idle" });
             return;
           }
