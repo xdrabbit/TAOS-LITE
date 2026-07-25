@@ -14,7 +14,7 @@ import { HistoryDrawer } from "./HistoryDrawer";
 import { Paywall } from "./Paywall";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 
-type LangCode = "en" | "es";
+type LangCode = "en" | "es" | "zh";
 type Tone = "casual" | "detailed";
 type Engine = "elevenlabs" | "openai";
 type Status = "idle" | "recording" | "processing" | "done" | "error";
@@ -27,8 +27,23 @@ interface Speaker {
 
 const SPEAKERS: Record<LangCode, Speaker> = {
   es: { code: "es", who: "Liz", label: "Español" },
-  en: { code: "en", who: "Tom", label: "English" }
+  en: { code: "en", who: "Tom", label: "English" },
+  // A Mandarin speaker is a guest, not a named member of the household.
+  zh: { code: "zh", who: "Guest", label: "中文" }
 };
+
+// ── Conversation language pairs ─────────────────────────────────────────────
+// Phase 1 of multi-language: /translate operates on a language PAIR. The
+// picker stacks pairs most-recently-used first (persisted) so the daily pair
+// stays one tap away. To add a pair: add its languages to SPEAKERS + STRINGS,
+// then list it here — the server already supports 12 languages.
+const PAIRS: ReadonlyArray<readonly [LangCode, LangCode]> = [
+  ["en", "es"],
+  ["en", "zh"],
+  ["es", "zh"]
+];
+const pairKey = (p: readonly [LangCode, LangCode]): string => `${p[0]}-${p[1]}`;
+const PAIR_ORDER_STORAGE_KEY = "taos.translate.pairOrder";
 
 // Unobtrusive build marker so we can tell which deploy is live. Vercel injects
 // the commit SHA at build time; falls back to "local" during dev.
@@ -100,6 +115,26 @@ const STRINGS: Record<
     connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
     noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
     tooShort: "Muy corto — toca, di una idea completa y toca otra vez."
+  },
+  zh: {
+    speak: "说话",
+    stop: "停止并翻译",
+    working: "处理中…",
+    speakingNow: "正在说话",
+    swap: "切换",
+    listening: "正在听…",
+    translating: "翻译中…",
+    idle: "点击麦克风，说完整的一句话，再点一次。",
+    heard: "听到",
+    forLabel: "给",
+    wrapUp: "即将结束 — 几秒后自动停止并翻译…",
+    micUnavailable: "麦克风不可用。请在 Safari 中通过 HTTPS 打开此页面并允许使用麦克风。",
+    micDenied: "麦克风权限被拒绝。请在 Safari 设置中开启后重试。",
+    ttsFailed: "语音播放失败。",
+    translateFailed: "翻译失败。",
+    connectionLost: "网络连接问题 — 请检查信号后重试。",
+    noAudio: "没有录到声音。请检查麦克风后重试。",
+    tooShort: "太短了 — 点击，说完整的一句话，再点一次。"
   }
 };
 
@@ -170,6 +205,8 @@ export function TranslatorShell({
   const trialBlocked = !subscriber && transLeft <= 0;
 
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
+  const [pair, setPair] = useState<readonly [LangCode, LangCode]>(PAIRS[0]);
+  const [pairOrder, setPairOrder] = useState<string[]>(() => PAIRS.map(pairKey));
   const [tone, setTone] = useState<Tone>("casual");
   const [engine, setEngine] = useState<Engine>("elevenlabs");
   const [autoPlay, setAutoPlay] = useState(true);
@@ -209,10 +246,53 @@ export function TranslatorShell({
   const pulsePhaseRef = useRef<number>(0);
   const lastTickRef = useRef<number>(0);
 
-  const target: LangCode = source === "es" ? "en" : "es";
+  const target: LangCode = source === pair[0] ? pair[1] : pair[0];
   const speaker = SPEAKERS[source];
   const listener = SPEAKERS[target];
   const s = STRINGS[source]; // speaker-facing copy (active speaker's language)
+  const orderedPairs = pairOrder
+    .map((k) => PAIRS.find((p) => pairKey(p) === k))
+    .filter((p): p is (typeof PAIRS)[number] => Boolean(p));
+
+  // Restore the most-recently-used pair order (and start on the top pair).
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(PAIR_ORDER_STORAGE_KEY);
+      if (!saved) return;
+      const stored = (JSON.parse(saved) as string[]).filter((k) =>
+        PAIRS.some((p) => pairKey(p) === k)
+      );
+      if (!stored.length) return;
+      const rest = PAIRS.map(pairKey).filter((k) => !stored.includes(k));
+      setPairOrder([...stored, ...rest]);
+      const top = PAIRS.find((p) => pairKey(p) === stored[0]);
+      if (top) {
+        setPair(top);
+        setSource((prev) => (prev === top[0] || prev === top[1] ? prev : top[0]));
+      }
+    } catch {
+      /* corrupt storage — keep defaults */
+    }
+  }, []);
+
+  function selectPair(p: readonly [LangCode, LangCode]) {
+    setPair(p);
+    setSource((prev) => (prev === p[0] || prev === p[1] ? prev : p[0]));
+    setOriginal("");
+    setTranslation("");
+    setError(null);
+    if (status !== "recording") setStatus("idle");
+    setPairOrder((prev) => {
+      const k = pairKey(p);
+      const next = [k, ...prev.filter((x) => x !== k)];
+      try {
+        window.localStorage.setItem(PAIR_ORDER_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* private mode — MRU just won't persist */
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     return () => {
@@ -541,6 +621,12 @@ export function TranslatorShell({
       form.append("sourceLanguage", src);
       form.append("targetLanguage", tgt);
       form.append("tone", tone);
+      if (src === "auto") {
+        // Auto-detect is scoped to the active pair — the server decides which
+        // of THESE two languages was spoken, never guessing beyond them.
+        form.append("pairA", pair[0]);
+        form.append("pairB", pair[1]);
+      }
 
       // Retry + a client-side timeout: a mid-flight connection drop (Safari's
       // "Load failed") gets one silent re-send before anyone sees an error.
@@ -563,14 +649,15 @@ export function TranslatorShell({
         throw new Error(payload.details || payload.error || s.translateFailed);
       }
       // In auto mode the server resolves the real direction; use it for voice,
-      // the on-screen direction, and history.
+      // the on-screen direction, and history. Only accept a language that is
+      // actually one of the active pair's two sides.
       const resolvedSrc: LangCode =
-        payload.sourceLanguage === "es" || payload.sourceLanguage === "en"
-          ? payload.sourceLanguage
-          : src === "en"
-            ? "en"
-            : "es";
-      const resolvedTgt: LangCode = resolvedSrc === "es" ? "en" : "es";
+        payload.sourceLanguage === pair[0] || payload.sourceLanguage === pair[1]
+          ? (payload.sourceLanguage as LangCode)
+          : src === "auto"
+            ? pair[0]
+            : (src as LangCode);
+      const resolvedTgt: LangCode = resolvedSrc === pair[0] ? pair[1] : pair[0];
       if (src === "auto") setSource(resolvedSrc);
 
       setOriginal(typeof payload.original === "string" ? payload.original : "");
@@ -611,8 +698,8 @@ export function TranslatorShell({
     const blob = lastBlobRef.current;
     if (!blob || status === "recording" || status === "processing") return;
     blessAudio();
-    const newSource: LangCode = source === "es" ? "en" : "es";
-    const newTarget: LangCode = newSource === "es" ? "en" : "es";
+    const newSource: LangCode = target;
+    const newTarget: LangCode = source;
     setSource(newSource);
     setError(null);
     void translateBlob(blob, lastMimeRef.current || "audio/webm", newSource, newTarget);
@@ -628,7 +715,7 @@ export function TranslatorShell({
 
   function swap() {
     blessAudio();
-    setSource((prev) => (prev === "es" ? "en" : "es"));
+    setSource((prev) => (prev === pair[0] ? pair[1] : pair[0]));
     setOriginal("");
     setTranslation("");
     setError(null);
@@ -797,6 +884,27 @@ export function TranslatorShell({
           </div>
         ) : null}
 
+        {/* Language pair picker — most-recently-used pair first */}
+        <div className="flex flex-wrap gap-2">
+          {orderedPairs.map((p) => {
+            const active = pairKey(p) === pairKey(pair);
+            return (
+              <button
+                key={pairKey(p)}
+                type="button"
+                onClick={() => selectPair(p)}
+                className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                  active
+                    ? "border-amber-300 bg-amber-400 text-stone-950"
+                    : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+                }`}
+              >
+                {p[0].toUpperCase()} ⇄ {p[1].toUpperCase()}
+              </button>
+            );
+          })}
+        </div>
+
         {/* Who is speaking — manual swap card, or an Auto-detect indicator */}
         {autoDetect ? (
           <div className="flex items-center justify-between rounded-3xl border border-amber-300/20 bg-amber-400/5 p-4">
@@ -805,7 +913,9 @@ export function TranslatorShell({
                 Auto-detect · Detección automática
               </div>
               <div className="text-2xl font-semibold text-white">
-                {status === "done" ? `${speaker.who} · ${speaker.label}` : "EN ⇄ ES"}
+                {status === "done"
+                  ? `${speaker.who} · ${speaker.label}`
+                  : `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`}
               </div>
             </div>
             <span className="text-2xl text-amber-300">✨</span>
@@ -931,7 +1041,7 @@ export function TranslatorShell({
               : processing
                 ? s.working
                 : autoDetect
-                  ? "Speak · Hablar"
+                  ? `${STRINGS[pair[0]].speak} · ${STRINGS[pair[1]].speak}`
                   : `${s.speak} ${speaker.label}`}
           </button>
 

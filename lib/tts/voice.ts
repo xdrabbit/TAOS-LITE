@@ -3,7 +3,9 @@
 // after the 7/24 flip-flop (PR #5 reversed it for an afternoon; PR #6 put it
 // back and this module exists so that can never happen silently again).
 
-export type TtsLangCode = "en" | "es";
+import type { SupportedLanguageCode } from "@/lib/realtime/languages";
+
+export type TtsLangCode = SupportedLanguageCode;
 export type VoiceOverride = "tom" | "liz";
 
 // A multilingual-capable default voice so the same voice reads EN and ES well.
@@ -25,11 +27,17 @@ export function elevenLabsVoiceId(
   // Spanish translation plays in TOM's clone (Liz hears Tom's voice speaking
   // Spanish). Do NOT "fix" this to follow the output language again — that
   // was shipped once (PR #5) and reverted the same day.
-  if (sourceLanguage === "en" && targetLanguage === "es") {
-    return ELEVENLABS_TOM_VOICE; // Tom's English -> Spanish audio in Tom's voice
+  //
+  // Generalized for new language pairs (7/25, Mandarin): Tom speaks English,
+  // so an English SOURCE uses his clone whatever the target — the multilingual
+  // TTS model renders his voice in Mandarin just fine. Same for Liz's Spanish.
+  // A speaker who is neither of them (e.g. a Mandarin guest) has no clone and
+  // falls through to the default multilingual voice.
+  if (sourceLanguage === "en" && targetLanguage && targetLanguage !== "en") {
+    return ELEVENLABS_TOM_VOICE; // Tom speaking -> translation in Tom's voice
   }
-  if (sourceLanguage === "es" && targetLanguage === "en") {
-    return ELEVENLABS_LIZ_VOICE; // Liz's Spanish -> English audio in Liz's voice
+  if (sourceLanguage === "es" && targetLanguage && targetLanguage !== "es") {
+    return ELEVENLABS_LIZ_VOICE; // Liz speaking -> translation in Liz's voice
   }
   return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
 }

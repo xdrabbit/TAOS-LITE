@@ -2,7 +2,12 @@
 // faithfulness rules added after casual mode drifted meaning (7/23), and
 // which transcription errors count as "nothing was heard" (micro-clips).
 import { describe, expect, it } from "vitest";
-import { buildInstructions, isUnusableAudioError, parseTone } from "@/lib/translate/prompts";
+import {
+  buildAutoDetectInstructions,
+  buildInstructions,
+  isUnusableAudioError,
+  parseTone
+} from "@/lib/translate/prompts";
 
 describe("parseTone", () => {
   it("accepts 'detailed' and defaults everything else to casual", () => {
@@ -30,6 +35,27 @@ describe("buildInstructions", () => {
     const p = buildInstructions("English", "Spanish", "detailed");
     expect(p).toContain("IMPORTANT");
     expect(p).toContain("faithful and complete");
+  });
+});
+
+describe("buildAutoDetectInstructions", () => {
+  it("scopes detection to the conversation pair's two languages", () => {
+    const p = buildAutoDetectInstructions(
+      { code: "en", label: "English" },
+      { code: "zh", label: "Chinese" },
+      "casual"
+    );
+    expect(p).toContain("either English or Chinese");
+    expect(p).toContain(`"lang":"en"|"zh"`);
+  });
+
+  it("keeps the casual faithfulness fence in auto mode too", () => {
+    const p = buildAutoDetectInstructions(
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish" },
+      "casual"
+    );
+    expect(p).toContain("never invent or substitute content");
   });
 });
 

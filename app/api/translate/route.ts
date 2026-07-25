@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getLanguageLabel, isSupportedLanguageCode } from "@/lib/realtime/languages";
 import {
+  getLanguageLabel,
+  isSupportedLanguageCode,
+  type SupportedLanguageCode
+} from "@/lib/realtime/languages";
+import {
+  buildAutoDetectInstructions,
   buildInstructions,
   isUnusableAudioError,
   parseTone,
@@ -119,21 +124,17 @@ async function paraphrase(
   return content;
 }
 
-// Auto-detect mode: the model decides whether the transcript is English or
-// Spanish and translates to the OTHER, returning both so the client knows the
-// resolved direction (for voice + display).
+// Auto-detect mode: the model decides which of the conversation PAIR's two
+// languages the transcript is, and translates to the other — returning both
+// so the client knows the resolved direction (for voice + display).
 async function paraphraseAuto(
   apiKey: string,
   text: string,
-  tone: Tone
-): Promise<{ detected: "en" | "es"; translation: string }> {
+  tone: Tone,
+  a: { code: SupportedLanguageCode; label: string },
+  b: { code: SupportedLanguageCode; label: string }
+): Promise<{ detected: SupportedLanguageCode; translation: string }> {
   const model = process.env.OPENAI_TRANSLATE_MODEL?.trim() || "gpt-4.1"; // full, see paraphrase()
-  const toneLine =
-    tone === "detailed"
-      ? "This is an IMPORTANT conversation: preserve nuance, numbers, names, and emotion."
-      : "This is CASUAL conversation: warm, concise, friend-style; trim filler. " +
-        "Casual means relaxed delivery, never loose meaning — stay strictly faithful to what " +
-        "was said; never invent or substitute content.";
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -143,14 +144,7 @@ async function paraphraseAuto(
       temperature: tone === "detailed" ? 0.2 : 0.4,
       response_format: { type: "json_object" },
       messages: [
-        {
-          role: "system",
-          content:
-            `The user's text is in either English or Spanish. Detect which. ` +
-            `Then render its MEANING in the OTHER language as a natural, FIRST-PERSON concept paraphrase ` +
-            `(never word-for-word, never narrate "he says"). ${toneLine} ` +
-            `Respond ONLY with JSON: {"lang":"en"|"es","translation":"<text in the other language>"}.`
-        },
+        { role: "system", content: buildAutoDetectInstructions(a, b, tone) },
         { role: "user", content: text }
       ]
     }),
@@ -174,7 +168,7 @@ async function paraphraseAuto(
   } catch {
     /* fall through to defaults */
   }
-  const detected: "en" | "es" = parsed.lang === "es" ? "es" : "en";
+  const detected: SupportedLanguageCode = parsed.lang === b.code ? b.code : a.code;
   const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
   if (!translation) throw new Error("Translation response was empty.");
   return { detected, translation };
@@ -201,8 +195,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // Auto-detect direction: transcribe with no language hint, then let the
-    // model decide EN vs ES and translate to the other.
+    // model decide which of the conversation pair's two languages it heard
+    // and translate to the other. The pair comes from the client's language
+    // picker (pairA/pairB); absent fields keep the historic en/es behavior.
     if (sourceLanguage === "auto") {
+      const pairARaw = String(form.get("pairA") ?? "en");
+      const pairBRaw = String(form.get("pairB") ?? "es");
+      const pairA: SupportedLanguageCode = isSupportedLanguageCode(pairARaw) ? pairARaw : "en";
+      let pairB: SupportedLanguageCode = isSupportedLanguageCode(pairBRaw) ? pairBRaw : "es";
+      if (pairB === pairA) pairB = pairA === "en" ? "es" : "en";
+
       const original = await transcribe(apiKey, audio);
       if (!original) {
         return NextResponse.json(
@@ -210,12 +212,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { status: 422 }
         );
       }
-      const { detected, translation } = await paraphraseAuto(apiKey, original, tone);
+      const { detected, translation } = await paraphraseAuto(
+        apiKey,
+        original,
+        tone,
+        { code: pairA, label: getLanguageLabel(pairA) },
+        { code: pairB, label: getLanguageLabel(pairB) }
+      );
       return NextResponse.json({
         original,
         translation,
         sourceLanguage: detected,
-        targetLanguage: detected === "en" ? "es" : "en",
+        targetLanguage: detected === pairA ? pairB : pairA,
         tone,
         autoDetected: true
       });
