@@ -7,6 +7,7 @@ import {
 import {
   buildAutoDetectInstructions,
   buildInstructions,
+  CANTONESE_STT_HINT,
   isUnusableAudioError,
   parseTone,
   type Tone
@@ -33,19 +34,25 @@ function isTimeout(e: unknown): boolean {
 // parseTone / buildInstructions / isUnusableAudioError live in
 // lib/translate/prompts.ts so their behavior is unit-tested.
 
-async function transcribe(apiKey: string, file: File, sourceLabel?: string): Promise<string> {
+async function transcribe(
+  apiKey: string,
+  file: File,
+  sourceLabel?: string,
+  extraHint?: string
+): Promise<string> {
   const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
   const form = new FormData();
   form.append("file", file, file.name || "audio.webm");
   form.append("model", model);
   // A language hint sharpens accuracy; omit it in auto-detect mode so the model
-  // is free to recognize whichever language was spoken.
-  form.append(
-    "prompt",
-    sourceLabel
-      ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation.`
-      : "Transcribe verbatim with natural punctuation."
-  );
+  // is free to recognize whichever language was spoken. Cantonese always gets
+  // the colloquial-written-form hint or the transcript comes back as Standard
+  // Written Chinese and reads as Mandarin.
+  const base = sourceLabel
+    ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation.`
+    : "Transcribe verbatim with natural punctuation.";
+  const hint = extraHint ?? (sourceLabel === "Cantonese" ? CANTONESE_STT_HINT : "");
+  form.append("prompt", hint ? `${base} ${hint}` : base);
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -205,7 +212,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       let pairB: SupportedLanguageCode = isSupportedLanguageCode(pairBRaw) ? pairBRaw : "es";
       if (pairB === pairA) pairB = pairA === "en" ? "es" : "en";
 
-      const original = await transcribe(apiKey, audio);
+      // In auto mode with Cantonese in the pair, the transcriber still needs
+      // the colloquial-written-form hint — otherwise zh/yue speech both come
+      // back as Standard Written Chinese and detection can't tell them apart.
+      const autoHint =
+        pairA === "yue" || pairB === "yue" ? CANTONESE_STT_HINT : undefined;
+      const original = await transcribe(apiKey, audio, undefined, autoHint);
       if (!original) {
         return NextResponse.json(
           { error: "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo." },

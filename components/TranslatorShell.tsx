@@ -14,7 +14,7 @@ import { HistoryDrawer } from "./HistoryDrawer";
 import { Paywall } from "./Paywall";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 
-type LangCode = "en" | "es" | "zh";
+type LangCode = "en" | "es" | "zh" | "yue";
 type Tone = "casual" | "detailed";
 type Engine = "elevenlabs" | "openai";
 type Status = "idle" | "recording" | "processing" | "done" | "error";
@@ -28,8 +28,9 @@ interface Speaker {
 const SPEAKERS: Record<LangCode, Speaker> = {
   es: { code: "es", who: "Liz", label: "Español" },
   en: { code: "en", who: "Tom", label: "English" },
-  // A Mandarin speaker is a guest, not a named member of the household.
-  zh: { code: "zh", who: "Guest", label: "中文" }
+  // Mandarin/Cantonese speakers are guests, not named members of the household.
+  zh: { code: "zh", who: "Guest", label: "中文" },
+  yue: { code: "yue", who: "Guest", label: "廣東話" }
 };
 
 // ── Conversation language pairs ─────────────────────────────────────────────
@@ -40,7 +41,11 @@ const SPEAKERS: Record<LangCode, Speaker> = {
 const PAIRS: ReadonlyArray<readonly [LangCode, LangCode]> = [
   ["en", "es"],
   ["en", "zh"],
-  ["es", "zh"]
+  ["es", "zh"],
+  // 7/25 Yellowstone promise: the Cantonese/Mandarin guests' own pair, plus
+  // English for talking with them.
+  ["zh", "yue"],
+  ["en", "yue"]
 ];
 const pairKey = (p: readonly [LangCode, LangCode]): string => `${p[0]}-${p[1]}`;
 const PAIR_ORDER_STORAGE_KEY = "taos.translate.pairOrder";
@@ -135,6 +140,26 @@ const STRINGS: Record<
     connectionLost: "网络连接问题 — 请检查信号后重试。",
     noAudio: "没有录到声音。请检查麦克风后重试。",
     tooShort: "太短了 — 点击，说完整的一句话，再点一次。"
+  },
+  yue: {
+    speak: "講嘢",
+    stop: "停低並翻譯",
+    working: "處理緊…",
+    speakingNow: "而家講緊",
+    swap: "轉換",
+    listening: "聽緊…",
+    translating: "翻譯緊…",
+    idle: "撳一下咪高峰，講完一句嘢，再撳一下。",
+    heard: "聽到",
+    forLabel: "畀",
+    wrapUp: "就快完 — 幾秒後自動停低並翻譯…",
+    micUnavailable: "用唔到咪高峰。請喺 Safari 用 HTTPS 開呢頁，並允許使用咪高峰。",
+    micDenied: "咪高峰權限被拒。請喺 Safari 設定入面開返，再試多次。",
+    ttsFailed: "播唔到語音。",
+    translateFailed: "翻譯唔到。",
+    connectionLost: "網絡有問題 — 檢查吓訊號再試多次。",
+    noAudio: "錄唔到聲。檢查吓咪高峰再試多次。",
+    tooShort: "太短喇 — 撳一下，講完一句嘢，再撳一下。"
   }
 };
 

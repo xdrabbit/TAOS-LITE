@@ -12,6 +12,7 @@ export const LANGUAGE_OPTIONS = [
   { code: "ja", label: "Japanese" },
   { code: "ko", label: "Korean" },
   { code: "zh", label: "Chinese" },
+  { code: "yue", label: "Cantonese" },
   { code: "hi", label: "Hindi" },
   { code: "ar", label: "Arabic" },
   { code: "ru", label: "Russian" }

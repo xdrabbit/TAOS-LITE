@@ -42,6 +42,13 @@ describe("cloned voice rule: the voice follows the SPEAKER (Tom, 7/24)", () => {
       expect(elevenLabsVoiceId("zh", "en")).toBe(DEFAULT_ELEVENLABS_VOICE);
       expect(elevenLabsVoiceId("zh", "es")).toBe(DEFAULT_ELEVENLABS_VOICE);
     });
+
+    it("Cantonese behaves the same: Tom's English -> yue in his clone; a yue guest gets default", () => {
+      delete process.env.ELEVENLABS_VOICE_ID;
+      expect(elevenLabsVoiceId("en", "yue")).toBe(ELEVENLABS_TOM_VOICE);
+      expect(elevenLabsVoiceId("yue", "en")).toBe(DEFAULT_ELEVENLABS_VOICE);
+      expect(elevenLabsVoiceId("yue", "zh")).toBe(DEFAULT_ELEVENLABS_VOICE);
+    });
   });
 
   describe("unmapped directions fall back to the configured/default voice", () => {
