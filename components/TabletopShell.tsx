@@ -195,12 +195,10 @@ export function TabletopShell(): JSX.Element {
           body: JSON.stringify({
             text: ex.translation,
             sourceLanguage: ex.from,
-            targetLanguage: ex.from === "en" ? "es" : "en",
-            // English readouts in Tom's voice, Spanish in Liz's — the same
-            // voice-follows-language rule the shared /api/tts mapping now
-            // applies everywhere; named explicitly here since tabletop had it
-            // first.
-            voice: ex.from === "es" ? "tom" : "liz"
+            targetLanguage: ex.from === "en" ? "es" : "en"
+            // No voice override: the shared /api/tts voice-follows-speaker rule
+            // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
+            // Spanish in Tom's clone) — identical on every screen.
           })
         },
         { retries: 1, timeoutMs: 30000 }

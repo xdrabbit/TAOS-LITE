@@ -37,20 +37,20 @@ function elevenLabsVoiceId(
   targetLanguage?: LangCode,
   voice?: VoiceOverride
 ): string {
-  // Explicit override wins (tabletop was the first screen to use it).
+  // Explicit override wins (kept for flexibility; no screen uses it today).
   if (voice === "tom") return ELEVENLABS_TOM_VOICE;
   if (voice === "liz") return ELEVENLABS_LIZ_VOICE;
-  // The voice follows the LANGUAGE BEING SPOKEN ALOUD (the target): English
-  // readouts use Tom's clone, Spanish readouts use Liz's — on every screen.
-  // 7/24 field report: the old voice-follows-speaker rule meant English
-  // always came out in Liz's voice and Spanish in Tom's, which read as
-  // "swapped" to both of them. (No env override here — it once forced the
-  // ES->EN side to the wrong clone.)
-  if (targetLanguage === "en") {
-    return ELEVENLABS_TOM_VOICE; // English audio = Tom's voice
+  // THE rule, confirmed by Tom in plain words (7/24): the voice follows the
+  // SPEAKER. Liz speaks Spanish -> her English translation plays in LIZ's
+  // clone (Tom hears Liz's voice speaking English). Tom speaks English -> his
+  // Spanish translation plays in TOM's clone (Liz hears Tom's voice speaking
+  // Spanish). Do NOT "fix" this to follow the output language again — that
+  // was shipped once (PR #5) and reverted the same day.
+  if (sourceLanguage === "en" && targetLanguage === "es") {
+    return ELEVENLABS_TOM_VOICE; // Tom's English -> Spanish audio in Tom's voice
   }
-  if (targetLanguage === "es") {
-    return ELEVENLABS_LIZ_VOICE; // Spanish audio = Liz's voice
+  if (sourceLanguage === "es" && targetLanguage === "en") {
+    return ELEVENLABS_LIZ_VOICE; // Liz's Spanish -> English audio in Liz's voice
   }
   return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
 }
