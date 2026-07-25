@@ -45,7 +45,10 @@ function buildInstructions(sourceLabel: string, targetLabel: string, tone: Tone)
   return (
     shared +
     ` This is CASUAL conversation. Be warm, concise, and conversational. ` +
-    `Capture the gist and feeling the way a close friend would relay it. Trim filler and repetition.`
+    `Capture the gist and feeling the way a close friend would relay it. Trim filler and repetition. ` +
+    `Casual means relaxed DELIVERY, never loose MEANING: stay strictly faithful to what was ` +
+    `actually said — never invent, guess, or substitute content, and when something is unclear, ` +
+    `translate it as literally as needed rather than improvising.`
   );
 }
 
@@ -97,7 +100,14 @@ async function paraphrase(
   targetLabel: string,
   tone: Tone
 ): Promise<string> {
-  const model = process.env.OPENAI_PARAPHRASE_MODEL?.trim() || "gpt-4.1-mini";
+  // Full gpt-4.1, not mini: field reports (7/23, Yellowstone) had casual-mode
+  // translations drifting to a different meaning entirely — mini paraphrases
+  // too loosely for a conversation that matters. Text tokens are cheap; the
+  // realtime voice features dominate cost, not this. Deliberately NOT the
+  // shared OPENAI_PARAPHRASE_MODEL var: that one is pinned to mini for the
+  // latency-sensitive /live and chat routes, and a deployed env value would
+  // silently drag this route back down to mini.
+  const model = process.env.OPENAI_TRANSLATE_MODEL?.trim() || "gpt-4.1";
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -142,11 +152,13 @@ async function paraphraseAuto(
   text: string,
   tone: Tone
 ): Promise<{ detected: "en" | "es"; translation: string }> {
-  const model = process.env.OPENAI_PARAPHRASE_MODEL?.trim() || "gpt-4.1-mini";
+  const model = process.env.OPENAI_TRANSLATE_MODEL?.trim() || "gpt-4.1"; // full, see paraphrase()
   const toneLine =
     tone === "detailed"
       ? "This is an IMPORTANT conversation: preserve nuance, numbers, names, and emotion."
-      : "This is CASUAL conversation: warm, concise, friend-style; trim filler.";
+      : "This is CASUAL conversation: warm, concise, friend-style; trim filler. " +
+        "Casual means relaxed delivery, never loose meaning — stay strictly faithful to what " +
+        "was said; never invent or substitute content.";
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",

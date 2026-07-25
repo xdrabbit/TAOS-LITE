@@ -217,11 +217,45 @@ export function TranslatorShell({
   useEffect(() => {
     return () => {
       clearRecordingTimers();
-      releaseWakeLock();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The screen must never sleep mid-dictation. iOS releases wake locks on any
+  // visibility blip and never gives them back unasked, so hold one for the
+  // whole time this page is open and re-acquire whenever the tab becomes
+  // visible again — the proven /live and /tabletop pattern. (The per-recording
+  // lock this replaces let phones sleep a minute into a long turn.)
+  useEffect(() => {
+    const acquire = () => {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request: (type: "screen") => Promise<WakeLockSentinel> };
+      };
+      nav.wakeLock
+        ?.request("screen")
+        .then((sentinel) => {
+          wakeLockRef.current = sentinel;
+        })
+        .catch(() => {
+          /* wake lock is best-effort */
+        });
+    };
+    acquire();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") acquire();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      try {
+        void wakeLockRef.current?.release();
+      } catch {
+        /* ignore */
+      }
+      wakeLockRef.current = null;
+    };
   }, []);
 
   // Load this month's usage (skip for subscribers — they're unlimited).
@@ -365,28 +399,6 @@ export function TranslatorShell({
     resetRecordButtonStyle();
   }
 
-  async function requestWakeLock() {
-    try {
-      const nav = navigator as Navigator & {
-        wakeLock?: { request: (type: "screen") => Promise<WakeLockSentinel> };
-      };
-      if (nav.wakeLock?.request) {
-        wakeLockRef.current = await nav.wakeLock.request("screen");
-      }
-    } catch {
-      /* ignore — wake lock is best-effort */
-    }
-  }
-
-  function releaseWakeLock() {
-    try {
-      void wakeLockRef.current?.release();
-    } catch {
-      /* ignore */
-    }
-    wakeLockRef.current = null;
-  }
-
   function clearRecordingTimers() {
     if (maxStopTimerRef.current !== null) {
       window.clearTimeout(maxStopTimerRef.current);
@@ -463,7 +475,6 @@ export function TranslatorShell({
       recorderRef.current = recorder;
       setStatus("recording");
       setWrappingUp(false);
-      void requestWakeLock();
 
       // Start the per-turn cap: a setTimeout is the authoritative hard stop
       // (fires even if the rAF ramp is throttled in a background tab); the
@@ -483,7 +494,6 @@ export function TranslatorShell({
   function stopRecording() {
     clearRecordingTimers();
     setWrappingUp(false);
-    releaseWakeLock();
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       setStatus("processing");
