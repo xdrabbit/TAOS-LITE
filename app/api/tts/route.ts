@@ -37,19 +37,20 @@ function elevenLabsVoiceId(
   targetLanguage?: LangCode,
   voice?: VoiceOverride
 ): string {
-  // Tabletop asks for the opposite pairing (spoken Spanish reads out in Tom's
-  // voice, spoken English in Liz's), so it names the clone explicitly instead
-  // of relying on the direction mapping below.
+  // Explicit override wins (tabletop was the first screen to use it).
   if (voice === "tom") return ELEVENLABS_TOM_VOICE;
   if (voice === "liz") return ELEVENLABS_LIZ_VOICE;
-  // The voice follows the SPEAKER, so each person hears their partner's real
-  // voice speaking their own language. (No env override here — it was forcing
-  // the ES->EN side to the wrong clone.)
-  if (sourceLanguage === "en" && targetLanguage === "es") {
-    return ELEVENLABS_TOM_VOICE; // Tom speaks English -> Spanish in Tom's voice
+  // The voice follows the LANGUAGE BEING SPOKEN ALOUD (the target): English
+  // readouts use Tom's clone, Spanish readouts use Liz's — on every screen.
+  // 7/24 field report: the old voice-follows-speaker rule meant English
+  // always came out in Liz's voice and Spanish in Tom's, which read as
+  // "swapped" to both of them. (No env override here — it once forced the
+  // ES->EN side to the wrong clone.)
+  if (targetLanguage === "en") {
+    return ELEVENLABS_TOM_VOICE; // English audio = Tom's voice
   }
-  if (sourceLanguage === "es" && targetLanguage === "en") {
-    return ELEVENLABS_LIZ_VOICE; // Liz speaks Spanish -> English in Liz's voice
+  if (targetLanguage === "es") {
+    return ELEVENLABS_LIZ_VOICE; // Spanish audio = Liz's voice
   }
   return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
 }
