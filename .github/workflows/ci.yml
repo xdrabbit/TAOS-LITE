@@ -1,0 +1,23 @@
+# Regression fence: typecheck + lint + unit tests on every PR and push to
+# main. Vercel only proves the app BUILDS — this proves the pinned behaviors
+# (voice rule, predict model format, retry policy, prompt fences) still hold.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
