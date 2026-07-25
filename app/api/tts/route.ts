@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  elevenLabsVoiceId,
+  type TtsLangCode as LangCode,
+  type VoiceOverride
+} from "@/lib/tts/voice";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type Engine = "elevenlabs" | "openai";
-type LangCode = "en" | "es";
-type VoiceOverride = "tom" | "liz";
 
 // Bound the upstream synthesis call well under maxDuration (60s): a stalled
 // provider must become a fast, retryable JSON error, not a hung request the
@@ -16,10 +19,6 @@ function isTimeout(e: unknown): boolean {
   return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
 }
 
-// A multilingual-capable default voice so the same voice reads EN and ES well.
-const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (works with multilingual model)
-const ELEVENLABS_TOM_VOICE = "tpOaz7u8rY4nup9rRUmh"; // Tom's male clone
-const ELEVENLABS_LIZ_VOICE = "uOQZaXDzEW5WoyNfLPne"; // Liz's female clone
 const DEFAULT_OPENAI_VOICE = "nova";
 
 function audioResponse(buffer: ArrayBuffer): NextResponse {
@@ -32,28 +31,8 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
   });
 }
 
-function elevenLabsVoiceId(
-  sourceLanguage?: LangCode,
-  targetLanguage?: LangCode,
-  voice?: VoiceOverride
-): string {
-  // Explicit override wins (kept for flexibility; no screen uses it today).
-  if (voice === "tom") return ELEVENLABS_TOM_VOICE;
-  if (voice === "liz") return ELEVENLABS_LIZ_VOICE;
-  // THE rule, confirmed by Tom in plain words (7/24): the voice follows the
-  // SPEAKER. Liz speaks Spanish -> her English translation plays in LIZ's
-  // clone (Tom hears Liz's voice speaking English). Tom speaks English -> his
-  // Spanish translation plays in TOM's clone (Liz hears Tom's voice speaking
-  // Spanish). Do NOT "fix" this to follow the output language again — that
-  // was shipped once (PR #5) and reverted the same day.
-  if (sourceLanguage === "en" && targetLanguage === "es") {
-    return ELEVENLABS_TOM_VOICE; // Tom's English -> Spanish audio in Tom's voice
-  }
-  if (sourceLanguage === "es" && targetLanguage === "en") {
-    return ELEVENLABS_LIZ_VOICE; // Liz's Spanish -> English audio in Liz's voice
-  }
-  return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
-}
+// Cloned-voice selection lives in lib/tts/voice.ts (voice follows the
+// SPEAKER — see the unit tests that pin the rule).
 
 async function elevenLabs(
   text: string,

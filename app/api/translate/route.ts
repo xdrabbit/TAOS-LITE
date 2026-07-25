@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLanguageLabel, isSupportedLanguageCode } from "@/lib/realtime/languages";
+import {
+  buildInstructions,
+  isUnusableAudioError,
+  parseTone,
+  type Tone
+} from "@/lib/translate/prompts";
 
 export const runtime = "nodejs";
 // 300s is the max on Vercel Pro. The client per-turn cap (MAX_TURN_DURATION_MS
 // in TranslatorShell) must stay <= this, or a long turn can't be transcribed +
 // paraphrased before the function is killed and the turn fails silently.
 export const maxDuration = 300;
-
-type Tone = "casual" | "detailed";
 
 // Production 2026-07-19: an OpenAI call stalled and this function hung the
 // full 300s until Vercel killed it — the phone's fetch died with Safari's
@@ -21,36 +25,8 @@ function isTimeout(e: unknown): boolean {
   return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
 }
 
-function parseTone(value: FormDataEntryValue | null): Tone {
-  return value === "detailed" ? "detailed" : "casual";
-}
-
-function buildInstructions(sourceLabel: string, targetLabel: string, tone: Tone): string {
-  const shared =
-    `You are a live interpreter helping two people in a face-to-face conversation. ` +
-    `The speaker talks in ${sourceLabel}. Render their meaning in natural, fluent ${targetLabel}. ` +
-    `Speak in the FIRST PERSON as if you are the speaker — never narrate ("he says", "she is saying"). ` +
-    `Do NOT translate word for word. Convey the concept, intent, and emotional tone. ` +
-    `Output ONLY the ${targetLabel} translation: no preamble, no quotes, no notes, no language labels.`;
-
-  if (tone === "detailed") {
-    return (
-      shared +
-      ` This is an IMPORTANT conversation. Preserve every meaningful nuance, condition, number, name, ` +
-      `and emotional weight. Be faithful and complete, but still natural and first-person. ` +
-      `If the speaker rambles, organize the meaning clearly without losing detail.`
-    );
-  }
-
-  return (
-    shared +
-    ` This is CASUAL conversation. Be warm, concise, and conversational. ` +
-    `Capture the gist and feeling the way a close friend would relay it. Trim filler and repetition. ` +
-    `Casual means relaxed DELIVERY, never loose MEANING: stay strictly faithful to what was ` +
-    `actually said — never invent, guess, or substitute content, and when something is unclear, ` +
-    `translate it as literally as needed rather than improvising.`
-  );
-}
+// parseTone / buildInstructions / isUnusableAudioError live in
+// lib/translate/prompts.ts so their behavior is unit-tested.
 
 async function transcribe(apiKey: string, file: File, sourceLabel?: string): Promise<string> {
   const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
@@ -76,13 +52,12 @@ async function transcribe(apiKey: string, file: File, sourceLabel?: string): Pro
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
   if (!res.ok) {
-    // A micro-clip (rapid double-tap) or a mangled upload comes back as
-    // "Audio file might be corrupted or unsupported". That's not a failure
-    // worth showing raw JSON for — treat it as "nothing was heard" so the
-    // caller returns its gentle bilingual retry message.
+    // A micro-clip (rapid double-tap) or a mangled upload means "no usable
+    // speech", not a server failure — return "" so the caller responds with
+    // its gentle bilingual retry message instead of raw provider JSON.
     const err = payload?.error as Record<string, unknown> | undefined;
     const msg = typeof err?.message === "string" ? err.message : "";
-    if (/corrupted or unsupported|could not be decoded|file is empty/i.test(msg)) {
+    if (isUnusableAudioError(msg)) {
       return "";
     }
     const detail =

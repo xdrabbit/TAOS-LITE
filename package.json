@@ -7,15 +7,16 @@
     "build": "node node_modules/next/dist/bin/next build",
     "start": "node node_modules/next/dist/bin/next start --port 3017",
     "lint": "node node_modules/eslint/bin/eslint.js .",
-    "typecheck": "node node_modules/typescript/bin/tsc --noEmit"
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@next/swc-linux-x64-gnu": "^14.2.33",
     "@supabase/supabase-js": "^2.45.0",
     "next": "14.2.33",
-    "stripe": "^16.12.0",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "stripe": "^16.12.0"
   },
   "devDependencies": {
     "@types/node": "^20.16.10",
@@ -26,6 +27,7 @@
     "eslint-config-next": "14.2.33",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.10"
   }
 }
