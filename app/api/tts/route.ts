@@ -48,10 +48,16 @@ async function elevenLabs(
   const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage, voice);
   // /live sends latency:"flash" — trade a little clone fidelity for the
   // lowest-latency model so spoken concepts don't lag the conversation.
+  // Cantonese output overrides both: turbo/flash don't speak Cantonese (they
+  // read written Cantonese with Mandarin-ish pronunciation), so yue routes to
+  // the v3 family — slower, but the only one that actually speaks it. Field
+  // verdict pending (7/25 promise to the two guests).
   const model =
-    latency === "flash"
-      ? process.env.ELEVENLABS_FLASH_MODEL?.trim() || "eleven_flash_v2_5"
-      : process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5"; // low-latency, multilingual
+    targetLanguage === "yue"
+      ? process.env.ELEVENLABS_YUE_MODEL?.trim() || "eleven_v3"
+      : latency === "flash"
+        ? process.env.ELEVENLABS_FLASH_MODEL?.trim() || "eleven_flash_v2_5"
+        : process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5"; // low-latency, multilingual
 
   const res = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,

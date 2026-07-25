@@ -59,6 +59,29 @@ describe("buildAutoDetectInstructions", () => {
   });
 });
 
+describe("Cantonese written-form rules (7/25 promise to the two guests)", () => {
+  it("Cantonese output demands colloquial written Cantonese, never Standard Written Chinese", () => {
+    const p = buildInstructions("English", "Cantonese", "casual");
+    expect(p).toContain("粵語口語");
+    expect(p).toContain("NEVER Standard");
+  });
+
+  it("non-Cantonese targets don't carry the rule", () => {
+    expect(buildInstructions("English", "Spanish", "casual")).not.toContain("粵語");
+    expect(buildInstructions("English", "Chinese", "detailed")).not.toContain("粵語");
+  });
+
+  it("auto-detect with Cantonese in the pair carries the rule (zh⇄yue: the girls' pair)", () => {
+    const p = buildAutoDetectInstructions(
+      { code: "zh", label: "Chinese" },
+      { code: "yue", label: "Cantonese" },
+      "casual"
+    );
+    expect(p).toContain("粵語口語");
+    expect(p).toContain(`"lang":"zh"|"yue"`);
+  });
+});
+
 describe("isUnusableAudioError", () => {
   it("recognizes the micro-clip / mangled-upload rejections", () => {
     expect(isUnusableAudioError("Audio file might be corrupted or unsupported")).toBe(true);
