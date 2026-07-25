@@ -36,6 +36,33 @@ export function buildInstructions(sourceLabel: string, targetLabel: string, tone
   );
 }
 
+export interface LanguageChoice {
+  code: string;
+  label: string;
+}
+
+// Auto-detect is scoped to the conversation's language PAIR (detecting among
+// all 12 supported languages gets flaky; between 2 it stays sharp). The model
+// decides which of the two the transcript is, then translates to the other.
+export function buildAutoDetectInstructions(
+  a: LanguageChoice,
+  b: LanguageChoice,
+  tone: Tone
+): string {
+  const toneLine =
+    tone === "detailed"
+      ? "This is an IMPORTANT conversation: preserve nuance, numbers, names, and emotion."
+      : "This is CASUAL conversation: warm, concise, friend-style; trim filler. " +
+        "Casual means relaxed delivery, never loose meaning — stay strictly faithful to what " +
+        "was said; never invent or substitute content.";
+  return (
+    `The user's text is in either ${a.label} or ${b.label}. Detect which. ` +
+    `Then render its MEANING in the OTHER language as a natural, FIRST-PERSON concept paraphrase ` +
+    `(never word-for-word, never narrate "he says"). ${toneLine} ` +
+    `Respond ONLY with JSON: {"lang":"${a.code}"|"${b.code}","translation":"<text in the other language>"}.`
+  );
+}
+
 // A micro-clip (rapid double-tap) or a mangled upload comes back from the
 // transcription API as one of these. They mean "no usable speech", not a
 // server failure — the route maps them to its gentle bilingual retry message

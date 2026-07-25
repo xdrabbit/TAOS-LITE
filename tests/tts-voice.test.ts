@@ -28,6 +28,22 @@ describe("cloned voice rule: the voice follows the SPEAKER (Tom, 7/24)", () => {
     expect(elevenLabsVoiceId("en", "es", "liz")).toBe(ELEVENLABS_LIZ_VOICE);
   });
 
+  describe("new language pairs (7/25, Mandarin) keep following the speaker", () => {
+    it("Tom's English -> Mandarin plays in TOM's clone (multilingual TTS)", () => {
+      expect(elevenLabsVoiceId("en", "zh")).toBe(ELEVENLABS_TOM_VOICE);
+    });
+
+    it("Liz's Spanish -> Mandarin plays in LIZ's clone", () => {
+      expect(elevenLabsVoiceId("es", "zh")).toBe(ELEVENLABS_LIZ_VOICE);
+    });
+
+    it("a Mandarin guest has no clone — their translations use the default voice", () => {
+      delete process.env.ELEVENLABS_VOICE_ID;
+      expect(elevenLabsVoiceId("zh", "en")).toBe(DEFAULT_ELEVENLABS_VOICE);
+      expect(elevenLabsVoiceId("zh", "es")).toBe(DEFAULT_ELEVENLABS_VOICE);
+    });
+  });
+
   describe("unmapped directions fall back to the configured/default voice", () => {
     const saved = process.env.ELEVENLABS_VOICE_ID;
     afterEach(() => {
