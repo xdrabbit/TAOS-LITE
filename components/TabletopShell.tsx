@@ -196,9 +196,10 @@ export function TabletopShell(): JSX.Element {
             text: ex.translation,
             sourceLanguage: ex.from,
             targetLanguage: ex.from === "en" ? "es" : "en",
-            // Tabletop pairing is the reverse of the shared voice-follows-speaker
-            // mapping: spoken Spanish reads out in Tom's voice, spoken English
-            // in Liz's.
+            // English readouts in Tom's voice, Spanish in Liz's — the same
+            // voice-follows-language rule the shared /api/tts mapping now
+            // applies everywhere; named explicitly here since tabletop had it
+            // first.
             voice: ex.from === "es" ? "tom" : "liz"
           })
         },
