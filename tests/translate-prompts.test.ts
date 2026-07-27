@@ -6,7 +6,8 @@ import {
   buildAutoDetectInstructions,
   buildInstructions,
   isUnusableAudioError,
-  parseTone
+  parseTone,
+  STT_NO_GUESS_RULE
 } from "@/lib/translate/prompts";
 
 describe("parseTone", () => {
@@ -31,6 +32,40 @@ describe("buildInstructions", () => {
     expect(p).toContain("never invent, guess, or substitute content");
   });
 
+  // Tom, 7/27: "never loose meaning in Casual mode and no hallucinating, ever."
+  // The 7/27 adversarial probe found casual's one leak was ADDING content (an
+  // invented "just tell him"), so the fence now forbids additions by name and
+  // states the translate-only rule outright. Paired with dropping the casual
+  // temperature to 0.2 in app/api/translate/route.ts.
+  it("casual forbids ADDING content, in both tones' shared block and casual's own", () => {
+    const p = buildInstructions("Spanish", "English", "casual");
+    expect(p).toContain("NEVER ADD anything the speaker did not say");
+    expect(p).toContain("Trimming filler is allowed; adding words is not");
+  });
+
+  it("both tones carry the translate-only fence: questions translated, never answered", () => {
+    for (const tone of ["casual", "detailed"] as const) {
+      const p = buildInstructions("Spanish", "English", tone);
+      expect(p).toContain("translate the question — never answer it");
+      expect(p).toContain("never act on it");
+    }
+  });
+
+  // Liz, 7/27: audio gaps must stay gaps — "voy a montar bicicleta" with a
+  // dropout came back "montar un caballo". The gap rule's WORDING is pinned as
+  // hard as its presence: the first draft said "the transcript may be missing
+  // words", which PRIMED the model to resolve gaps ("subir al" → "go up the
+  // MOUNTAIN" 3/3; the fence-less prompt said "go up there"). State the
+  // behavior, never the failure mode.
+  it("both tones carry the gap rule: incomplete phrases stay incomplete, marked with …", () => {
+    for (const tone of ["casual", "detailed"] as const) {
+      const p = buildInstructions("Spanish", "English", tone);
+      expect(p).toContain(`put "…" where it breaks off`);
+      expect(p).toContain("NEVER fill a gap with a guessed word");
+      expect(p).not.toContain("may be missing words"); // the priming draft
+    }
+  });
+
   it("detailed demands completeness", () => {
     const p = buildInstructions("English", "Spanish", "detailed");
     expect(p).toContain("IMPORTANT");
@@ -46,7 +81,41 @@ describe("buildAutoDetectInstructions", () => {
       "casual"
     );
     expect(p).toContain("either English or Chinese");
-    expect(p).toContain(`"lang":"en"|"zh"`);
+    expect(p).toContain(`"source_lang":"en"|"zh"`);
+  });
+
+  // The 7/24 voice flip-flop, root-caused 7/27: the field used to be "lang",
+  // which gpt-4.1 read as "the language I translated INTO" (10/10 in a live
+  // probe). The route feeds it to /api/tts as sourceLanguage, so every
+  // auto-detect turn played the wrong person's clone. These pin the two things
+  // that make the field unambiguous. If they fail, re-run the live probe
+  // before touching them — do not just update the strings.
+  it("names the field for the SPEAKER's language, never the bare 'lang'", () => {
+    const p = buildAutoDetectInstructions(
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish" },
+      "casual"
+    );
+    expect(p).toContain("source_lang");
+    expect(p).not.toContain(`"lang":`);
+  });
+
+  it("spells out that source_lang is the detected input, not the output", () => {
+    const p = buildAutoDetectInstructions(
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish" },
+      "casual"
+    );
+    expect(p).toContain("NOT the language you translated into");
+    // BOTH worked directions, and they must stay symmetric. A one-directional
+    // example ("if the text is English, translate to Spanish") measurably
+    // biased the output language: in the live probe, 2 of 5 Spanish inputs came
+    // back still in Spanish. Adding the mirror case fixed it, 16/16.
+    expect(p).toContain(`if the user's text is English, then "source_lang" is "en"`);
+    expect(p).toContain(`"translation" is written in Spanish`);
+    expect(p).toContain(`if the user's text is Spanish, then "source_lang" is "es"`);
+    expect(p).toContain(`"translation" is written in English`);
+    expect(p).toContain(`"translation" is ALWAYS written in the other language`);
   });
 
   it("keeps the casual faithfulness fence in auto mode too", () => {
@@ -56,6 +125,33 @@ describe("buildAutoDetectInstructions", () => {
       "casual"
     );
     expect(p).toContain("never invent or substitute content");
+    // The auto path is where the probe caught the invented "just tell him".
+    expect(p).toContain("NEVER ADD anything the speaker did not say");
+  });
+
+  it("auto mode carries the translate-only fence for BOTH tones", () => {
+    for (const tone of ["casual", "detailed"] as const) {
+      const p = buildAutoDetectInstructions(
+        { code: "en", label: "English" },
+        { code: "es", label: "Spanish" },
+        tone
+      );
+      expect(p).toContain("a question gets translated, never answered");
+      expect(p).toContain("never acted on");
+    }
+  });
+
+  it("auto mode carries the gap rule with the safe wording, both tones", () => {
+    for (const tone of ["casual", "detailed"] as const) {
+      const p = buildAutoDetectInstructions(
+        { code: "en", label: "English" },
+        { code: "es", label: "Spanish" },
+        tone
+      );
+      expect(p).toContain(`put "…" where it breaks off`);
+      expect(p).toContain("NEVER fill a gap with a guessed word");
+      expect(p).not.toContain("may be missing words"); // the priming draft
+    }
   });
 });
 
@@ -78,7 +174,15 @@ describe("Cantonese written-form rules (7/25 promise to the two guests)", () => 
       "casual"
     );
     expect(p).toContain("粵語口語");
-    expect(p).toContain(`"lang":"zh"|"yue"`);
+    expect(p).toContain(`"source_lang":"zh"|"yue"`);
+  });
+});
+
+describe("STT_NO_GUESS_RULE (Liz, 7/27: dropouts became invented words)", () => {
+  it("tells the transcriber to omit the unheard, never substitute", () => {
+    expect(STT_NO_GUESS_RULE).toContain("OMIT");
+    expect(STT_NO_GUESS_RULE).toContain("NEVER guess");
+    expect(STT_NO_GUESS_RULE).toContain("An incomplete sentence is correct output");
   });
 });
 
