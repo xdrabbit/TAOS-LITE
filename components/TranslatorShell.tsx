@@ -574,6 +574,23 @@ export function TranslatorShell({
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       recorder.onstop = () => void handleRecordingStopped();
+      // iOS Safari ends the mic track SILENTLY when the audio session is
+      // interrupted (incoming call, Siri, another app taking the mic, some
+      // screen-lock states). Without these handlers the turn dies with the
+      // button still lit and the captured audio is lost (Liz, 7/27: "a veces
+      // simplemente deja de transmitirse… y se apaga"). Route both through the
+      // normal stop path so whatever was heard before the interruption still
+      // gets translated.
+      recorder.onerror = (ev) => {
+        console.error("[translate] recorder error — finishing the turn early", ev);
+        stopRecording();
+      };
+      for (const track of stream.getAudioTracks()) {
+        track.onended = () => {
+          console.warn("[translate] mic track ended mid-turn — finishing the turn early");
+          stopRecording();
+        };
+      }
       // Flush audio into chunks every second so a long turn is never held in one
       // fragile buffer that could be lost if the page is suspended.
       recorder.start(1000);
