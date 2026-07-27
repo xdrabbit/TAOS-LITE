@@ -9,6 +9,22 @@ import {
   elevenLabsVoiceId
 } from "@/lib/tts/voice";
 
+describe("the clone IDs themselves (verified against the ElevenLabs account, 7/27)", () => {
+  // Every earlier test checked the constants SYMBOLICALLY, so when the two
+  // values were swapped (day one through 7/27) the suite stayed green while
+  // production played the wrong person. These pin the raw IDs to the account's
+  // own voice names — GET /v1/voices says uOQZ… is named "tom" and tpOaz… is
+  // named "lizma2". If these fail, re-list the account's voices before
+  // touching anything.
+  it("ELEVENLABS_TOM_VOICE is the account clone named 'tom'", () => {
+    expect(ELEVENLABS_TOM_VOICE).toBe("uOQZaXDzEW5WoyNfLPne");
+  });
+
+  it("ELEVENLABS_LIZ_VOICE is the account clone named 'lizma2'", () => {
+    expect(ELEVENLABS_LIZ_VOICE).toBe("tpOaz7u8rY4nup9rRUmh");
+  });
+});
+
 describe("cloned voice rule: the voice follows the SPEAKER (Tom, 7/24)", () => {
   it("Liz speaks Spanish -> her English translation plays in LIZ's clone", () => {
     // "English spoken is always Liz because Liz speaks Spanish and gets
