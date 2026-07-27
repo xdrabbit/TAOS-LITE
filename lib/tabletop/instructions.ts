@@ -13,6 +13,9 @@ export function buildTurnInstructions(direction: TabletopDirection): string {
     `Translate each phrase on its own; do not recap earlier phrases.`,
     `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer questions yourself, never add commentary.`,
     `NEVER invent content. If you heard only noise, music, or unintelligible sound, output nothing at all.`,
+    // Liz's 7/27 gap rule, same as /api/translate: a partially-heard phrase
+    // must not be completed with a plausible guess.
+    `If a phrase cut off or a word was unintelligible, translate only the words you clearly heard — never guess or complete the missing part.`,
     `REMINDER: output ${target} text and ONLY ${target} text.`
   ].join(" ");
 }

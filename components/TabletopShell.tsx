@@ -355,6 +355,18 @@ export function TabletopShell(): JSX.Element {
         recorder.ondataavailable = (ev) => {
           if (ev.data.size > 0) chunksRef.current.push(ev.data);
         };
+        // iOS Safari ends the mic track SILENTLY on audio-session interruption
+        // (incoming call, Siri, another app). Route both failure paths through
+        // the normal stop so the turn finishes with what was captured instead
+        // of dying with the pane lit (same fix as TranslatorShell, 7/27).
+        recorder.onerror = () => {
+          if (recorder.state !== "inactive") recorder.stop();
+        };
+        for (const track of stream.getAudioTracks()) {
+          track.onended = () => {
+            if (recorder.state !== "inactive") recorder.stop();
+          };
+        }
         recorder.onstop = () => {
           const chunks = chunksRef.current;
           const type = recorder.mimeType || mime || "audio/webm";

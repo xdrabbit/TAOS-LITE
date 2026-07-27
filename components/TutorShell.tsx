@@ -267,6 +267,12 @@ function Drills({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JS
       chunksRef.current = [];
       recorder.ondataavailable = (ev) => ev.data.size > 0 && chunksRef.current.push(ev.data);
       recorder.onstop = () => void score();
+      // Interrupted mic scores what was captured instead of hanging the drill
+      // (same fix as TranslatorShell, 7/27).
+      recorder.onerror = () => stopRecording();
+      for (const track of stream.getAudioTracks()) {
+        track.onended = () => stopRecording();
+      }
       recorder.start();
       recorderRef.current = recorder;
       setStatus("recording");

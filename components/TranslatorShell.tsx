@@ -838,12 +838,8 @@ export function TranslatorShell({
             >
               Translate
             </a>
-            <a
-              href="/tutor"
-              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Tutor
-            </a>
+            {/* Tutor lives in the avatar menu (with History) — Tom, 7/27:
+                one fewer pill keeps the header from crowding phone widths. */}
             <div ref={accountMenuRef} className="relative">
               <button
                 type="button"
@@ -874,6 +870,13 @@ export function TranslatorShell({
                   aria-label="Account"
                   className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
+                  <a
+                    href="/tutor"
+                    role="menuitem"
+                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Tutor
+                  </a>
                   <button
                     type="button"
                     role="menuitem"
@@ -881,7 +884,7 @@ export function TranslatorShell({
                       setAccountMenuOpen(false);
                       setHistoryOpen(true);
                     }}
-                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                   >
                     History · Historial
                   </button>

@@ -304,6 +304,17 @@ export function ChatShell(): JSX.Element {
       recorder.ondataavailable = (ev) => {
         if (ev.data.size > 0) recChunksRef.current.push(ev.data);
       };
+      // Interrupted mic (iOS audio-session loss) finishes the voice note with
+      // what was captured instead of dying silently (same fix as
+      // TranslatorShell, 7/27).
+      recorder.onerror = () => {
+        if (recorder.state !== "inactive") recorder.stop();
+      };
+      for (const track of stream.getAudioTracks()) {
+        track.onended = () => {
+          if (recorder.state !== "inactive") recorder.stop();
+        };
+      }
       recorder.onstop = () => {
         const chunks = recChunksRef.current;
         const type = recorder.mimeType || mime || "audio/webm";
