@@ -6,7 +6,8 @@ import {
   buildAutoDetectInstructions,
   buildInstructions,
   isUnusableAudioError,
-  parseTone
+  parseTone,
+  STT_NO_GUESS_RULE
 } from "@/lib/translate/prompts";
 
 describe("parseTone", () => {
@@ -47,6 +48,21 @@ describe("buildInstructions", () => {
       const p = buildInstructions("Spanish", "English", tone);
       expect(p).toContain("translate the question — never answer it");
       expect(p).toContain("never act on it");
+    }
+  });
+
+  // Liz, 7/27: audio gaps must stay gaps — "voy a montar bicicleta" with a
+  // dropout came back "montar un caballo". The gap rule's WORDING is pinned as
+  // hard as its presence: the first draft said "the transcript may be missing
+  // words", which PRIMED the model to resolve gaps ("subir al" → "go up the
+  // MOUNTAIN" 3/3; the fence-less prompt said "go up there"). State the
+  // behavior, never the failure mode.
+  it("both tones carry the gap rule: incomplete phrases stay incomplete, marked with …", () => {
+    for (const tone of ["casual", "detailed"] as const) {
+      const p = buildInstructions("Spanish", "English", tone);
+      expect(p).toContain(`put "…" where it breaks off`);
+      expect(p).toContain("NEVER fill a gap with a guessed word");
+      expect(p).not.toContain("may be missing words"); // the priming draft
     }
   });
 
@@ -124,6 +140,19 @@ describe("buildAutoDetectInstructions", () => {
       expect(p).toContain("never acted on");
     }
   });
+
+  it("auto mode carries the gap rule with the safe wording, both tones", () => {
+    for (const tone of ["casual", "detailed"] as const) {
+      const p = buildAutoDetectInstructions(
+        { code: "en", label: "English" },
+        { code: "es", label: "Spanish" },
+        tone
+      );
+      expect(p).toContain(`put "…" where it breaks off`);
+      expect(p).toContain("NEVER fill a gap with a guessed word");
+      expect(p).not.toContain("may be missing words"); // the priming draft
+    }
+  });
 });
 
 describe("Cantonese written-form rules (7/25 promise to the two guests)", () => {
@@ -146,6 +175,14 @@ describe("Cantonese written-form rules (7/25 promise to the two guests)", () => 
     );
     expect(p).toContain("粵語口語");
     expect(p).toContain(`"source_lang":"zh"|"yue"`);
+  });
+});
+
+describe("STT_NO_GUESS_RULE (Liz, 7/27: dropouts became invented words)", () => {
+  it("tells the transcriber to omit the unheard, never substitute", () => {
+    expect(STT_NO_GUESS_RULE).toContain("OMIT");
+    expect(STT_NO_GUESS_RULE).toContain("NEVER guess");
+    expect(STT_NO_GUESS_RULE).toContain("An incomplete sentence is correct output");
   });
 });
 

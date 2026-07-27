@@ -10,6 +10,7 @@ import {
   CANTONESE_STT_HINT,
   isUnusableAudioError,
   parseTone,
+  STT_NO_GUESS_RULE,
   type Tone
 } from "@/lib/translate/prompts";
 
@@ -47,10 +48,12 @@ async function transcribe(
   // A language hint sharpens accuracy; omit it in auto-detect mode so the model
   // is free to recognize whichever language was spoken. Cantonese always gets
   // the colloquial-written-form hint or the transcript comes back as Standard
-  // Written Chinese and reads as Mandarin.
+  // Written Chinese and reads as Mandarin. STT_NO_GUESS_RULE applies to every
+  // turn: audio dropouts must become gaps, never invented words (Liz, 7/27:
+  // "montar bicicleta" with a signal dip came back "montar un caballo").
   const base = sourceLabel
-    ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation.`
-    : "Transcribe verbatim with natural punctuation.";
+    ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
+    : `Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`;
   const hint = extraHint ?? (sourceLabel === "Cantonese" ? CANTONESE_STT_HINT : "");
   form.append("prompt", hint ? `${base} ${hint}` : base);
 
