@@ -104,7 +104,12 @@ async function paraphrase(
     },
     body: JSON.stringify({
       model,
-      temperature: tone === "detailed" ? 0.2 : 0.4,
+      // 0.2 for BOTH tones (casual was 0.4 until 7/27): the adversarial probe's
+      // one leak was casual mode inventing an unspoken request, and the higher
+      // temperature is the knob that invites it. Fidelity is the priority now
+      // ("never loose meaning in Casual, no hallucinating, ever" — Tom, 7/27);
+      // the casual REGISTER comes from the prompt, not the sampler.
+      temperature: 0.2,
       messages: [
         { role: "system", content: buildInstructions(sourceLabel, targetLabel, tone) },
         { role: "user", content: text }
@@ -148,7 +153,7 @@ async function paraphraseAuto(
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
-      temperature: tone === "detailed" ? 0.2 : 0.4,
+      temperature: 0.2, // both tones — see paraphrase() for the 7/27 rationale
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: buildAutoDetectInstructions(a, b, tone) },
@@ -169,13 +174,27 @@ async function paraphraseAuto(
   const first = choices[0] as Record<string, unknown> | undefined;
   const message = first?.message as Record<string, unknown> | undefined;
   const content = typeof message?.content === "string" ? message.content : "";
-  let parsed: { lang?: string; translation?: string } = {};
+  let parsed: { source_lang?: string; translation?: string } = {};
   try {
-    parsed = JSON.parse(content) as { lang?: string; translation?: string };
+    parsed = JSON.parse(content) as { source_lang?: string; translation?: string };
   } catch {
     /* fall through to defaults */
   }
-  const detected: SupportedLanguageCode = parsed.lang === b.code ? b.code : a.code;
+  // source_lang is the language the SPEAKER used (see buildAutoDetectInstructions
+  // for why the field is named this and must not be renamed back to "lang").
+  // It becomes sourceLanguage for /api/tts, which is what picks Tom's clone vs
+  // Liz's — read it wrong and every auto-detect turn plays the wrong voice.
+  //
+  // An unparseable response leaves no way to know who spoke, so this falls back
+  // to the pair's first language. That silent fallback is exactly how the old
+  // inversion hid for five weeks, so it is now a coin flip we log rather than
+  // one we pretend is a detection.
+  if (parsed.source_lang !== a.code && parsed.source_lang !== b.code) {
+    console.warn(
+      `[translate] auto-detect returned no usable source_lang (got ${JSON.stringify(parsed.source_lang)}); defaulting to ${a.code}`
+    );
+  }
+  const detected: SupportedLanguageCode = parsed.source_lang === b.code ? b.code : a.code;
   const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
   if (!translation) throw new Error("Translation response was empty.");
   return { detected, translation };
