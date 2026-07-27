@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
+import { STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
 import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
 
 export const runtime = "nodejs";
@@ -29,9 +30,11 @@ async function transcribeAudio(apiKey: string, file: File, sourceLabel: string):
   form.append("model", model);
   // Hint the sender's usual language but leave room for mixing — they're a
   // bilingual couple, code-switching is the normal case, not the edge case.
+  // STT_NO_GUESS_RULE: dropouts become gaps, never invented words (Liz, 7/27 —
+  // same rule as /api/translate).
   form.append(
     "prompt",
-    `Mostly spoken ${sourceLabel}, possibly mixing English and Spanish. Transcribe verbatim with natural punctuation.`
+    `Mostly spoken ${sourceLabel}, possibly mixing English and Spanish. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
   );
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -64,6 +67,11 @@ async function translateTranscript(
             `The sender usually speaks ${sourceLabel}. Translate the transcript into natural, warm, ` +
             `conversational ${targetLabel}, keeping the tone, affection, and any emoji-worthy feeling. ` +
             `If the transcript is already entirely in ${targetLabel}, return it unchanged. ` +
+            // Same fences as /api/translate (7/27): translate-only + gaps stay gaps.
+            `You ONLY translate: a question gets translated, never answered; a request gets ` +
+            `translated, never acted on. If a phrase is incomplete or cuts off mid-thought, ` +
+            `translate only the words that are there and put "…" where it breaks off — never ` +
+            `fill a gap with a guessed word. ` +
             `Output ONLY the translation — no quotes, no notes, no labels.`
         },
         { role: "user", content: text }

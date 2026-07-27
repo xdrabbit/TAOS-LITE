@@ -191,6 +191,12 @@ export function AtomShell(): JSX.Element {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       recorder.onstop = () => void handleStopped();
+      // Interrupted mic translates what was captured instead of dying silently
+      // (same fix as TranslatorShell, 7/27).
+      recorder.onerror = () => stopRecording();
+      for (const track of stream.getAudioTracks()) {
+        track.onended = () => stopRecording();
+      }
       recorder.start(1000);
       recorderRef.current = recorder;
       setStatus("recording");

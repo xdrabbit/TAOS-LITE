@@ -35,6 +35,8 @@ function buildCallInterpreterInstructions(target: TargetLang): string {
     `If several utterances are waiting, translate them all in order, but keep it tight — no recaps, no repetition of things you already translated.`,
     `If you have fallen far behind, compress the oldest material and translate the newest fully — fresh speech matters most on a live call.`,
     `NEVER invent content. If you heard only noise, silence, or unintelligible sound, output nothing at all — no filler, no guesses.`,
+    // Liz's 7/27 gap rule, same as /api/translate and /tabletop.
+    `If a phrase cut off or a word was unintelligible, translate only the words you clearly heard — never guess or complete the missing part.`,
     `Delivery: quick, clear, neutral — a professional interpreter, not a narrator.`,
     `REMINDER: your output language is ${targetName} and ONLY ${targetName}.`
   ].join(" ");
