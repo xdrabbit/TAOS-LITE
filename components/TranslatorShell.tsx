@@ -70,7 +70,7 @@ const STRINGS: Record<
     translating: string;
     idle: string;
     heard: string;
-    forLabel: string;
+    translationLabel: string;
     wrapUp: string;
     micUnavailable: string;
     micDenied: string;
@@ -91,7 +91,7 @@ const STRINGS: Record<
     translating: "Translating…",
     idle: "Tap the mic, speak a full thought, tap again.",
     heard: "Heard",
-    forLabel: "For",
+    translationLabel: "Translation",
     wrapUp: "Wrapping up — auto stop & translate in a few seconds…",
     micUnavailable: "Microphone not available. Open this page over HTTPS in Safari and allow mic access.",
     micDenied: "Microphone permission was denied. Enable it in Safari settings and retry.",
@@ -111,7 +111,7 @@ const STRINGS: Record<
     translating: "Traduciendo…",
     idle: "Toca el micrófono, di una idea completa y toca otra vez.",
     heard: "Se escuchó",
-    forLabel: "Para",
+    translationLabel: "Traducción",
     wrapUp: "Terminando — se detiene y traduce en unos segundos…",
     micUnavailable: "Micrófono no disponible. Abre esta página con HTTPS en Safari y permite el micrófono.",
     micDenied: "Se denegó el permiso del micrófono. Actívalo en los ajustes de Safari e inténtalo de nuevo.",
@@ -131,7 +131,7 @@ const STRINGS: Record<
     translating: "翻译中…",
     idle: "点击麦克风，说完整的一句话，再点一次。",
     heard: "听到",
-    forLabel: "给",
+    translationLabel: "翻译",
     wrapUp: "即将结束 — 几秒后自动停止并翻译…",
     micUnavailable: "麦克风不可用。请在 Safari 中通过 HTTPS 打开此页面并允许使用麦克风。",
     micDenied: "麦克风权限被拒绝。请在 Safari 设置中开启后重试。",
@@ -151,7 +151,7 @@ const STRINGS: Record<
     translating: "翻譯緊…",
     idle: "撳一下咪高峰，講完一句嘢，再撳一下。",
     heard: "聽到",
-    forLabel: "畀",
+    translationLabel: "翻譯",
     wrapUp: "就快完 — 幾秒後自動停低並翻譯…",
     micUnavailable: "用唔到咪高峰。請喺 Safari 用 HTTPS 開呢頁，並允許使用咪高峰。",
     micDenied: "咪高峰權限被拒。請喺 Safari 設定入面開返，再試多次。",
@@ -233,7 +233,17 @@ export function TranslatorShell({
   const [pair, setPair] = useState<readonly [LangCode, LangCode]>(PAIRS[0]);
   const [pairOrder, setPairOrder] = useState<string[]>(() => PAIRS.map(pairKey));
   const [tone, setTone] = useState<Tone>("casual");
-  const [engine, setEngine] = useState<Engine>("elevenlabs");
+  // Beta (7/27): ElevenLabs cloned voices are for subscribers (Tom, Liz);
+  // free-tier beta testers get OpenAI only — ElevenLabs is priced per
+  // character and a fleet of testers would run up real cost. Default is
+  // openai so a free user never touches ElevenLabs even during the
+  // profile-load window; a subscriber's default upgrades once the profile
+  // resolves (unless they already tapped the toggle themselves).
+  const [engine, setEngine] = useState<Engine>("openai");
+  const engineTouchedRef = useRef(false);
+  useEffect(() => {
+    if (subscriber && !engineTouchedRef.current) setEngine("elevenlabs");
+  }, [subscriber]);
   const [autoPlay, setAutoPlay] = useState(true);
   const [autoDetect, setAutoDetect] = useState(true);
 
@@ -958,8 +968,12 @@ export function TranslatorShell({
                 Auto-detect · Detección automática
               </div>
               <div className="text-2xl font-semibold text-white">
+                {/* Names are the household's UX; beta testers see just the
+                    language (they are not Tom or Liz). */}
                 {status === "done"
-                  ? `${speaker.who} · ${speaker.label}`
+                  ? subscriber
+                    ? `${speaker.who} · ${speaker.label}`
+                    : speaker.label
                   : `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`}
               </div>
             </div>
@@ -976,7 +990,7 @@ export function TranslatorShell({
                 {s.speakingNow}
               </div>
               <div className="text-2xl font-semibold text-white">
-                {speaker.who} · {speaker.label}
+                {subscriber ? `${speaker.who} · ${speaker.label}` : speaker.label}
               </div>
             </div>
             <div className="flex flex-col items-center gap-1 text-amber-300">
@@ -1007,7 +1021,10 @@ export function TranslatorShell({
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
             <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
               <span>
-                {STRINGS[target].forLabel} {listener.who} · {listener.label}
+                {/* Neutral for the beta: "Translation · English", not "For Tom"
+                    — testers aren't Tom or Liz (7/27). Written in the
+                    LISTENER's language like before. */}
+                {STRINGS[target].translationLabel} · {listener.label}
               </span>
               {translation ? (
                 <div className="flex items-center gap-2">
@@ -1117,18 +1134,32 @@ export function TranslatorShell({
               Auto-play voice · Reproducir voz
             </label>
             <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
-              {(["elevenlabs", "openai"] as Engine[]).map((eng) => (
-                <button
-                  key={eng}
-                  type="button"
-                  onClick={() => setEngine(eng)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                    engine === eng ? "bg-amber-400 text-stone-950" : "text-amber-100/60"
-                  }`}
-                >
-                  {eng === "elevenlabs" ? "ElevenLabs" : "OpenAI"}
-                </button>
-              ))}
+              {/* ElevenLabs greyed (not hidden) for free-tier beta testers —
+                  visible as a premium voice tier, unreachable as a cost. */}
+              {(["elevenlabs", "openai"] as Engine[]).map((eng) => {
+                const locked = eng === "elevenlabs" && !subscriber;
+                return (
+                  <button
+                    key={eng}
+                    type="button"
+                    disabled={locked}
+                    title={locked ? "Premium voices · Voces premium" : undefined}
+                    onClick={() => {
+                      engineTouchedRef.current = true;
+                      setEngine(eng);
+                    }}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                      engine === eng
+                        ? "bg-amber-400 text-stone-950"
+                        : locked
+                          ? "cursor-not-allowed text-amber-100/25"
+                          : "text-amber-100/60"
+                    }`}
+                  >
+                    {eng === "elevenlabs" ? "ElevenLabs" : "OpenAI"}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </section>
