@@ -1,46 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { dayOneLessons } from "@/content/tutor-courses/day-01";
 import { getCourse, listCourses } from "@/lib/tutor/courses";
-import { getCourseLesson } from "@/lib/tutor/catalog";
+import { getCourseLesson, listCourseLessons } from "@/lib/tutor/lessonCatalog";
 
- describe("mirrored Tutor courses", () => {
-  it("defines one course in each learning direction", () => {
-    const courses = listCourses();
-    expect(courses).toHaveLength(2);
-    expect(getCourse("tom-spanish-1")).toMatchObject({
-      learnerName: "Tom",
-      nativeLanguage: "en",
-      targetLanguage: "es",
-      pronunciationLocale: "es-US"
-    });
-    expect(getCourse("liz-english-1")).toMatchObject({
-      learnerName: "Liz",
-      nativeLanguage: "es",
-      targetLanguage: "en",
-      pronunciationLocale: "en-US"
-    });
+const courseIds = ["tom-spanish-1", "liz-english-1"] as const;
+
+describe("mirrored Tutor courses", () => {
+  it("defines opposite target directions", () => {
+    const tom = getCourse("tom-spanish-1");
+    const liz = getCourse("liz-english-1");
+    expect(tom.nativeLanguage).toBe("en");
+    expect(tom.targetLanguage).toBe("es");
+    expect(liz.nativeLanguage).toBe("es");
+    expect(liz.targetLanguage).toBe("en");
   });
 
-  it("provides a mirrored Day 1 without forcing identical wording", () => {
-    const tom = dayOneLessons["tom-spanish-1"];
-    const liz = dayOneLessons["liz-english-1"];
-
-    expect(tom.day).toBe(1);
-    expect(liz.day).toBe(1);
-    expect(tom.anchorSentences[0]).toEqual({
-      source: "I want coffee.",
-      target: "Yo quiero café."
-    });
-    expect(liz.anchorSentences[0]).toEqual({
-      source: "Yo quiero café.",
-      target: "I want coffee."
-    });
-    expect(tom.drills.map((drill) => drill.kind)).toContain("substitution");
-    expect(liz.drills.map((drill) => drill.kind)).toContain("recall");
+  it("exposes ten ordered lessons for each learner", () => {
+    for (const courseId of courseIds) {
+      const lessons = listCourseLessons(courseId);
+      expect(lessons).toHaveLength(10);
+      expect(lessons.map((lesson) => lesson.day)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
   });
 
-  it("finds lessons through the course catalog", () => {
-    expect(getCourseLesson("tom-spanish-1", 1)?.id).toBe("tom-spanish-1-day-01");
-    expect(getCourseLesson("liz-english-1", 90)).toBeUndefined();
+  it("keeps course identity and target direction explicit", () => {
+    for (const course of listCourses()) {
+      for (const lesson of listCourseLessons(course.id)) {
+        expect(lesson.courseId).toBe(course.id);
+        expect(lesson.anchorSentences.length).toBeGreaterThanOrEqual(4);
+        expect(lesson.drills.length).toBeGreaterThanOrEqual(5);
+        expect(lesson.miniDialogue.length).toBeGreaterThanOrEqual(4);
+      }
+    }
+  });
+
+  it("provides deterministic review metadata throughout the first ten days", () => {
+    for (const courseId of courseIds) {
+      const reviewable = listCourseLessons(courseId).flatMap((lesson) => lesson.drills).filter((drill) => drill.reviewAfterDays);
+      expect(reviewable.length).toBeGreaterThanOrEqual(20);
+      for (const drill of reviewable) {
+        expect(drill.reviewAfterDays).toEqual([1, 3, 7, 14]);
+      }
+    }
+  });
+
+  it("can retrieve milestone lessons by day", () => {
+    expect(getCourseLesson("tom-spanish-1", 7)?.title).toContain("Review");
+    expect(getCourseLesson("liz-english-1", 10)?.title).toContain("Complete conversation");
   });
 });
