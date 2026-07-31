@@ -10,9 +10,6 @@ export const maxDuration = 60;
 
 type Engine = "elevenlabs" | "openai";
 
-// Bound the upstream synthesis call well under maxDuration (60s): a stalled
-// provider must become a fast, retryable JSON error, not a hung request the
-// phone eventually reports as Safari's opaque "Load failed".
 const SYNTH_TIMEOUT_MS = 45000;
 
 function isTimeout(e: unknown): boolean {
@@ -31,9 +28,6 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
   });
 }
 
-// Cloned-voice selection lives in lib/tts/voice.ts (voice follows the
-// SPEAKER — see the unit tests that pin the rule).
-
 async function elevenLabs(
   text: string,
   sourceLanguage?: LangCode,
@@ -42,22 +36,15 @@ async function elevenLabs(
   voice?: VoiceOverride
 ): Promise<NextResponse> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
-  }
+  if (!apiKey) return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
+
   const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage, voice);
-  // /live sends latency:"flash" — trade a little clone fidelity for the
-  // lowest-latency model so spoken concepts don't lag the conversation.
-  // Cantonese output overrides both: turbo/flash don't speak Cantonese (they
-  // read written Cantonese with Mandarin-ish pronunciation), so yue routes to
-  // the v3 family — slower, but the only one that actually speaks it. Field
-  // verdict pending (7/25 promise to the two guests).
   const model =
     targetLanguage === "yue"
       ? process.env.ELEVENLABS_YUE_MODEL?.trim() || "eleven_v3"
       : latency === "flash"
         ? process.env.ELEVENLABS_FLASH_MODEL?.trim() || "eleven_flash_v2_5"
-        : process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5"; // low-latency, multilingual
+        : process.env.ELEVENLABS_MODEL?.trim() || "eleven_turbo_v2_5";
 
   const res = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
@@ -85,21 +72,19 @@ async function elevenLabs(
   return audioResponse(await res.arrayBuffer());
 }
 
-async function openai(text: string): Promise<NextResponse> {
+async function openai(text: string, speed: number): Promise<NextResponse> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "Missing OPENAI_API_KEY." }, { status: 500 });
-  }
+  if (!apiKey) return NextResponse.json({ error: "Missing OPENAI_API_KEY." }, { status: 500 });
+
   const model = process.env.OPENAI_TTS_MODEL?.trim() || "gpt-4o-mini-tts";
   const voice = process.env.OPENAI_TTS_VOICE?.trim() || DEFAULT_OPENAI_VOICE;
-
   const res = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ model, voice, input: text, response_format: "mp3" }),
+    body: JSON.stringify({ model, voice, input: text, response_format: "mp3", speed }),
     cache: "no-store",
     signal: AbortSignal.timeout(SYNTH_TIMEOUT_MS)
   });
@@ -120,21 +105,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       targetLanguage?: LangCode;
       latency?: string;
       voice?: string;
+      speed?: number;
     };
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const engine: Engine = body.engine === "openai" ? "openai" : "elevenlabs";
     const latency = body.latency === "flash" ? ("flash" as const) : undefined;
     const voice: VoiceOverride | undefined =
       body.voice === "tom" || body.voice === "liz" ? body.voice : undefined;
+    const speed = typeof body.speed === "number" ? Math.min(1.2, Math.max(0.6, body.speed)) : 1;
 
-    if (!text) {
-      return NextResponse.json({ error: "Text is required." }, { status: 400 });
-    }
+    if (!text) return NextResponse.json({ error: "Text is required." }, { status: 400 });
 
-    // `await` (not a bare returned promise) so a thrown timeout lands in the
-    // catch below rather than escaping the handler as a generic 500.
     return engine === "openai"
-      ? await openai(text)
+      ? await openai(text, speed)
       : await elevenLabs(text, body.sourceLanguage, body.targetLanguage, latency, voice);
   } catch (error) {
     if (isTimeout(error)) {
