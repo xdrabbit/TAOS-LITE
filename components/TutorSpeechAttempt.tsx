@@ -30,22 +30,15 @@ function scoreTone(score: number | null | undefined): string {
   return "text-rose-300";
 }
 
-export function TutorSpeechAttempt({
-  course,
-  drill
-}: {
-  course: CourseConfig;
-  drill: LessonDrill;
-}): JSX.Element {
+export function TutorSpeechAttempt({ course, drill }: { course: CourseConfig; drill: LessonDrill }): JSX.Element {
   const [status, setStatus] = useState<SpeechStatus>("idle");
   const [result, setResult] = useState<AssessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mimeRef = useRef("");
-
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const spanishUi = course.explanationLanguage === "es";
 
   useEffect(() => {
@@ -54,26 +47,41 @@ export function TutorSpeechAttempt({
     setStatus("idle");
   }, [course.id, drill.id]);
 
-  useEffect(() => {
-    return () => {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-    };
-  }, []);
+  useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
   function cleanupStream() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
   }
 
+  async function hear(speed: number) {
+    setError(null);
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: drill.targetText,
+          engine: "openai",
+          targetLanguage: course.targetLanguage,
+          speed
+        })
+      });
+      if (!response.ok) throw new Error(spanishUi ? "No se pudo reproducir la voz." : "Voice playback failed.");
+      const url = URL.createObjectURL(await response.blob());
+      if (!audioRef.current) audioRef.current = new Audio();
+      audioRef.current.src = url;
+      await audioRef.current.play();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Voice playback failed.");
+    }
+  }
+
   async function startRecording() {
     setError(null);
     setResult(null);
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError(
-        spanishUi
-          ? "El micrófono no está disponible. Abre esta página con HTTPS."
-          : "The microphone is unavailable. Open this page over HTTPS."
-      );
+      setError(spanishUi ? "El micrófono no está disponible. Abre esta página con HTTPS." : "The microphone is unavailable. Open this page over HTTPS.");
       return;
     }
     try {
@@ -87,9 +95,7 @@ export function TutorSpeechAttempt({
       mimeRef.current = mime;
       chunksRef.current = [];
       const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
+      recorder.ondataavailable = (event) => event.data.size > 0 && chunksRef.current.push(event.data);
       recorder.onstop = () => void scoreAttempt();
       recorder.onerror = () => stopRecording();
       for (const track of stream.getAudioTracks()) track.onended = () => stopRecording();
@@ -132,13 +138,7 @@ export function TutorSpeechAttempt({
       if (!response.ok) throw new Error(payload.error || "Pronunciation scoring failed.");
       setResult(payload);
     } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : spanishUi
-            ? "No se pudo evaluar la pronunciación."
-            : "Pronunciation scoring failed."
-      );
+      setError(caught instanceof Error ? caught.message : spanishUi ? "No se pudo evaluar la pronunciación." : "Pronunciation scoring failed.");
     } finally {
       setStatus("idle");
     }
@@ -152,10 +152,10 @@ export function TutorSpeechAttempt({
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.16em] text-emerald-100/45">
-            {spanishUi ? "Tu turno" : "Your turn"}
+            {spanishUi ? "Escucha y habla" : "Hear and speak"}
           </p>
           <p className="mt-1 text-sm text-amber-50/65">
-            {spanishUi ? "Di la frase y escucha la corrección." : "Say the phrase and hear the correction."}
+            {spanishUi ? "Escucha el modelo, luego di la misma frase." : "Hear the model, then say the same phrase."}
           </p>
         </div>
         {result?.configured && typeof result.pron === "number" ? (
@@ -163,11 +163,20 @@ export function TutorSpeechAttempt({
         ) : null}
       </div>
 
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => void hear(1)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-emerald-100">
+          🔊 {spanishUi ? "Normal" : "Normal"}
+        </button>
+        <button type="button" onClick={() => void hear(0.72)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-emerald-100">
+          🐢 {spanishUi ? "Despacio" : "Slow"}
+        </button>
+      </div>
+
       <button
         type="button"
         disabled={scoring}
         onClick={recording ? stopRecording : () => void startRecording()}
-        className={`mt-4 w-full rounded-2xl px-4 py-4 text-base font-semibold transition active:scale-[0.99] disabled:opacity-60 ${
+        className={`mt-3 w-full rounded-2xl px-4 py-4 text-base font-semibold transition active:scale-[0.99] disabled:opacity-60 ${
           recording ? "bg-rose-400 text-stone-950" : "bg-emerald-300 text-stone-950"
         }`}
       >
@@ -185,37 +194,23 @@ export function TutorSpeechAttempt({
       </button>
 
       {error ? <p className="mt-3 text-sm text-rose-200">{error}</p> : null}
-
       {result?.configured === false ? (
-        <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-amber-100/70">
-          {result.message}
-        </p>
+        <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-amber-100/70">{result.message}</p>
       ) : null}
-
       {result?.configured ? (
         <div className="mt-4 space-y-3">
           {result.transcript ? (
-            <p className="text-sm text-amber-50/60">
-              <span className="text-amber-100/40">{spanishUi ? "Escuché: " : "I heard: "}</span>
-              {result.transcript}
-            </p>
+            <p className="text-sm text-amber-50/60"><span className="text-amber-100/40">{spanishUi ? "Escuché: " : "I heard: "}</span>{result.transcript}</p>
           ) : null}
           {result.words?.length ? (
             <div className="flex flex-wrap gap-1.5">
               {result.words.map((word, index) => (
-                <span
-                  key={`${word.word}-${index}`}
-                  className={`rounded-md bg-black/20 px-2 py-1 text-sm ${scoreTone(word.accuracy)}`}
-                >
-                  {word.word}
-                </span>
+                <span key={`${word.word}-${index}`} className={`rounded-md bg-black/20 px-2 py-1 text-sm ${scoreTone(word.accuracy)}`}>{word.word}</span>
               ))}
             </div>
           ) : null}
           {result.coaching ? (
-            <p className="rounded-2xl border border-white/10 bg-black/15 p-3 text-sm leading-relaxed text-amber-50/75">
-              {result.coaching}
-            </p>
+            <p className="rounded-2xl border border-white/10 bg-black/15 p-3 text-sm leading-relaxed text-amber-50/75">{result.coaching}</p>
           ) : null}
         </div>
       ) : null}
