@@ -9,17 +9,30 @@ interface WordScore {
   errorType: string | null;
 }
 
+type TutorLanguage = "en" | "es";
+
+function parseTutorLanguage(value: FormDataEntryValue | null, fallback: TutorLanguage): TutorLanguage {
+  return value === "en" || value === "es" ? value : fallback;
+}
+
 // Short, strict-but-kind coaching from the scores (best-effort; never blocks).
-async function coach(reference: string, result: {
-  pron: number | null;
-  transcript: string;
-  words: WordScore[];
-}): Promise<string> {
+async function coach(
+  reference: string,
+  result: { pron: number | null; transcript: string; words: WordScore[] },
+  targetLanguage: TutorLanguage,
+  explanationLanguage: TutorLanguage
+): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return "";
   const weak = result.words
     .filter((w) => typeof w.accuracy === "number" && (w.accuracy as number) < 80)
     .map((w) => w.word);
+  const targetName = targetLanguage === "es" ? "Spanish" : "English";
+  const explanationName = explanationLanguage === "es" ? "Spanish" : "English";
+  const learnerDescription =
+    targetLanguage === "es"
+      ? "an English speaker learning broadly understandable Latin American Spanish"
+      : "a Spanish speaker learning natural American English";
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -31,9 +44,10 @@ async function coach(reference: string, result: {
           {
             role: "system",
             content:
-              "You are a strict but encouraging English pronunciation coach for a Spanish speaker. " +
-              "In 1-2 short sentences give specific, actionable feedback. If certain words scored low, " +
-              "name them and give one quick tip. Be direct, warm, and brief — no fluff."
+              `You are a strict but encouraging ${targetName} pronunciation coach for ${learnerDescription}. ` +
+              `Respond in ${explanationName}. In 1-2 short sentences give specific, actionable feedback. ` +
+              "If certain words scored low, name them and give one quick mouth, stress, or sound tip. " +
+              "Be direct, warm, and brief. Do not praise a weak attempt as perfect."
           },
           {
             role: "user",
@@ -67,16 +81,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const audio = form.get("audio");
   const referenceText = String(form.get("referenceText") ?? "").trim();
   const language = String(form.get("language") ?? "en-US");
+  const targetLanguage = parseTutorLanguage(form.get("targetLanguage"), language.startsWith("es") ? "es" : "en");
+  const explanationLanguage = parseTutorLanguage(form.get("explanationLanguage"), targetLanguage === "es" ? "en" : "es");
 
   if (!(audio instanceof File) || audio.size === 0 || !referenceText) {
     return NextResponse.json({ error: "audio and referenceText are required." }, { status: 400 });
   }
 
   if (!key || !region) {
-    // Drill still works; scoring just isn't wired yet.
     return NextResponse.json({
       configured: false,
-      message: "Pronunciation scoring isn't configured yet (missing Azure Speech key)."
+      message:
+        explanationLanguage === "es"
+          ? "La evaluación de pronunciación todavía no está configurada."
+          : "Pronunciation scoring is not configured yet."
     });
   }
 
@@ -144,7 +162,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       pron: result.pron,
       transcript: result.transcript,
       words
-    });
+    }, targetLanguage, explanationLanguage);
 
     return NextResponse.json({ ...result, coaching });
   } catch (error) {
