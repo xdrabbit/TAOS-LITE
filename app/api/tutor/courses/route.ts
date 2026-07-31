@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listCourseLessons } from "@/lib/tutor/catalog";
+import { listCourseLessons } from "@/lib/tutor/lessonCatalog";
 import { getCourse, listCourses } from "@/lib/tutor/courses";
 import type { CourseId } from "@/lib/tutor/course";
 
