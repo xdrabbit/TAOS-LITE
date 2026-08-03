@@ -30,7 +30,15 @@ function scoreTone(score: number | null | undefined): string {
   return "text-rose-300";
 }
 
-export function TutorSpeechAttempt({ course, drill }: { course: CourseConfig; drill: LessonDrill }): JSX.Element {
+export function TutorSpeechAttempt({
+  course,
+  drill,
+  onScored
+}: {
+  course: CourseConfig;
+  drill: LessonDrill;
+  onScored?: (score: number | undefined) => void;
+}): JSX.Element {
   const [status, setStatus] = useState<SpeechStatus>("idle");
   const [result, setResult] = useState<AssessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +145,7 @@ export function TutorSpeechAttempt({ course, drill }: { course: CourseConfig; dr
       const payload = (await response.json().catch(() => ({}))) as AssessResult;
       if (!response.ok) throw new Error(payload.error || "Pronunciation scoring failed.");
       setResult(payload);
+      onScored?.(typeof payload.pron === "number" ? payload.pron : undefined);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : spanishUi ? "No se pudo evaluar la pronunciación." : "Pronunciation scoring failed.");
     } finally {
@@ -165,7 +174,7 @@ export function TutorSpeechAttempt({ course, drill }: { course: CourseConfig; dr
 
       <div className="mt-4 grid grid-cols-2 gap-2">
         <button type="button" onClick={() => void hear(1)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-emerald-100">
-          🔊 {spanishUi ? "Normal" : "Normal"}
+          🔊 Normal
         </button>
         <button type="button" onClick={() => void hear(0.72)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-emerald-100">
           🐢 {spanishUi ? "Despacio" : "Slow"}
