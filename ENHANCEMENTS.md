@@ -28,6 +28,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- Tutor hyperlink study words for more instruction. 
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is
   already generic; needs accounts for guests, a thread picker, sender names
