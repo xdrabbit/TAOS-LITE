@@ -3,10 +3,14 @@
 # (voice rule, predict model format, retry policy, prompt fences) still hold.
 name: CI
 
+# Markdown-only edits (e.g. jotting an idea into ENHANCEMENTS.md from a
+# phone) skip CI — nothing they change is testable.
 on:
   pull_request:
+    paths-ignore: ["**.md"]
   push:
     branches: [main]
+    paths-ignore: ["**.md"]
 
 jobs:
   checks:
