@@ -4,6 +4,16 @@
 
 GitHub is the source of truth for TAOS-LITE. Work from the current target branch, inspect existing code before changing it, and keep commits small enough to review. Do not treat a local checkout, deployment, chat transcript, or generated artifact as authoritative when it conflicts with the repository.
 
+## Living enhancements backlog
+
+At the start of every build or planning session, read `ENHANCEMENTS.md` from the repository default branch (`main`) even when the current feature branch does not yet contain that file. It is Tom and Liz's living idea inbox for things noticed between work sessions.
+
+Preserve their entries verbatim. Do not delete, silently reword, or treat an idea as committed scope merely because it appears there. You may append implementation notes, acceptance criteria, dependencies, or design detail beneath an entry while keeping the original wording intact.
+
+When the user asks what to build next, when a task creates a natural adjacent opportunity, or before declaring a sprint complete, compare the current work against `ENHANCEMENTS.md`. Surface relevant items and confirm priority rather than quietly expanding scope.
+
+When an enhancement ships, move or copy it to the `Shipped` section with the date and pull request or commit reference, following the file's own instructions.
+
 ## Product context
 
 TAOS-LITE is a shared-phone English ↔ Spanish translator with an evolving Tutor product.
