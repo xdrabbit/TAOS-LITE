@@ -29,6 +29,32 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 ## Ideas
 
 - Tutor hyperlink study words for more instruction. 
+  - Preserve the lesson flow: only vocabulary or deliberately teachable words
+    should look interactive, rather than turning every sentence into a field of
+    blue links.
+  - Tapping a study word should open an in-app word-study sheet or route, not
+    send the learner to a random external grammar page.
+  - The explanation should be generated from structured lesson metadata where
+    possible and may use an LLM for clear learner-specific teaching.
+  - Example for Spanish `quiero`: show the dictionary form `querer`, the meaning
+    in this sentence, speaker/person (`yo`), present-tense form, a compact set of
+    useful contrasts (`quieres`, `quiere`, `queremos`), negative/question forms,
+    pronunciation playback, and two or three examples drawn from current and
+    earlier lessons.
+  - Example for English `want`: show base form, present forms (`I/you/we/they
+    want`, `he/she wants`), negative and question patterns (`don't want`, `Do
+    you want...?`), pronunciation, and examples explained in Spanish for Liz.
+  - The detail surface should offer a small substitution or recall exercise so
+    deeper study remains active learning rather than a dictionary detour.
+  - Track taps as a learner signal. Repeatedly opened words may be confusing or
+    important and can later influence review or teacher explanation.
+  - Course content should explicitly mark `studyWords` or vocabulary tokens;
+    do not infer links from raw string matching alone because punctuation,
+    conjugation, repeated words, and multiword expressions will make that
+    fragile.
+  - First implementation can be deterministic and local to the ten-day Tutor;
+    external web links are fallback/reference material, not the primary UX.
+  (expanded 2026-08-03 from Tom's Tutor study-word idea)
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is
   already generic; needs accounts for guests, a thread picker, sender names
