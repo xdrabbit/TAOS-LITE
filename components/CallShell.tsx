@@ -13,6 +13,7 @@ import {
   type ActiveInterpreter,
   type InterpreterTarget
 } from "@/lib/call/interpreter";
+import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 // ── /call: translated 1:1 calls ─────────────────────────────────────────────
 // Use case: Tom (EN) and Liz (ES) call each other over wifi or cellular —
@@ -42,17 +43,6 @@ const VOLUME_STEPS: Array<{ value: number; label: string }> = [
   { value: 0.25, label: "Original voice: quiet" },
   { value: 0, label: "Original voice: off" }
 ];
-
-interface ScreenWakeSentinel {
-  release(): Promise<void>;
-}
-function getWakeLock(): { request(type: "screen"): Promise<ScreenWakeSentinel> } | null {
-  if (typeof navigator === "undefined") return null;
-  const nav = navigator as Navigator & {
-    wakeLock?: { request(type: "screen"): Promise<ScreenWakeSentinel> };
-  };
-  return nav.wakeLock ?? null;
-}
 
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -106,7 +96,7 @@ export function CallShell(): JSX.Element {
   const interpreterRef = useRef<ActiveInterpreter | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const wakeLockRef = useRef<ScreenWakeSentinel | null>(null);
+  const wakeHoldRef = useRef<WakeLockHold | null>(null);
   const inCallRef = useRef(false);
   const voiceOnRef = useRef(true);
   const targetRef = useRef<InterpreterTarget>("en");
@@ -144,22 +134,17 @@ export function CallShell(): JSX.Element {
     targetRef.current = target;
   }, [target]);
 
-  // Screen wake lock for the duration of the call (re-acquired when the tab
-  // becomes visible again — same pattern as /live).
+  // Screen wake lock for the duration of the call. Shared holder
+  // (lib/wakeLock.ts): re-acquires on visibility return AND on the sentinel's
+  // "release" event — iOS drops the lock without a visibilitychange under Low
+  // Power Mode / pressure (8/2 field report on /translate; same gap here).
   useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && inCallRef.current) {
-        getWakeLock()
-          ?.request("screen")
-          .then((sentinel) => {
-            if (inCallRef.current) wakeLockRef.current = sentinel;
-            else void sentinel.release().catch(() => {});
-          })
-          .catch(() => {});
-      }
+    const hold = createWakeLockHold(() => inCallRef.current);
+    wakeHoldRef.current = hold;
+    return () => {
+      wakeHoldRef.current = null;
+      hold.stop();
     };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   const stopInterpreter = useCallback(() => {
@@ -222,8 +207,7 @@ export function CallShell(): JSX.Element {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    void wakeLockRef.current?.release().catch(() => {});
-    wakeLockRef.current = null;
+    wakeHoldRef.current?.ensure(); // inCallRef is false now → holder releases
     setPhase("lobby");
     setCallState("idle");
     setElapsed(0);
@@ -256,13 +240,9 @@ export function CallShell(): JSX.Element {
     setCameraOn(withVideo);
     setMicMuted(false);
 
-    getWakeLock()
-      ?.request("screen")
-      .then((sentinel) => {
-        if (inCallRef.current) wakeLockRef.current = sentinel;
-        else void sentinel.release().catch(() => {});
-      })
-      .catch(() => {});
+    // Acquire inside the Join tap (a user gesture — best context if a prior
+    // request was denied).
+    wakeHoldRef.current?.ensure();
 
     try {
       const call = await startCall(

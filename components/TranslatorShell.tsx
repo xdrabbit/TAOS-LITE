@@ -13,6 +13,7 @@ import {
 import { HistoryDrawer } from "./HistoryDrawer";
 import { Paywall } from "./Paywall";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
+import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 type LangCode = "en" | "es" | "zh" | "yue";
 type Tone = "casual" | "detailed";
@@ -272,7 +273,7 @@ export function TranslatorShell({
   const lastMimeRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
-  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const wakeHoldRef = useRef<WakeLockHold | null>(null);
   const maxStopTimerRef = useRef<number | null>(null);
   // Visual ramp state (drives the record button directly, no re-render per frame).
   const recordBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -338,38 +339,20 @@ export function TranslatorShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The screen must never sleep mid-dictation. iOS releases wake locks on any
-  // visibility blip and never gives them back unasked, so hold one for the
-  // whole time this page is open and re-acquire whenever the tab becomes
-  // visible again — the proven /live and /tabletop pattern. (The per-recording
-  // lock this replaces let phones sleep a minute into a long turn.)
+  // The screen must never sleep mid-dictation. Held for the whole time this
+  // page is open, via the shared holder in lib/wakeLock.ts — which, unlike
+  // the old inline pattern (8/2 field report: screens still slept mid-turn),
+  // also listens for the sentinel's "release" event: iOS drops the lock
+  // WITHOUT a visibilitychange under Low Power Mode / pressure, and only
+  // that event says so. startRecording() calls ensure() too, so a previously
+  // denied lock gets retried inside a user gesture.
   useEffect(() => {
-    const acquire = () => {
-      const nav = navigator as Navigator & {
-        wakeLock?: { request: (type: "screen") => Promise<WakeLockSentinel> };
-      };
-      nav.wakeLock
-        ?.request("screen")
-        .then((sentinel) => {
-          wakeLockRef.current = sentinel;
-        })
-        .catch(() => {
-          /* wake lock is best-effort */
-        });
-    };
-    acquire();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") acquire();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    const hold = createWakeLockHold(() => true);
+    wakeHoldRef.current = hold;
+    hold.ensure();
     return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      try {
-        void wakeLockRef.current?.release();
-      } catch {
-        /* ignore */
-      }
-      wakeLockRef.current = null;
+      wakeHoldRef.current = null;
+      hold.stop();
     };
   }, []);
 
@@ -561,6 +544,10 @@ export function TranslatorShell({
     setError(null);
     if (trialBlocked) return; // free translations used up — show upgrade instead
     blessAudio();
+    // Re-assert the wake lock inside the tap gesture: if the page-lifetime
+    // acquire was denied (Low Power Mode) or silently dropped, the start of a
+    // recording is the moment that matters — and the best context to ask in.
+    wakeHoldRef.current?.ensure();
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setStatus("error");
