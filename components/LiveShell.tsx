@@ -7,6 +7,7 @@ import {
   type AmbientState,
   type AmbientTarget
 } from "@/lib/live/ambient";
+import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -87,18 +88,6 @@ function getRecognitionCtor(): SpeechRecognitionConstructor | null {
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
-// Minimal Screen Wake Lock typing — self-contained so the build doesn't depend
-// on the DOM lib version shipping these (iOS Safari 16.4+ supports the API).
-interface ScreenWakeSentinel {
-  release(): Promise<void>;
-}
-function getWakeLock(): { request(type: "screen"): Promise<ScreenWakeSentinel> } | null {
-  if (typeof navigator === "undefined") return null;
-  const nav = navigator as Navigator & {
-    wakeLock?: { request(type: "screen"): Promise<ScreenWakeSentinel> };
-  };
-  return nav.wakeLock ?? null;
-}
 
 function formatTime(at: number): string {
   try {
@@ -169,7 +158,7 @@ export function LiveShell(): JSX.Element {
   // Screen wake lock: while live mode runs the phone must not sleep — the user
   // is reading the feed, and on iOS a locked screen suspends the page and
   // kills the session entirely.
-  const wakeLockRef = useRef<ScreenWakeSentinel | null>(null);
+  const wakeHoldRef = useRef<WakeLockHold | null>(null);
 
   // Voice readout plumbing (device engine).
   const voiceOnRef = useRef(true);
@@ -595,45 +584,24 @@ export function LiveShell(): JSX.Element {
 
   const running = engine === "ambient" ? ambientActive : listening;
 
-  // Hold a screen wake lock while running (either engine). The OS releases the
-  // lock whenever the page is hidden, so re-acquire on return if still live.
+  // Hold a screen wake lock while running (either engine). Shared holder
+  // (lib/wakeLock.ts): re-acquires on visibility return AND on the sentinel's
+  // "release" event — iOS drops the lock without a visibilitychange under Low
+  // Power Mode / pressure (8/2 field report on /translate; same gap here).
   const runningRef = useRef(false);
   useEffect(() => {
-    runningRef.current = running;
-    if (running) {
-      getWakeLock()
-        ?.request("screen")
-        .then((sentinel) => {
-          if (runningRef.current) wakeLockRef.current = sentinel;
-          else void sentinel.release().catch(() => {});
-        })
-        .catch(() => {
-          /* unsupported or denied (e.g. low battery) — nothing to do */
-        });
-    } else {
-      void wakeLockRef.current?.release().catch(() => {});
-      wakeLockRef.current = null;
-    }
-  }, [running]);
-
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState !== "visible" || !runningRef.current) return;
-      getWakeLock()
-        ?.request("screen")
-        .then((sentinel) => {
-          if (runningRef.current) wakeLockRef.current = sentinel;
-          else void sentinel.release().catch(() => {});
-        })
-        .catch(() => {});
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    const hold = createWakeLockHold(() => runningRef.current);
+    wakeHoldRef.current = hold;
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      void wakeLockRef.current?.release().catch(() => {});
-      wakeLockRef.current = null;
+      wakeHoldRef.current = null;
+      hold.stop();
     };
   }, []);
+  useEffect(() => {
+    runningRef.current = running;
+    // running → acquire; stopped → the holder releases (shouldHold is false).
+    wakeHoldRef.current?.ensure();
+  }, [running]);
 
   const handlePrimary = useCallback(() => {
     if (engineRef.current === "ambient") {

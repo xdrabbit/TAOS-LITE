@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live";
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
+import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -83,17 +84,6 @@ function pickRecordingMime(): string {
   return "";
 }
 
-interface ScreenWakeSentinel {
-  release(): Promise<void>;
-}
-function getWakeLock(): { request(type: "screen"): Promise<ScreenWakeSentinel> } | null {
-  if (typeof navigator === "undefined") return null;
-  const nav = navigator as Navigator & {
-    wakeLock?: { request(type: "screen"): Promise<ScreenWakeSentinel> };
-  };
-  return nav.wakeLock ?? null;
-}
-
 export function TabletopShell(): JSX.Element {
   // Which language faces the TOP (rotated) end; the bottom end is the other.
   const [topLang, setTopLang] = useState<Lang>("es");
@@ -113,7 +103,7 @@ export function TabletopShell(): JSX.Element {
   const timerRef = useRef<number | null>(null);
   const cancelledRef = useRef(false);
   const playerRef = useRef<HTMLAudioElement | null>(null);
-  const wakeLockRef = useRef<ScreenWakeSentinel | null>(null);
+  const wakeHoldRef = useRef<WakeLockHold | null>(null);
   const voiceOnRef = useRef(true);
   const liveRef = useRef<ActiveTabletopLive | null>(null);
   const turnRef = useRef<TurnState>({ kind: "idle" });
@@ -131,25 +121,17 @@ export function TabletopShell(): JSX.Element {
   }, [voiceOn]);
 
   // Wake lock while the page is open — a tabletop session dies if the screen
-  // sleeps. Re-acquired when the tab becomes visible again (same as /live).
+  // sleeps. Shared holder (lib/wakeLock.ts) re-acquires on the sentinel's
+  // "release" event too: iOS drops the lock WITHOUT a visibilitychange under
+  // Low Power Mode / pressure (8/2 field report on /translate; same pattern
+  // here). Each turn tap re-asserts it inside the gesture.
   useEffect(() => {
-    const acquire = () => {
-      getWakeLock()
-        ?.request("screen")
-        .then((s) => {
-          wakeLockRef.current = s;
-        })
-        .catch(() => {});
-    };
-    acquire();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") acquire();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    const hold = createWakeLockHold(() => true);
+    wakeHoldRef.current = hold;
+    hold.ensure();
     return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      void wakeLockRef.current?.release().catch(() => {});
-      wakeLockRef.current = null;
+      wakeHoldRef.current = null;
+      hold.stop();
     };
   }, []);
 
@@ -411,6 +393,8 @@ export function TabletopShell(): JSX.Element {
 
   const tap = useCallback(
     (side: Lang) => {
+      // Re-assert the wake lock inside the tap gesture (see the mount effect).
+      wakeHoldRef.current?.ensure();
       const t = turnRef.current;
       if (t.kind === "idle") {
         if (engine === "live") void startLiveTurn(side);
