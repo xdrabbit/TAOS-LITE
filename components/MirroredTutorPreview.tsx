@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { TutorGuidedDialogue } from "@/components/TutorGuidedDialogue";
 import { TutorSpeechAttempt } from "@/components/TutorSpeechAttempt";
+import { TutorStudyText } from "@/components/TutorStudyText";
 import type { CourseConfig, CourseId, LessonDrill, TutorLesson } from "@/lib/tutor/course";
 
 interface CatalogResponse {
@@ -212,7 +213,7 @@ export function MirroredTutorPreview(): JSX.Element {
               </div>
             </section>
 
-            <DrillCard drill={drill} revealed={revealed} onReveal={() => setRevealed(true)} />
+            <DrillCard course={course} drill={drill} revealed={revealed} onReveal={() => setRevealed(true)} />
             <TutorSpeechAttempt course={course} drill={drill} />
             {finalDrill ? <TutorGuidedDialogue course={course} lesson={lesson} /> : null}
 
@@ -246,24 +247,26 @@ export function MirroredTutorPreview(): JSX.Element {
 }
 
 function DrillCard({
+  course,
   drill,
   revealed,
   onReveal
 }: {
+  course: CourseConfig;
   drill: LessonDrill;
   revealed: boolean;
   onReveal: () => void;
 }): JSX.Element {
   const teacherLead =
     drill.kind === "model"
-      ? "Listen first."
+      ? course.explanationLanguage === "es" ? "Escucha primero." : "Listen first."
       : drill.kind === "repeat"
-        ? "Now say it with me."
+        ? course.explanationLanguage === "es" ? "Ahora dilo conmigo." : "Now say it with me."
         : drill.kind === "substitution"
-          ? "Keep the pattern and change one piece."
+          ? course.explanationLanguage === "es" ? "Conserva el patrón y cambia una parte." : "Keep the pattern and change one piece."
           : drill.kind === "recall"
-            ? "Let’s try this without looking."
-            : "Use what you know.";
+            ? course.explanationLanguage === "es" ? "Inténtalo sin mirar." : "Let’s try this without looking."
+            : course.explanationLanguage === "es" ? "Usa lo que sabes." : "Use what you know.";
 
   return (
     <section className="flex min-h-[36vh] flex-col justify-center rounded-3xl border border-white/10 bg-[rgba(28,22,18,0.88)] p-5">
@@ -274,17 +277,24 @@ function DrillCard({
       <p className="mt-4 text-base leading-relaxed text-amber-50/70">{drill.instruction}</p>
       {drill.sourceText ? <p className="mt-6 text-xl text-amber-100/65">{drill.sourceText}</p> : null}
       {revealed ? (
-        <p className="mt-3 text-pretty text-[clamp(2rem,8vw,3.2rem)] font-semibold leading-tight text-white">
-          {drill.targetText}
-        </p>
+        <TutorStudyText
+          text={drill.targetText}
+          courseId={course.id}
+          targetLanguage={course.targetLanguage}
+          className="mt-3 text-pretty text-[clamp(2rem,8vw,3.2rem)] font-semibold leading-tight text-white"
+        />
       ) : (
         <button
           type="button"
           onClick={onReveal}
           className="mt-5 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-4 text-left text-amber-100"
         >
-          Reveal answer
-          {drill.hint ? <span className="mt-1 block text-sm text-amber-100/55">Hint: {drill.hint}</span> : null}
+          {course.explanationLanguage === "es" ? "Mostrar respuesta" : "Reveal answer"}
+          {drill.hint ? (
+            <span className="mt-1 block text-sm text-amber-100/55">
+              {course.explanationLanguage === "es" ? "Pista" : "Hint"}: {drill.hint}
+            </span>
+          ) : null}
         </button>
       )}
       {drill.substitutions?.map((slot) => (
