@@ -44,3 +44,57 @@ textarea {
 textarea {
   resize: none;
 }
+
+/* Tutor study-word deep dives behave as viewport-safe sheets. The lesson stays
+   visible behind them, while long explanations scroll inside the sheet rather
+   than stretching the entire page. */
+section:has(> div button[aria-label="Close study word"]) {
+  position: fixed;
+  z-index: 60;
+  right: max(0.75rem, calc((100vw - 32rem) / 2));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  left: max(0.75rem, calc((100vw - 32rem) / 2));
+  max-height: calc(100dvh - max(1.5rem, env(safe-area-inset-top)) - max(1.5rem, env(safe-area-inset-bottom)));
+  margin-top: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.7),
+    0 0 0 100vmax rgba(5, 4, 3, 0.72);
+  animation: tutor-study-sheet-in 160ms ease-out;
+}
+
+section:has(> div button[aria-label="Close study word"]) > div:first-child {
+  position: sticky;
+  top: -1rem;
+  z-index: 2;
+  margin: -1rem -1rem 0;
+  padding: 1rem;
+  border-bottom: 1px solid rgba(255, 244, 230, 0.1);
+  background: rgba(38, 30, 19, 0.98);
+  backdrop-filter: blur(14px);
+}
+
+section:has(> div button[aria-label="Close study word"]) button[aria-label="Close study word"] {
+  min-height: 2.75rem;
+  padding-inline: 1rem;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@keyframes tutor-study-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  section:has(> div button[aria-label="Close study word"]) {
+    animation: none;
+  }
+}
