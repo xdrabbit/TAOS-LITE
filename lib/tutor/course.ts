@@ -70,6 +70,8 @@ export interface TutorLesson {
     source?: string;
     target: string;
   }>;
+  takeaway?: string;
+  usageNote?: string;
   completion: {
     minimumIndependentRecalls: number;
     minimumSpokenAttempts: number;
