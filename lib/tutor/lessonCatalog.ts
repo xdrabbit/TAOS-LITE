@@ -10,6 +10,7 @@ import { dayNineLessons } from "@/content/tutor-courses/day-09";
 import { dayTenLessons } from "@/content/tutor-courses/day-10";
 import type { CourseId, TutorLesson } from "./course";
 import { applyEditorialPass } from "./editorial";
+import { applyLizEditorialGuidance } from "./editorialLiz";
 
 const rawLessonsByCourse: Record<CourseId, TutorLesson[]> = {
   "tom-spanish-1": [
@@ -40,7 +41,7 @@ const rawLessonsByCourse: Record<CourseId, TutorLesson[]> = {
 
 const lessonsByCourse: Record<CourseId, TutorLesson[]> = {
   "tom-spanish-1": rawLessonsByCourse["tom-spanish-1"].map(applyEditorialPass),
-  "liz-english-1": rawLessonsByCourse["liz-english-1"].map(applyEditorialPass)
+  "liz-english-1": rawLessonsByCourse["liz-english-1"].map((lesson) => applyLizEditorialGuidance(applyEditorialPass(lesson)))
 };
 
 export function listCourseLessons(courseId: CourseId): TutorLesson[] {
