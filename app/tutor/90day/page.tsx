@@ -1,4 +1,5 @@
 import { MirroredTutorPreview } from "@/components/MirroredTutorPreview";
+import { TutorMasterySyncBridge } from "@/components/TutorMasterySyncBridge";
 
 export const metadata = {
   title: "TAOS·TUTOR — 90-day mirrored framework",
@@ -6,5 +7,10 @@ export const metadata = {
 };
 
 export default function MirroredTutorPage(): JSX.Element {
-  return <MirroredTutorPreview />;
+  return (
+    <>
+      <TutorMasterySyncBridge />
+      <MirroredTutorPreview />
+    </>
+  );
 }
