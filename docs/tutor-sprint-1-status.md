@@ -22,10 +22,10 @@ This file is the live completion checklist for the mirrored ten-day Tutor milest
 - [x] Build a distinct Day 10 performance conversation
 - [x] Add contextual study-word links and in-app deep-dive cards
 - [x] Localize the mirrored learner controls and teaching cues
+- [x] Complete the editorial pass across all ten mirrored lessons with stronger anchors, substitutions, takeaways, usage guidance, and curriculum-quality tests
 
 ## Remaining before Sprint 1 is done
 
-- [ ] Editorial pass on every lesson: natural teaching language, 5–8 strong anchors, richer substitution, and memorable takeaway
 - [ ] Persist mastery and review state for signed-in learners across devices, retaining local fallback
 - [ ] Full validation: `npm run validate:tutor`
 - [ ] Tom pass through Days 1–10
@@ -33,11 +33,10 @@ This file is the live completion checklist for the mirrored ten-day Tutor milest
 
 ## Recommended closeout order
 
-1. Complete the editorial pass across both mirrored courses.
-2. Add signed-in mastery synchronization behind the existing local store.
-3. Run the full Sprint 1 validation command and resolve every failure.
-4. Tom completes Days 1–10 and records usability/content notes.
-5. Liz completes a no-instructions test in Spanish UI.
-6. Reconcile findings, close Sprint 1, and only then open Sprint 2.
+1. Add signed-in mastery synchronization behind the existing local store.
+2. Run the full Sprint 1 validation command and resolve every failure.
+3. Tom completes Days 1–10 and records usability/content notes.
+4. Liz completes a no-instructions test in Spanish UI.
+5. Reconcile findings, close Sprint 1, and only then open Sprint 2.
 
 Sprint 1 is not complete until every unchecked item above is resolved or explicitly descoped in the design document.
