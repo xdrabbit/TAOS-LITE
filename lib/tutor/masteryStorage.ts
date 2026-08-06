@@ -35,12 +35,17 @@ export function loadMastery(courseId: CourseId): MasteryRecord[] {
   }
 }
 
-export function saveMastery(courseId: CourseId, records: MasteryRecord[]): void {
+export function saveMastery(courseId: CourseId, records: MasteryRecord[], notify = true): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(
     storageKey(courseId),
     JSON.stringify(records.filter((record) => record.courseId === courseId))
   );
+  if (notify) {
+    window.dispatchEvent(
+      new CustomEvent("taos:tutor-mastery-changed", { detail: { courseId } })
+    );
+  }
 }
 
 export function upsertMastery(records: MasteryRecord[], next: MasteryRecord): MasteryRecord[] {
