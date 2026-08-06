@@ -23,20 +23,22 @@ This file is the live completion checklist for the mirrored ten-day Tutor milest
 - [x] Add contextual study-word links and in-app deep-dive cards
 - [x] Localize the mirrored learner controls and teaching cues
 - [x] Complete the editorial pass across all ten mirrored lessons with stronger anchors, substitutions, takeaways, usage guidance, and curriculum-quality tests
+- [x] Persist mastery across signed-in devices with deterministic merge behavior, local/offline fallback, Supabase RLS, and a reproducible migration
+- [x] Add focused Tom and Liz Sprint 1 acceptance checklists
 
 ## Remaining before Sprint 1 is done
 
-- [ ] Persist mastery and review state for signed-in learners across devices, retaining local fallback
-- [ ] Full validation: `npm run validate:tutor`
+- [ ] Automated release gate confirmed green: typecheck, lint, Vitest, and production build (`npm run validate:tutor` or equivalent CI + Vercel gates)
 - [ ] Tom pass through Days 1–10
 - [ ] Liz no-instructions usability test
 
-## Recommended closeout order
+## Release-candidate gate
 
-1. Add signed-in mastery synchronization behind the existing local store.
-2. Run the full Sprint 1 validation command and resolve every failure.
-3. Tom completes Days 1–10 and records usability/content notes.
-4. Liz completes a no-instructions test in Spanish UI.
-5. Reconcile findings, close Sprint 1, and only then open Sprint 2.
+Draft PR #16 is the Sprint 1 release candidate. Do not merge it until:
+
+1. The automated release gate is green.
+2. Tom completes Days 1–10 and records any blocking usability/content findings.
+3. Liz completes the Spanish-UI no-instructions acceptance pass.
+4. Blocking findings are fixed; non-blocking ideas are recorded in `ENHANCEMENTS.md` or Sprint 2.
 
 Sprint 1 is not complete until every unchecked item above is resolved or explicitly descoped in the design document.
