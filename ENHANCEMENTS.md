@@ -55,6 +55,24 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   - First implementation can be deterministic and local to the ten-day Tutor;
     external web links are fallback/reference material, not the primary UX.
   (expanded 2026-08-03 from Tom's Tutor study-word idea)
+- Tutor notebook for notes and saved vocabulary — let each learner capture what
+  matters while using the course instead of keeping a separate paper list.
+  - Add “Save word” from a study-word card and “Add note” from a lesson or drill.
+  - Keep Tom and Liz notebooks separate, with the course, day, lesson, source
+    sentence, target word or phrase, and date attached automatically.
+  - Allow a personal note or memory hook, plus lightweight tags such as verbs,
+    food, home, confusing, practice, or favorite.
+  - Provide notebook views for all notes, saved vocabulary, and items due for
+    practice; support search and simple filtering by day, topic, or tag.
+  - Let the Tutor use saved items for optional actions: explain more, generate
+    examples, quiz me, pronounce it, add it to review, or make a short practice
+    session. LLM help is useful here, but saved data and core notebook behavior
+    should remain deterministic and available without generation.
+  - Start with local persistence so it is immediately usable, then sync signed-in
+    notebooks across devices through the existing account data layer.
+  - Saved words should be able to feed the mastery/review queue, but notebook
+    capture must never interrupt or reset the current lesson position.
+  (added 2026-08-06 from Tom's Tutor notebook idea)
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is
   already generic; needs accounts for guests, a thread picker, sender names
