@@ -1,12 +1,16 @@
 # Regression fence: typecheck + lint + unit tests on every PR and push to
-# main. Vercel only proves the app BUILDS — this proves the pinned behaviors
-# (voice rule, predict model format, retry policy, prompt fences) still hold.
+# main or the active Tutor feature branch. Vercel only proves the app BUILDS —
+# this proves the pinned behaviors still hold.
 name: CI
 
+# Markdown-only edits (e.g. jotting an idea into ENHANCEMENTS.md from a
+# phone) skip CI — nothing they change is testable.
 on:
   pull_request:
+    paths-ignore: ["**.md"]
   push:
-    branches: [main]
+    branches: [main, feature/mirrored-90-day-tutor]
+    paths-ignore: ["**.md"]
 
 jobs:
   checks:
