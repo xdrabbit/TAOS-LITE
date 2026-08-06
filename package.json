@@ -8,7 +8,8 @@
     "start": "node node_modules/next/dist/bin/next start --port 3017",
     "lint": "node node_modules/eslint/bin/eslint.js .",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "validate:tutor": "bash scripts/validate-tutor-sprint1.sh"
   },
   "dependencies": {
     "@next/swc-linux-x64-gnu": "^14.2.33",

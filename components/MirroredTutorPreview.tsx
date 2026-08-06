@@ -1,0 +1,292 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { TutorGuidedDialogue } from "@/components/TutorGuidedDialogue";
+import { TutorSpeechAttempt } from "@/components/TutorSpeechAttempt";
+import { TutorStudyText } from "@/components/TutorStudyText";
+import type { CourseConfig, CourseId, LessonDrill, TutorLesson } from "@/lib/tutor/course";
+import { buildReviewQueue, updateMastery, type MasteryRecord, type ReviewItem } from "@/lib/tutor/mastery";
+import { loadMastery, saveMastery, upsertMastery } from "@/lib/tutor/masteryStorage";
+
+interface CatalogResponse {
+  courses?: CourseConfig[];
+  course?: CourseConfig;
+  lessons?: TutorLesson[];
+  error?: string;
+}
+
+interface SavedPosition {
+  day: number;
+  drillIndex: number;
+}
+
+const DEFAULT_COURSE: CourseId = "tom-spanish-1";
+const COURSE_STORAGE_KEY = "taos.tutor.preview.course";
+const positionKey = (courseId: CourseId): string => `taos.tutor.preview.position.${courseId}`;
+
+function readSavedCourse(): CourseId {
+  if (typeof window === "undefined") return DEFAULT_COURSE;
+  return window.localStorage.getItem(COURSE_STORAGE_KEY) === "liz-english-1" ? "liz-english-1" : DEFAULT_COURSE;
+}
+
+function readSavedPosition(courseId: CourseId): SavedPosition {
+  if (typeof window === "undefined") return { day: 1, drillIndex: 0 };
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(positionKey(courseId)) ?? "{}") as Partial<SavedPosition>;
+    return {
+      day: Number.isInteger(parsed.day) ? Math.min(10, Math.max(1, parsed.day as number)) : 1,
+      drillIndex: Number.isInteger(parsed.drillIndex) ? Math.max(0, parsed.drillIndex as number) : 0
+    };
+  } catch {
+    return { day: 1, drillIndex: 0 };
+  }
+}
+
+export function MirroredTutorPreview(): JSX.Element {
+  const [courses, setCourses] = useState<CourseConfig[]>([]);
+  const [courseId, setCourseId] = useState<CourseId>(DEFAULT_COURSE);
+  const [course, setCourse] = useState<CourseConfig | null>(null);
+  const [lessons, setLessons] = useState<TutorLesson[]>([]);
+  const [lessonIndex, setLessonIndex] = useState(0);
+  const [drillIndex, setDrillIndex] = useState(0);
+  const [revealed, setRevealed] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [restored, setRestored] = useState(false);
+  const [mastery, setMastery] = useState<MasteryRecord[]>([]);
+  const [reviewReason, setReviewReason] = useState<ReviewItem["reason"] | null>(null);
+
+  useEffect(() => {
+    setCourseId(readSavedCourse());
+    setRestored(true);
+    fetch("/api/tutor/courses")
+      .then((response) => response.json())
+      .then((payload: CatalogResponse) => setCourses(payload.courses ?? []))
+      .catch(() => setError("Could not load Tutor courses."));
+  }, []);
+
+  useEffect(() => {
+    if (!restored) return;
+    setError(null);
+    setReviewReason(null);
+    setMastery(loadMastery(courseId));
+    fetch(`/api/tutor/courses?courseId=${encodeURIComponent(courseId)}`)
+      .then((response) => response.json())
+      .then((payload: CatalogResponse) => {
+        if (payload.error || !payload.course || !payload.lessons?.length) {
+          setError(payload.error ?? "This course has no lessons yet.");
+          return;
+        }
+        const position = readSavedPosition(courseId);
+        const nextLessonIndex = Math.max(0, payload.lessons.findIndex((item) => item.day === position.day));
+        const lesson = payload.lessons[nextLessonIndex];
+        const nextDrillIndex = Math.min(position.drillIndex, Math.max(0, lesson.drills.length - 1));
+        setCourse(payload.course);
+        setLessons(payload.lessons);
+        setLessonIndex(nextLessonIndex);
+        setDrillIndex(nextDrillIndex);
+        setRevealed(lesson.drills[nextDrillIndex]?.kind !== "recall");
+      })
+      .catch(() => setError("Could not load this Tutor course."));
+  }, [courseId, restored]);
+
+  const lesson = lessons[lessonIndex] ?? null;
+  const drill = lesson?.drills[drillIndex] ?? null;
+  const progress = useMemo(() => (lesson ? ((drillIndex + 1) / lesson.drills.length) * 100 : 0), [drillIndex, lesson]);
+  const reviewQueue = useMemo(() => buildReviewQueue(lessons, mastery), [lessons, mastery]);
+
+  function savePosition(nextLessonIndex: number, nextDrillIndex: number) {
+    const nextLesson = lessons[nextLessonIndex];
+    if (!nextLesson || typeof window === "undefined") return;
+    window.localStorage.setItem(positionKey(courseId), JSON.stringify({ day: nextLesson.day, drillIndex: nextDrillIndex }));
+  }
+
+  function chooseCourse(next: CourseId) {
+    if (typeof window !== "undefined") window.localStorage.setItem(COURSE_STORAGE_KEY, next);
+    setCourseId(next);
+  }
+
+  function chooseDay(nextLessonIndex: number) {
+    const nextLesson = lessons[nextLessonIndex];
+    if (!nextLesson) return;
+    setReviewReason(null);
+    setLessonIndex(nextLessonIndex);
+    setDrillIndex(0);
+    setRevealed(nextLesson.drills[0]?.kind !== "recall");
+    savePosition(nextLessonIndex, 0);
+  }
+
+  function move(delta: number) {
+    if (!lesson) return;
+    setReviewReason(null);
+    const nextDrillIndex = drillIndex + delta;
+    if (nextDrillIndex >= 0 && nextDrillIndex < lesson.drills.length) {
+      setDrillIndex(nextDrillIndex);
+      setRevealed(lesson.drills[nextDrillIndex].kind !== "recall");
+      savePosition(lessonIndex, nextDrillIndex);
+      return;
+    }
+    const nextLessonIndex = lessonIndex + (delta > 0 ? 1 : -1);
+    const nextLesson = lessons[nextLessonIndex];
+    if (!nextLesson) return;
+    const boundaryDrill = delta > 0 ? 0 : nextLesson.drills.length - 1;
+    setLessonIndex(nextLessonIndex);
+    setDrillIndex(boundaryDrill);
+    setRevealed(nextLesson.drills[boundaryDrill]?.kind !== "recall");
+    savePosition(nextLessonIndex, boundaryDrill);
+  }
+
+  function recordAttempt(input: { score?: number; recalledWithoutHelp?: boolean; usedHint?: boolean }) {
+    if (!lesson || !drill) return;
+    const previous = mastery.find((record) => record.lessonId === lesson.id && record.drillId === drill.id);
+    const next = updateMastery(previous, {
+      courseId,
+      lessonId: lesson.id,
+      drillId: drill.id,
+      ...input
+    });
+    const records = upsertMastery(mastery, next);
+    setMastery(records);
+    saveMastery(courseId, records);
+  }
+
+  function revealAnswer() {
+    setRevealed(true);
+    recordAttempt({ usedHint: true });
+  }
+
+  function startReview() {
+    const item = reviewQueue[0];
+    if (!item) return;
+    const nextLessonIndex = lessons.findIndex((candidate) => candidate.id === item.lesson.id);
+    const nextDrillIndex = item.lesson.drills.findIndex((candidate) => candidate.id === item.drillId);
+    if (nextLessonIndex < 0 || nextDrillIndex < 0) return;
+    setLessonIndex(nextLessonIndex);
+    setDrillIndex(nextDrillIndex);
+    setRevealed(item.lesson.drills[nextDrillIndex].kind !== "recall");
+    setReviewReason(item.reason);
+  }
+
+  const atBeginning = lessonIndex === 0 && drillIndex === 0;
+  const atEnd = lessonIndex === lessons.length - 1 && Boolean(lesson) && drillIndex === lesson.drills.length - 1;
+  const finalDrill = Boolean(lesson) && drillIndex === lesson.drills.length - 1;
+  const spanishUi = course?.explanationLanguage === "es";
+
+  return (
+    <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
+      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
+        <header className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-amber-200/55">90-day framework preview</p>
+            <h1 className="text-xl font-semibold text-amber-100">TAOS·TUTOR</h1>
+          </div>
+          <a href="/tutor" className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-amber-100/75">Existing Tutor</a>
+        </header>
+
+        <section className="grid grid-cols-2 gap-2">
+          {(courses.length ? courses : fallbackCourses()).map((item) => (
+            <button key={item.id} type="button" onClick={() => chooseCourse(item.id)} className={`rounded-2xl border p-3 text-left transition ${item.id === courseId ? "border-amber-300/60 bg-amber-300/15" : "border-white/10 bg-white/5"}`}>
+              <span className="block text-sm font-semibold text-white">{item.learnerName}</span>
+              <span className="block text-xs text-amber-100/65">{item.title}</span>
+            </button>
+          ))}
+        </section>
+
+        {reviewQueue.length ? (
+          <button type="button" onClick={startReview} className="flex items-center justify-between rounded-2xl border border-emerald-300/25 bg-emerald-300/10 px-4 py-3 text-left">
+            <span>
+              <span className="block text-sm font-semibold text-emerald-100">{spanishUi ? "Repasar ahora" : "Review now"}</span>
+              <span className="block text-xs text-emerald-100/60">{reviewQueue.length} {spanishUi ? "elementos listos" : "items ready"}</span>
+            </span>
+            <span className="text-xl">↻</span>
+          </button>
+        ) : null}
+
+        {lessons.length ? (
+          <section aria-label="Course days" className="overflow-x-auto pb-1">
+            <div className="flex min-w-max gap-2">
+              {lessons.map((item, index) => (
+                <button key={item.id} type="button" onClick={() => chooseDay(index)} aria-current={index === lessonIndex ? "step" : undefined} className={`min-w-12 rounded-full border px-3 py-2 text-xs font-semibold transition ${index === lessonIndex ? "border-amber-300 bg-amber-300 text-stone-950" : "border-white/10 bg-white/5 text-amber-100/70"}`}>Day {item.day}</button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {error ? <p className="rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-sm text-rose-100">{error}</p> : null}
+
+        {course && lesson && drill ? (
+          <>
+            {reviewReason ? <p className="rounded-xl bg-emerald-300/10 px-3 py-2 text-xs text-emerald-100">{spanishUi ? "Este elemento volvió por" : "This item returned for"}: {reviewReason}</p> : null}
+            <section className="rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.72)] p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-100/55">{course.learnerName} · Day {lesson.day} of {lessons.length}</p>
+                  <h2 className="mt-1 text-2xl font-semibold text-white">{lesson.title}</h2>
+                </div>
+                <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-amber-100/70">{drillIndex + 1}/{lesson.drills.length}</span>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-amber-50/65">{lesson.communicativeGoal}</p>
+              <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-black/20"><div className="h-full rounded-full bg-amber-300" style={{ width: `${progress}%` }} /></div>
+            </section>
+
+            <DrillCard course={course} drill={drill} revealed={revealed} onReveal={revealAnswer} />
+            <TutorSpeechAttempt course={course} drill={drill} onScored={(score) => recordAttempt({ score, recalledWithoutHelp: !revealed, usedHint: revealed && drill.kind === "recall" })} />
+            {finalDrill ? <TutorGuidedDialogue course={course} lesson={lesson} /> : null}
+
+            <nav className="grid grid-cols-2 gap-3">
+              <button type="button" disabled={atBeginning} onClick={() => move(-1)} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-amber-100 disabled:opacity-30">Back</button>
+              <button type="button" disabled={atEnd} onClick={() => move(1)} className="rounded-2xl bg-amber-300 px-4 py-3 text-sm font-semibold text-stone-950 disabled:opacity-30">
+                {finalDrill && lessonIndex < lessons.length - 1 ? `Start Day ${lessons[lessonIndex + 1].day}` : atEnd ? "Sprint preview complete" : "Continue"}
+              </button>
+            </nav>
+          </>
+        ) : null}
+      </div>
+    </main>
+  );
+}
+
+function DrillCard({ course, drill, revealed, onReveal }: { course: CourseConfig; drill: LessonDrill; revealed: boolean; onReveal: () => void }): JSX.Element {
+  const teacherLead = drill.kind === "model"
+    ? course.explanationLanguage === "es" ? "Escucha primero." : "Listen first."
+    : drill.kind === "repeat"
+      ? course.explanationLanguage === "es" ? "Ahora dilo conmigo." : "Now say it with me."
+      : drill.kind === "substitution"
+        ? course.explanationLanguage === "es" ? "Conserva el patrón y cambia una parte." : "Keep the pattern and change one piece."
+        : drill.kind === "recall"
+          ? course.explanationLanguage === "es" ? "Inténtalo sin mirar." : "Let’s try this without looking."
+          : course.explanationLanguage === "es" ? "Usa lo que sabes." : "Use what you know.";
+
+  return (
+    <section className="flex min-h-[36vh] flex-col justify-center rounded-3xl border border-white/10 bg-[rgba(28,22,18,0.88)] p-5">
+      <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.16em] text-amber-100/45">
+        <span>{teacherLead}</span>
+        {drill.reviewAfterDays ? <span>Review · {drill.reviewAfterDays.join(" · ")}</span> : null}
+      </div>
+      <p className="mt-4 text-base leading-relaxed text-amber-50/70">{drill.instruction}</p>
+      {drill.sourceText ? <p className="mt-6 text-xl text-amber-100/65">{drill.sourceText}</p> : null}
+      {revealed ? (
+        <TutorStudyText text={drill.targetText} courseId={course.id} targetLanguage={course.targetLanguage} className="mt-3 text-pretty text-[clamp(2rem,8vw,3.2rem)] font-semibold leading-tight text-white" />
+      ) : (
+        <button type="button" onClick={onReveal} className="mt-5 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-4 text-left text-amber-100">
+          {course.explanationLanguage === "es" ? "Mostrar respuesta" : "Reveal answer"}
+          {drill.hint ? <span className="mt-1 block text-sm text-amber-100/55">{course.explanationLanguage === "es" ? "Pista" : "Hint"}: {drill.hint}</span> : null}
+        </button>
+      )}
+      {drill.substitutions?.map((slot) => (
+        <div key={slot.id} className="mt-5 rounded-2xl bg-white/5 p-3">
+          <p className="text-sm text-amber-100/65">{slot.prompt}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {slot.values.map((value) => <span key={`${slot.id}-${value.target}`} className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/75">{value.source} → {value.target}</span>)}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function fallbackCourses(): CourseConfig[] {
+  return [
+    { id: "tom-spanish-1", learnerId: "tom", learnerName: "Tom", title: "Spanish 1", nativeLanguage: "en", targetLanguage: "es", explanationLanguage: "en", pronunciationLocale: "es-US", teacher: { id: "spanish-1-guide", displayName: "Your Spanish teacher", explanationLanguage: "en", targetLanguage: "es", targetLocale: "es-US" } },
+    { id: "liz-english-1", learnerId: "liz", learnerName: "Liz", title: "English 1", nativeLanguage: "es", targetLanguage: "en", explanationLanguage: "es", pronunciationLocale: "en-US", teacher: { id: "english-1-guide", displayName: "Tu profesora de inglés", explanationLanguage: "es", targetLanguage: "en", targetLocale: "en-US" } }
+  ];
+}
