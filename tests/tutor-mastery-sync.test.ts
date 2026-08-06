@@ -69,4 +69,17 @@ describe("cross-device Tutor mastery merge", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0].state).toBe("spoken-acceptably");
   });
+
+  it("hydrates a remote-only record onto a fresh device", () => {
+    const remote = record({
+      drillId: "recall-negative",
+      state: "spoken-acceptably",
+      attempts: 4,
+      misses: 1,
+      lastScore: 93,
+      lastPracticedAt: "2026-08-06T22:00:00.000Z"
+    });
+    const merged = mergeMasteryRecords([], [remote]);
+    expect(merged).toEqual([remote]);
+  });
 });
