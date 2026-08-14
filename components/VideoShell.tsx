@@ -147,9 +147,13 @@ export function VideoShell(): JSX.Element {
         token?: string;
         bucket?: string;
         error?: string;
+        details?: string;
       };
       if (!urlRes.ok || !urlPayload.path || !urlPayload.token || !urlPayload.bucket) {
-        throw new Error(urlPayload.error || "Could not start the upload.");
+        // Keep the details visible — the 8/13 field test surfaced only the
+        // generic message and the actual cause had to be dug out server-side.
+        const base = urlPayload.error || "Could not start the upload.";
+        throw new Error(urlPayload.details ? `${base} (${urlPayload.details})` : base);
       }
 
       const { error: uploadErr } = await supabase.storage

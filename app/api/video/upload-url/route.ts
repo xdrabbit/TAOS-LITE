@@ -25,16 +25,20 @@ function extensionFor(fileName: string): string {
 let bucketReady = false;
 
 // Lazily create the bucket so no manual Supabase console step is needed.
-// Private (signed access only), capped at the same size the client enforces.
+// Private (signed access only). Best-effort by design: the first deploy's
+// createBucket failed in production (8/13, "Could not start the upload") —
+// passing a fileSizeLimit above the project's GLOBAL storage cap makes the
+// storage API reject bucket creation outright. So: no per-bucket limit
+// (this route and /api/video/process both enforce MAX_VIDEO_BYTES
+// themselves), and a creation error is logged, never fatal — the
+// createSignedUploadUrl call below is the real gate and fails loudly if
+// the bucket truly doesn't exist.
 async function ensureBucket(): Promise<void> {
   if (bucketReady) return;
-  const { error } = await supabaseAdmin.storage.createBucket(VIDEO_BUCKET, {
-    public: false,
-    fileSizeLimit: MAX_VIDEO_BYTES
-  });
-  // "already exists" is the steady state; anything else is a real failure.
+  const { error } = await supabaseAdmin.storage.createBucket(VIDEO_BUCKET, { public: false });
   if (error && !/already exists|duplicate/i.test(error.message)) {
-    throw new Error(`Could not prepare the upload bucket: ${error.message}`);
+    console.warn(`[video] createBucket ${VIDEO_BUCKET}: ${error.message}`);
+    return;
   }
   bucketReady = true;
 }
