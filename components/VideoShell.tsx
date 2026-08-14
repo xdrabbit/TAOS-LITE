@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import {
   LANGUAGE_OPTIONS,
   getLanguageLabel,
@@ -9,6 +10,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { toSrt, toVtt, type CaptionSegment } from "@/lib/video/captions";
 import { MAX_VIDEO_BYTES } from "@/lib/video/storage";
+import { SignIn } from "./SignIn";
 
 // /video — feed TAOS a video (MP4/MOV/etc.), get translated closed captions.
 // The browser uploads straight to Supabase Storage via a signed URL (a video
@@ -60,6 +62,8 @@ function readDuration(file: File): Promise<number | null> {
 }
 
 export function VideoShell(): JSX.Element {
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [target, setTarget] = useState<string>("auto");
@@ -68,6 +72,27 @@ export function VideoShell(): JSX.Element {
   const [result, setResult] = useState<ProcessResult | null>(null);
   const [captionTrack, setCaptionTrack] = useState<"translation" | "original">("translation");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auth gating — same listener pattern as AppShell/ChatShell. Without this,
+  // a signed-out visitor (e.g. a preview-deploy origin they never signed in
+  // on) only found out at the "Caption this video" click, as a bare
+  // "Please sign in again" error (field report 8/13).
+  useEffect(() => {
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSession(data.session);
+      setReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      setReady(true);
+    });
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -213,6 +238,17 @@ export function VideoShell(): JSX.Element {
   }, [downloads]);
 
   const busy = phase === "uploading" || phase === "processing";
+
+  if (!ready) {
+    return (
+      <main className="flex min-h-screen items-center justify-center text-amber-100/60">
+        Loading…
+      </main>
+    );
+  }
+  if (!session) {
+    return <SignIn />;
+  }
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
