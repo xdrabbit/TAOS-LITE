@@ -874,6 +874,15 @@ export function TranslatorShell({
                   >
                     Tutor
                   </a>
+                  {/* Video joins Tutor here rather than as a header pill —
+                      same phone-width rationale (Tom, 7/27). */}
+                  <a
+                    href="/video"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Video captions · Subtítulos
+                  </a>
                   <button
                     type="button"
                     role="menuitem"
