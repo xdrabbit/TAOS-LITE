@@ -176,7 +176,10 @@ export function VideoShell(): JSX.Element {
         details?: string;
       };
       if (!res.ok || !Array.isArray(payload.segments)) {
-        throw new Error(payload.error || payload.details || "Processing failed.");
+        // Show error AND details — the 8/13 hunt for "Video caption pipeline
+        // failed" took a server-side repro because the cause was hidden here.
+        const base = payload.error || "Processing failed.";
+        throw new Error(payload.details ? `${base} (${payload.details})` : base);
       }
       setResult(payload as ProcessResult);
       setCaptionTrack(payload.sameLanguage ? "original" : "translation");

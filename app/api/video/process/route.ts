@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,8 +32,20 @@ const TRANSCRIBE_TIMEOUT_MS = 180000;
 const MAX_AUDIO_BYTES = 24.5 * 1024 * 1024;
 
 // ffmpeg-static covers Vercel (no system ffmpeg); on blackbird either works.
+// The module's path is only trusted if the file is really there — when webpack
+// bundles it, its __dirname-relative path points into the compiled route chunk
+// (the 8/13 ENOENT). serverComponentsExternalPackages in next.config.js is the
+// real fix; the cwd fallback covers any regression, since the tracing include
+// always ships the binary at node_modules/ffmpeg-static/ffmpeg.
 function ffmpegBinary(): string {
-  return (typeof ffmpegStatic === "string" && ffmpegStatic) || "ffmpeg";
+  if (typeof ffmpegStatic === "string" && ffmpegStatic && existsSync(ffmpegStatic)) {
+    return ffmpegStatic;
+  }
+  const traced = join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg");
+  if (existsSync(traced)) {
+    return traced;
+  }
+  return "ffmpeg";
 }
 
 // WHISTLER's proven extraction settings: 64 kbps mono 16 kHz mp3 is plenty for
