@@ -204,6 +204,54 @@ export function VideoShell(): JSX.Element {
     };
   }, [vttUrl]);
 
+  // Web Share API support, resolved client-side. iOS/Android get the native
+  // share sheet (Messages/WhatsApp — the whole point: texting Liz the
+  // captions without a download-and-dig through Safari's Downloads). Desktop
+  // browsers without navigator.share just keep the download buttons.
+  const [shareSupport, setShareSupport] = useState<{ text: boolean; files: boolean }>({
+    text: false,
+    files: false
+  });
+  useEffect(() => {
+    if (typeof navigator === "undefined" || typeof navigator.share !== "function") return;
+    const probe = new File(["x"], "captions.srt", { type: "text/plain" });
+    setShareSupport({
+      text: true,
+      files: typeof navigator.canShare === "function" && navigator.canShare({ files: [probe] })
+    });
+  }, []);
+
+  const shareTranscript = useCallback(async () => {
+    if (!result) return;
+    const track = result.sameLanguage ? "text" : "translation";
+    const body = result.segments
+      .map((s) => (track === "translation" ? (s.translation ?? s.text) : s.text))
+      .join("\n");
+    try {
+      await navigator.share({
+        title: "TAOS captions",
+        text: body
+      });
+    } catch {
+      // Canceled share sheet — not an error worth surfacing.
+    }
+  }, [result]);
+
+  const shareSrt = useCallback(async () => {
+    if (!result || !file) return;
+    const base = file.name.replace(/\.[^.]+$/, "") || "captions";
+    const lang = result.sameLanguage ? result.detectedLanguage : result.targetLanguage;
+    const srt = toSrt(result.segments, result.sameLanguage ? "original" : "translation");
+    // text/plain, not application/x-subrip — iOS refuses to share MIME types
+    // it doesn't recognize, and every player opens .srt by extension anyway.
+    const srtFile = new File([srt], `${base}.${lang}.srt`, { type: "text/plain" });
+    try {
+      await navigator.share({ title: "TAOS captions", files: [srtFile] });
+    } catch {
+      // Canceled share sheet.
+    }
+  }, [result, file]);
+
   const downloads = useMemo(() => {
     if (!result || !file) return [];
     const base = file.name.replace(/\.[^.]+$/, "") || "captions";
@@ -414,6 +462,27 @@ export function VideoShell(): JSX.Element {
                 {result.warnings.map((w) => (
                   <p key={w}>{w}</p>
                 ))}
+              </div>
+            ) : null}
+
+            {shareSupport.text ? (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => void shareTranscript()}
+                  className="rounded-2xl bg-amber-400 px-4 py-2.5 text-sm font-semibold text-stone-950 transition active:scale-[0.99]"
+                >
+                  ↗ Share text · Texto
+                </button>
+                {shareSupport.files ? (
+                  <button
+                    type="button"
+                    onClick={() => void shareSrt()}
+                    className="rounded-2xl border border-amber-300/40 bg-amber-400/10 px-4 py-2.5 text-sm font-semibold text-amber-200 transition active:scale-[0.99]"
+                  >
+                    ↗ Share .srt
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
