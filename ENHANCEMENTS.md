@@ -91,6 +91,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- Always-Detailed on /translate — Casual/Detallado toggle removed (Liz's
+  call: it kept getting forgotten and casual summarized too much) —
+  2026-08-15, PR #19
 - Cantonese: ZH⇄YUE + EN⇄YUE pairs, colloquial written form, v3 voice —
   2026-07-25, PR #9
 - Multi-language phase 1: language-pair picker with Mandarin — 2026-07-25, PR #8
