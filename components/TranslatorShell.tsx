@@ -16,7 +16,6 @@ import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 type LangCode = "en" | "es" | "zh" | "yue";
-type Tone = "casual" | "detailed";
 type Engine = "elevenlabs" | "openai";
 type Status = "idle" | "recording" | "processing" | "done" | "error";
 
@@ -164,11 +163,11 @@ const STRINGS: Record<
   }
 };
 
-// Bilingual labels for shared controls used by both people.
-const TONE_LABEL: Record<Tone, string> = {
-  casual: "Casual",
-  detailed: "Detailed · Detallado"
-};
+// Liz's call (8/9, in her words): the Casual/Detallado toggle kept getting
+// forgotten before long turns and casual summarized too much — so /translate
+// always sends "detailed". Talk as long as you want; nothing is trimmed. The
+// server still accepts both tones (tabletop's short party turns stay casual).
+const TONE = "detailed" as const;
 
 // ── Per-turn safety cap ──────────────────────────────────────────────────
 // Hard limit on a single recording. On reaching it we auto-stop and run the
@@ -233,7 +232,6 @@ export function TranslatorShell({
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
   const [pair, setPair] = useState<readonly [LangCode, LangCode]>(PAIRS[0]);
   const [pairOrder, setPairOrder] = useState<string[]>(() => PAIRS.map(pairKey));
-  const [tone, setTone] = useState<Tone>("casual");
   // Beta (7/27): ElevenLabs cloned voices are for subscribers (Tom, Liz);
   // free-tier beta testers get OpenAI only — ElevenLabs is priced per
   // character and a fleet of testers would run up real cost. Default is
@@ -659,7 +657,7 @@ export function TranslatorShell({
       form.append("audio", blob, fileNameFor(mime));
       form.append("sourceLanguage", src);
       form.append("targetLanguage", tgt);
-      form.append("tone", tone);
+      form.append("tone", TONE);
       if (src === "auto") {
         // Auto-detect is scoped to the active pair — the server decides which
         // of THESE two languages was spoken, never guessing beyond them.
@@ -706,7 +704,7 @@ export function TranslatorShell({
         void saveTranslation({
           source_lang: resolvedSrc,
           target_lang: resolvedTgt,
-          tone,
+          tone: TONE,
           original_text: payload.original ?? "",
           translation_text: payload.translation,
           engine
@@ -995,22 +993,6 @@ export function TranslatorShell({
             </div>
           </button>
         )}
-
-        {/* Tone toggle (shared, bilingual) */}
-        <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-          {(["casual", "detailed"] as Tone[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTone(t)}
-              className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                tone === t ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-              }`}
-            >
-              {TONE_LABEL[t]}
-            </button>
-          ))}
-        </div>
 
         {/* Result — header in the listener's language */}
         <section className="flex flex-1 flex-col gap-3">
