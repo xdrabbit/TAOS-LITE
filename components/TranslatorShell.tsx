@@ -48,6 +48,10 @@ const PAIRS: ReadonlyArray<readonly [LangCode, LangCode]> = [
   ["en", "yue"]
 ];
 const pairKey = (p: readonly [LangCode, LangCode]): string => `${p[0]}-${p[1]}`;
+// Tom's 8/15 call: the picker is TWO buttons — EN⇄ES (the daily pair) and
+// "Other · Otros" holding every remaining pair. EN⇄ES never hides behind the
+// menu, and the guest pairs stop crowding the top of the screen.
+const HOME_PAIR = PAIRS[0];
 const PAIR_ORDER_STORAGE_KEY = "taos.translate.pairOrder";
 
 // Unobtrusive build marker so we can tell which deploy is live. Vercel injects
@@ -232,6 +236,7 @@ export function TranslatorShell({
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
   const [pair, setPair] = useState<readonly [LangCode, LangCode]>(PAIRS[0]);
   const [pairOrder, setPairOrder] = useState<string[]>(() => PAIRS.map(pairKey));
+  const [otherOpen, setOtherOpen] = useState(false);
   // Beta (7/27): ElevenLabs cloned voices are for subscribers (Tom, Liz);
   // free-tier beta testers get OpenAI only — ElevenLabs is priced per
   // character and a fleet of testers would run up real cost. Default is
@@ -311,6 +316,7 @@ export function TranslatorShell({
 
   function selectPair(p: readonly [LangCode, LangCode]) {
     setPair(p);
+    setOtherOpen(false);
     setSource((prev) => (prev === p[0] || prev === p[1] ? prev : p[0]));
     setOriginal("");
     setTranslation("");
@@ -933,25 +939,61 @@ export function TranslatorShell({
           </div>
         ) : null}
 
-        {/* Language pair picker — most-recently-used pair first */}
-        <div className="flex flex-wrap gap-2">
-          {orderedPairs.map((p) => {
-            const active = pairKey(p) === pairKey(pair);
-            return (
-              <button
-                key={pairKey(p)}
-                type="button"
-                onClick={() => selectPair(p)}
-                className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                  active
-                    ? "border-amber-300 bg-amber-400 text-stone-950"
-                    : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-                }`}
-              >
-                {p[0].toUpperCase()} ⇄ {p[1].toUpperCase()}
-              </button>
-            );
-          })}
+        {/* Language pair picker — EN⇄ES plus one "Other" button (Tom, 8/15).
+            When a guest pair is active, the Other button wears its label so
+            the current pair is always visible. The expanded list keeps
+            most-recently-used order. */}
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => selectPair(HOME_PAIR)}
+              className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                pairKey(pair) === pairKey(HOME_PAIR)
+                  ? "border-amber-300 bg-amber-400 text-stone-950"
+                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+              }`}
+            >
+              {HOME_PAIR[0].toUpperCase()} ⇄ {HOME_PAIR[1].toUpperCase()}
+            </button>
+            <button
+              type="button"
+              onClick={() => setOtherOpen((o) => !o)}
+              className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                pairKey(pair) !== pairKey(HOME_PAIR)
+                  ? "border-amber-300 bg-amber-400 text-stone-950"
+                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+              }`}
+            >
+              {pairKey(pair) !== pairKey(HOME_PAIR)
+                ? `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`
+                : "Other · Otros"}{" "}
+              {otherOpen ? "▴" : "▾"}
+            </button>
+          </div>
+          {otherOpen ? (
+            <div className="flex flex-wrap gap-2">
+              {orderedPairs
+                .filter((p) => pairKey(p) !== pairKey(HOME_PAIR))
+                .map((p) => {
+                  const active = pairKey(p) === pairKey(pair);
+                  return (
+                    <button
+                      key={pairKey(p)}
+                      type="button"
+                      onClick={() => selectPair(p)}
+                      className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                        active
+                          ? "border-amber-300 bg-amber-400 text-stone-950"
+                          : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+                      }`}
+                    >
+                      {p[0].toUpperCase()} ⇄ {p[1].toUpperCase()}
+                    </button>
+                  );
+                })}
+            </div>
+          ) : null}
         </div>
 
         {/* Who is speaking — manual swap card, or an Auto-detect indicator */}
