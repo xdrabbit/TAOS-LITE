@@ -91,6 +91,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- Two-button pair picker on /translate — EN⇄ES stays its own button, all
+  other pairs fold into "Other · Otros" (Tom's call: the row was growing
+  with every language) — 2026-08-16, PR #20
 - Always-Detailed on /translate — Casual/Detallado toggle removed (Liz's
   call: it kept getting forgotten and casual summarized too much) —
   2026-08-15, PR #19
