@@ -105,6 +105,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- Photo translator (/vision) — camera or photo library → text read and
+  translated, Auto EN↔ES or any supported language, no-guess fence on
+  blurry text — 2026-08-17, PR #21
 - Two-button pair picker on /translate — EN⇄ES stays its own button, all
   other pairs fold into "Other · Otros" (Tom's call: the row was growing
   with every language) — 2026-08-16, PR #20
