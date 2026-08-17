@@ -887,6 +887,13 @@ export function TranslatorShell({
                   >
                     Video captions · Subtítulos
                   </a>
+                  <a
+                    href="/vision"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Photo translator · Fotos
+                  </a>
                   <button
                     type="button"
                     role="menuitem"

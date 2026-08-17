@@ -16,6 +16,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- First-release scope cut — Tom (8/16): "we need to look seriously about what
+  we can take off for a first release. Liz and I are ready to hook up the bank
+  to Stripe." Decide which screens are in v1, hide the rest, and do the Stripe
+  go-live checklist (live keys, webhook, price, paywall copy). Call cost
+  guards (below) should land before real customers can rack up realtime
+  minutes. (added 2026-08-16)
 - Chat push notifications (tier 2) — phones buzz when a message lands while
   the app is closed. Planned since chat tier 1 shipped. (added 2026-08-03)
 - Call cost guards — /call bills two realtime sessions the whole time it's
@@ -28,6 +34,14 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- Expand histories to the other features — Tom (8/16): "can we think about
+  expanding histories to the other features. I know that's big and will likely
+  require some database work." Today only /translate saves history. Sketch:
+  one shared `feature_history` table (user, feature, payload jsonb, created_at)
+  in Supabase with RLS per user; /live, /call, /chat (already stored), /video,
+  /vision each append their turns/results; HistoryDrawer grows a feature
+  filter. Decide retention (photos/audio are big — store text only). (added
+  2026-08-16)
 - Tutor hyperlink study words for more instruction. 
   - Preserve the lesson flow: only vocabulary or deliberately teachable words
     should look interactive, rather than turning every sentence into a field of
