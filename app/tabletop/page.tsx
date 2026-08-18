@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { FounderGate } from "@/components/FounderGate";
 import { TabletopShell } from "@/components/TabletopShell";
 
 export const metadata: Metadata = {
@@ -8,5 +9,10 @@ export const metadata: Metadata = {
 };
 
 export default function TabletopPage(): JSX.Element {
-  return <TabletopShell />;
+  // Held back from v1 (lib/release.ts).
+  return (
+    <FounderGate>
+      <TabletopShell />
+    </FounderGate>
+  );
 }

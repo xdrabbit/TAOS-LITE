@@ -22,6 +22,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   go-live checklist (live keys, webhook, price, paywall copy). Call cost
   guards (below) should land before real customers can rack up realtime
   minutes. (added 2026-08-16)
+  → Screen cut SHIPPED 2026-08-18 (see Shipped): customers see Translate,
+  Live, Chat, Tutor, Photo; Call/Tabletop/Video are founders-only. STILL TO
+  DO before charging: Stripe live keys + live price ids + production webhook
+  (Tom's dashboard work), one real end-to-end purchase, and ideally the call
+  cost guards.
 - Chat push notifications (tier 2) — phones buzz when a message lands while
   the app is closed. Planned since chat tier 1 shipped. (added 2026-08-03)
 - Call cost guards — /call bills two realtime sessions the whole time it's
@@ -105,6 +110,10 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- v1 release gate — customers see Translate, Live, Chat, Tutor, Photo;
+  Call/Tabletop/Video show "Coming soon" and hide from nav unless the
+  signed-in email is a founder (Tom hardcoded; Liz via
+  NEXT_PUBLIC_FOUNDER_EMAILS) — 2026-08-18, PR #23
 - Photo translator (/vision) — camera or photo library → text read and
   translated, Auto EN↔ES or any supported language, no-guess fence on
   blurry text — 2026-08-17, PR #21

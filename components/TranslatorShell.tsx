@@ -13,6 +13,7 @@ import {
 import { HistoryDrawer } from "./HistoryDrawer";
 import { Paywall } from "./Paywall";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
+import { isFounder } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 type LangCode = "en" | "es" | "zh" | "yue";
@@ -284,6 +285,10 @@ export function TranslatorShell({
   const recordStartRef = useRef<number>(0);
   const pulsePhaseRef = useRef<number>(0);
   const lastTickRef = useRef<number>(0);
+
+  // v1 release gate: Call/Table/Video links only render for founders
+  // (lib/release.ts — the pages themselves are wrapped in FounderGate too).
+  const founder = isFounder(email);
 
   const target: LangCode = source === pair[0] ? pair[1] : pair[0];
   const speaker = SPEAKERS[source];
@@ -792,47 +797,58 @@ export function TranslatorShell({
               Live
             </a>
             {/* Call / Chat / Table stacked under one pill — six pills overflowed
-                a phone width and made the whole page slide sideways. */}
-            <div ref={togetherMenuRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setTogetherMenuOpen((o) => !o)}
-                aria-haspopup="menu"
-                aria-expanded={togetherMenuOpen}
+                a phone width and made the whole page slide sideways. In v1,
+                Call and Table are founders-only (lib/release.ts), so customers
+                get a plain Chat pill instead of a one-item menu. */}
+            {founder ? (
+              <div ref={togetherMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setTogetherMenuOpen((o) => !o)}
+                  aria-haspopup="menu"
+                  aria-expanded={togetherMenuOpen}
+                  className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+                >
+                  Together ▾
+                </button>
+                {togetherMenuOpen ? (
+                  <div
+                    role="menu"
+                    aria-label="Together"
+                    className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
+                  >
+                    <a
+                      href="/call"
+                      role="menuitem"
+                      className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Call · Llamada
+                    </a>
+                    <a
+                      href="/chat"
+                      role="menuitem"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Chat · Chat
+                    </a>
+                    <a
+                      href="/tabletop"
+                      role="menuitem"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Table · Mesa
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <a
+                href="/chat"
                 className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
               >
-                Together ▾
-              </button>
-              {togetherMenuOpen ? (
-                <div
-                  role="menu"
-                  aria-label="Together"
-                  className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
-                >
-                  <a
-                    href="/call"
-                    role="menuitem"
-                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Call · Llamada
-                  </a>
-                  <a
-                    href="/chat"
-                    role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Chat · Chat
-                  </a>
-                  <a
-                    href="/tabletop"
-                    role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Table · Mesa
-                  </a>
-                </div>
-              ) : null}
-            </div>
+                Chat
+              </a>
+            )}
             <a
               href="/translate"
               className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
@@ -879,14 +895,17 @@ export function TranslatorShell({
                     Tutor
                   </a>
                   {/* Video joins Tutor here rather than as a header pill —
-                      same phone-width rationale (Tom, 7/27). */}
-                  <a
-                    href="/video"
-                    role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Video captions · Subtítulos
-                  </a>
+                      same phone-width rationale (Tom, 7/27). Founders-only
+                      in v1 (lib/release.ts). */}
+                  {founder ? (
+                    <a
+                      href="/video"
+                      role="menuitem"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Video captions · Subtítulos
+                    </a>
+                  ) : null}
                   <a
                     href="/vision"
                     role="menuitem"
