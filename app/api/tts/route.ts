@@ -5,6 +5,7 @@ import {
   type VoiceOverride
 } from "@/lib/tts/voice";
 import { PERSONAL_VOICE_HEADER, personalVoiceUnlocked } from "@/lib/tts/personalVoice";
+import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -134,6 +135,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     if (!text) {
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
+    }
+
+    // Tier 2 (lib/languages/catalog.ts): no engine wired up here can speak
+    // this language. Sending the text anyway gets either a 502 or — worse —
+    // confident audio in the wrong language's phonology, which a listener has
+    // no way to recognize as a failure. Say what is true instead.
+    //
+    // /translate never reaches this: it asks canSpeak() before it calls, and
+    // shows "text only" on the pill. This is the fence for everything that
+    // doesn't ask — and it is deliberately narrow, firing only for a language
+    // the catalog KNOWS it cannot speak. An unrecognized code keeps the old
+    // pass-through behavior (default voice, no opinion) rather than becoming a
+    // new way for an existing caller to start failing.
+    if (isLanguageCode(body.targetLanguage) && !canSpeak(body.targetLanguage)) {
+      return NextResponse.json(
+        { error: "This language is text only.", textOnly: true },
+        { status: 422 }
+      );
     }
 
     // Wrong or absent code -> locked -> default voice. Deliberately silent:
