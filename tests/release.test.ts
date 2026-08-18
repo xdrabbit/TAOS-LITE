@@ -32,10 +32,13 @@ describe("v1 held-back set", () => {
 });
 
 describe("isFounder", () => {
-  it("recognizes Tom, case- and whitespace-insensitively", () => {
+  it("recognizes Tom and Liz, case- and whitespace-insensitively", () => {
     delete process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
     expect(isFounder("xdrabbit@gmail.com")).toBe(true);
     expect(isFounder("  XDRabbit@Gmail.com ")).toBe(true);
+    // Liz — added by Tom's 8/18 direction.
+    expect(isFounder("lizmariett@gmail.com")).toBe(true);
+    expect(isFounder("LizMariett@gmail.com")).toBe(true);
   });
 
   it("rejects everyone else, including empty and null", () => {
@@ -56,6 +59,7 @@ describe("isFounder", () => {
 
   it("founderEmails always contains the hardcoded founders", () => {
     expect(founderEmails(undefined).has("xdrabbit@gmail.com")).toBe(true);
+    expect(founderEmails(undefined).has("lizmariett@gmail.com")).toBe(true);
     expect(founderEmails("a@b.com").has("a@b.com")).toBe(true);
   });
 });

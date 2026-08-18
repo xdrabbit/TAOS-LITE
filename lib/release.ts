@@ -17,10 +17,10 @@
 // <FounderGate>. tests/release.test.ts pins this set — change both together.
 export const HELD_BACK_V1 = ["call", "tabletop", "video"] as const;
 
-// Founders keep using everything. Tom is hardcoded; add Liz (or anyone) via
-// NEXT_PUBLIC_FOUNDER_EMAILS in Vercel — comma-separated, no code change or
-// redeploy of intent required, just an env edit + redeploy.
-const FOUNDER_EMAILS = ["xdrabbit@gmail.com"];
+// Founders keep using everything. Tom and Liz are hardcoded; add anyone else
+// via NEXT_PUBLIC_FOUNDER_EMAILS in Vercel — comma-separated, no code change
+// needed, just an env edit + redeploy.
+const FOUNDER_EMAILS = ["xdrabbit@gmail.com", "lizmariett@gmail.com"];
 
 export function founderEmails(extra: string | undefined): Set<string> {
   const fromEnv = (extra ?? "")
