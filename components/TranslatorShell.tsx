@@ -11,6 +11,7 @@ import {
   type Profile
 } from "@/lib/supabase";
 import { HistoryDrawer } from "./HistoryDrawer";
+import { InstallPrompt } from "./InstallPrompt";
 import { Paywall } from "./Paywall";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { isFounder } from "@/lib/release";
@@ -940,6 +941,11 @@ export function TranslatorShell({
             </div>
           </div>
         </header>
+
+        {/* One-time "add to home screen" nudge (hides itself once installed
+            or dismissed). Inline, above the trial banner — never floating over
+            the record button. */}
+        <InstallPrompt />
 
         {/* Free-trial allowance banner (hidden for subscribers) */}
         {!subscriber && Number.isFinite(transLeft) ? (
