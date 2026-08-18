@@ -110,11 +110,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 - Multi-language phase 2 — bring the language-pair picker to /tabletop
   (most likely place to meet strangers). Phase 3: /live and /call. (added
   2026-08-03)
-- Text-only languages on the OTHER screens — /translate handles tier 2
-  gracefully (skips TTS, says "Text only"). /chat, /live, /tabletop and /tutor
-  now let you pick those languages too and will surface a plain error from
-  /api/tts instead. Give them the same quiet degrade. (added 2026-08-17, from
-  the language-catalog change)
 - Guest voice clones — quick-clone a recurring guest so their translations
   play in their real voice instead of the stock one. (added 2026-08-03)
 - Use lib/net's fetchWithRetry in /chat and /live fetches — /translate,
@@ -139,8 +134,11 @@ Croatian pronunciation) and Cantonese (which routes to `eleven_v3`).
 good; nothing in the pipeline can say them out loud. The app shows the
 translated text, skips synthesis entirely, and says so up front — a muted
 speaker on the pill, "Text only" in the sheet, and "Text only · Solo texto"
-where the Play button would be. No error, no waiting on audio that was never
-coming. Photos are unaffected: /vision never spoke, so a text-only language
+where the Play button would be (all three drawn by `components/TextOnly.tsx`,
+which is the only place that mark exists). No error, no waiting on audio that
+was never coming. Every screen asks the same way: `requestSpeech` in
+`lib/tts/speech.ts` is the one road to /api/tts, and it answers `null` — never
+an error — when there is no voice to be had. Photos are unaffected: /vision never spoke, so a text-only language
 reads a menu exactly as well as any other.
 
 **To add a language**: add one row to `CATALOG` in `lib/languages/catalog.ts`.
@@ -207,6 +205,16 @@ is not a prerequisite for using it.
   again" button. The code lives in that phone's localStorage, so clearing
   site data re-locks it. Nothing on screen advertises the gesture.
   — 2026-08-17, branch feat/trip-mode
+- The tier-2 degrade on every screen — /chat, /live, /tabletop and /tutor
+  now reach /api/tts through one shared `requestSpeech` (lib/tts/speech.ts)
+  that asks the catalog first and treats the route's 422 `{textOnly:true}` as
+  silence rather than an error, so a text-only language is never a red banner.
+  The "Text only" mark is one component (components/TextOnly.tsx) shared with
+  /translate. Note for whoever picks up "Multi-language phase 2" in Ideas: those
+  three screens are still hardcoded EN⇄ES, so this is the fence waiting for
+  them rather than a bug anyone could hit today — /chat is the exception,
+  since its languages come out of the database — 2026-08-18, branch
+  feat/trip-mode
 - Trip mode for Bosnia + Italy — three things in one branch: TAOS is
   installable (Add to Home Screen, standalone, real icon), a QR share modal
   behind one header button hands the app to someone across a table, and

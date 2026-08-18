@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
+import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
+import { TextOnlyNote } from "./TextOnly";
 import {
   getChatThread,
   getVoiceUrl,
@@ -171,7 +172,9 @@ export function ChatShell(): JSX.Element {
   }, []);
 
   const playUrl = useCallback(
-    async (key: string, getUrl: () => Promise<string>) => {
+    // getUrl may answer null — "there is no audio here and that is fine",
+    // which is what a text-only translation looks like from down here.
+    async (key: string, getUrl: () => Promise<string | null>) => {
       if (playingKey === key) {
         stopPlayback();
         return;
@@ -180,6 +183,10 @@ export function ChatShell(): JSX.Element {
       setPlayingKey(key);
       try {
         const url = await getUrl();
+        if (!url) {
+          setPlayingKey(null);
+          return;
+        }
         const el = new Audio(url);
         playerRef.current = el;
         el.onended = () => {
@@ -215,17 +222,18 @@ export function ChatShell(): JSX.Element {
       playUrl(`${m.id}:clone`, async () => {
         const cached = ttsUrlCacheRef.current.get(m.id);
         if (cached) return cached;
-        const res = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
-          body: JSON.stringify({
-            text: m.body_translated,
-            sourceLanguage: m.source_lang,
-            targetLanguage: m.target_lang
-          })
+        // A thread's languages come out of the database, so either end of it
+        // can be tier 2 (lib/languages/catalog.ts) — the message still
+        // translated, it just has no voice. requestSpeech answers null for
+        // that, before the call and again if the server says so, and the
+        // bubble simply keeps its text.
+        const blob = await requestSpeech({
+          text: m.body_translated ?? "",
+          sourceLanguage: m.source_lang,
+          targetLanguage: m.target_lang
         });
-        if (!res.ok) throw new Error("tts failed");
-        const url = URL.createObjectURL(await res.blob());
+        if (!blob) return null;
+        const url = URL.createObjectURL(blob);
         ttsUrlCacheRef.current.set(m.id, url);
         return url;
       }),
@@ -414,7 +422,11 @@ export function ChatShell(): JSX.Element {
             const primary = mine ? m.body : m.body_translated ?? m.body;
             const secondary = mine ? m.body_translated : m.body_translated ? m.body : null;
             const newDay = i === 0 || dayKey(messages[i - 1].created_at) !== dayKey(m.created_at);
-            const canClone = Boolean(m.body_translated && m.source_lang && m.target_lang);
+            const translated = Boolean(m.body_translated && m.source_lang && m.target_lang);
+            // Translated, but in a language nothing here can pronounce: show
+            // why rather than a Play button that would do nothing.
+            const textOnly = translated && isTextOnlyLanguage(m.target_lang);
+            const canClone = translated && !textOnly;
             return (
               <div key={m.id}>
                 {newDay ? (
@@ -471,6 +483,12 @@ export function ChatShell(): JSX.Element {
                         >
                           {playingKey === `${m.id}:clone` ? "⏸" : "🗣️"} clone
                         </button>
+                      ) : textOnly ? (
+                        <TextOnlyNote
+                          className={`px-2 py-0.5 ${
+                            mine ? "bg-stone-950/15 text-stone-950/60" : "bg-white/10 text-amber-100/50"
+                          }`}
+                        />
                       ) : null}
                       <span>
                         {formatTime(m.created_at)}

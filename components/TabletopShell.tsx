@@ -5,7 +5,7 @@ import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live"
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
-import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
+import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -27,6 +27,13 @@ type TurnState =
   | { kind: "connecting"; side: Lang }
   | { kind: "recording"; side: Lang }
   | { kind: "processing"; side: Lang };
+
+// Two people, two languages: what one says is always spoken to the other. The
+// target of a turn is therefore the OTHER side, which is also the language
+// /api/tts is asked for — so this is the code the tier check reads.
+function otherLang(side: Lang): Lang {
+  return side === "en" ? "es" : "en";
+}
 
 interface Exchange {
   /** Language the speaker used. */
@@ -170,24 +177,23 @@ export function TabletopShell(): JSX.Element {
   const speak = useCallback(async (ex: Exchange) => {
     if (!voiceOnRef.current || !ex.translation) return;
     try {
-      const res = await fetchWithRetry(
-        "/api/tts",
+      // requestSpeech asks the catalog first: a tier-2 target never reaches
+      // /api/tts, and a null here (either tier gate) means the translation on
+      // the table is the whole answer. The turn is already on screen and the
+      // streaming path above is untouched — only the readout stops.
+      const blob = await requestSpeech(
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
-          body: JSON.stringify({
-            text: ex.translation,
-            sourceLanguage: ex.from,
-            targetLanguage: ex.from === "en" ? "es" : "en"
-            // No voice override: the shared /api/tts voice-follows-speaker rule
-            // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
-            // Spanish in Tom's clone) — identical on every screen.
-          })
+          text: ex.translation,
+          sourceLanguage: ex.from,
+          targetLanguage: otherLang(ex.from)
+          // No voice override: the shared /api/tts voice-follows-speaker rule
+          // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
+          // Spanish in Tom's clone) — identical on every screen.
         },
-        { retries: 1, timeoutMs: 30000 }
+        { fetch: (input, init) => fetchWithRetry(input, init, { retries: 1, timeoutMs: 30000 }) }
       );
-      if (!res.ok) return;
-      const url = URL.createObjectURL(await res.blob());
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
       playerRef.current?.pause();
       const el = new Audio(url);
       playerRef.current = el;
@@ -290,7 +296,7 @@ export function TabletopShell(): JSX.Element {
         const form = new FormData();
         form.append("audio", new File([blob], "turn", { type: blob.type || "audio/webm" }));
         form.append("sourceLanguage", side);
-        form.append("targetLanguage", side === "en" ? "es" : "en");
+        form.append("targetLanguage", otherLang(side));
         form.append("tone", "casual");
         const res = await fetch("/api/translate", { method: "POST", body: form });
         const payload = (await res.json().catch(() => ({}))) as {
@@ -530,7 +536,11 @@ export function TabletopShell(): JSX.Element {
     );
   };
 
-  const bottomLang: Lang = topLang === "en" ? "es" : "en";
+  const bottomLang: Lang = otherLang(topLang);
+  // Neither end of the table can be read out — both targets are tier 2
+  // (lib/languages/catalog.ts). The turns still cross the table as text; the
+  // voice toggle just stops offering something there is no voice for.
+  const tableTextOnly = [topLang, bottomLang].every((l) => isTextOnlyLanguage(otherLang(l)));
 
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden">
@@ -560,9 +570,11 @@ export function TabletopShell(): JSX.Element {
         <button
           type="button"
           onClick={() => setVoiceOn((v) => !v)}
-          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70"
+          disabled={tableTextOnly}
+          title={tableTextOnly ? TEXT_ONLY_TITLE : undefined}
+          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70 disabled:opacity-40"
         >
-          {voiceOn ? "🔊 voice on" : "🔇 voice off"}
+          {tableTextOnly ? "🔇 text only" : voiceOn ? "🔊 voice on" : "🔇 voice off"}
         </button>
         {error ? <span className="max-w-[40%] truncate text-xs text-red-300">{error}</span> : null}
       </div>

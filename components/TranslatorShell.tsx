@@ -15,7 +15,8 @@ import { InstallPrompt } from "./InstallPrompt";
 import { Paywall } from "./Paywall";
 import { QrShareModal } from "./QrShareModal";
 import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
-import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
+import { TextOnlyChip, TextOnlyNote } from "./TextOnly";
+import { requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import {
   DEFAULT_PAIR,
@@ -335,11 +336,11 @@ const PILL_MINE_CLASS = "border-amber-300 bg-transparent text-amber-200"; // you
 const PILL_IDLE_CLASS = "border-amber-300/30 bg-amber-400/10 text-amber-200";
 
 // "Text only" — a tier-2 language, translated but never spoken (see the tier
-// note in lib/languages/catalog.ts). Said with a muted speaker rather than
-// words because it has to fit on a pill: the sheet spells it out where there
-// is room, and this is the reminder afterwards. Without it, the first turn in
-// a text-only language looks like broken audio instead of a known limit.
-const TEXT_ONLY_TITLE = "Text only — no voice for this language · Solo texto";
+// note in lib/languages/catalog.ts). On a pill it is a muted speaker and
+// nothing more, because that is all the room there is; the sheet spells it out
+// and the turn footer repeats it (components/TextOnly.tsx, shared with the
+// other four screens). Without it, the first turn in a text-only language
+// looks like broken audio instead of a known limit.
 
 function LanguagePill({
   code,
@@ -483,11 +484,7 @@ function LanguageSheet({
                         {language.label} · {language.labelEs}
                       </span>
                     </span>
-                    {language.tts ? null : (
-                      <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-100/50">
-                        Text only
-                      </span>
-                    )}
+                    {language.tts ? null : <TextOnlyChip />}
                     {isOutput ? (
                       <span className="shrink-0 text-amber-300">✓</span>
                     ) : isMine ? (
@@ -833,23 +830,19 @@ export function TranslatorShell({
     if (!a) return;
     try {
       setIsSpeaking(true);
-      const res = await fetchWithRetry(
-        "/api/tts",
+      const blob = await requestSpeech(
+        { text, engine, sourceLanguage: src, targetLanguage: tgt },
         {
-          method: "POST",
-          // The personal-voice code, when this phone has one: it is what
-          // makes /api/tts eligible to answer in Tom's or Liz's clone. Absent
-          // (every borrowed/shared phone) the reply is the standard voice.
-          headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
-          body: JSON.stringify({ text, engine, sourceLanguage: src, targetLanguage: tgt })
-        },
-        { retries: 2, timeoutMs: 60000 }
+          fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+          failureMessage: s.ttsFailed
+        }
       );
-      if (!res.ok) {
-        const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
-        throw new Error(p.details || p.error || s.ttsFailed);
+      // null = text only. The guard above already caught the languages the
+      // catalog knows about; this is the same answer arriving from the server.
+      if (!blob) {
+        setIsSpeaking(false);
+        return;
       }
-      const blob = await res.blob();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
       const url = URL.createObjectURL(blob);
       objectUrlRef.current = url;
@@ -1422,13 +1415,7 @@ export function TranslatorShell({
                   {textOnlyTarget ? (
                     // No Play button rather than a dead one: a control that
                     // does nothing when tapped is worse than no control.
-                    <span
-                      title={TEXT_ONLY_TITLE}
-                      className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-emerald-100/60"
-                    >
-                      <span className="text-base">🔇</span>
-                      <span className="text-[11px]">Text only · Solo texto</span>
-                    </span>
+                    <TextOnlyNote />
                   ) : (
                     <button
                       type="button"

@@ -8,7 +8,7 @@ import {
   type AmbientTarget
 } from "@/lib/live/ambient";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
-import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
+import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -220,19 +220,12 @@ export function LiveShell(): JSX.Element {
     playingRef.current = true;
     setSpeakingConcept(true);
 
-    fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
-      body: JSON.stringify({ text: next.text, latency: "flash", ...TTS_LANGS[next.direction] })
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
-          throw new Error(p.details || p.error || "Voice playback failed.");
-        }
-        return res.blob();
-      })
+    requestSpeech({ text: next.text, latency: "flash", ...TTS_LANGS[next.direction] })
       .then((blob) => {
+        // null = text only (lib/tts/speech.ts). The feed already has the
+        // concept on screen, which on a tier-2 language IS the whole readout —
+        // so drop it and drain the next one without a word.
+        if (!blob) return;
         if (!voiceOnRef.current) return; // toggled off while the audio was in flight
         const a = ensureAudioEl();
         if (!a) return;
@@ -263,6 +256,10 @@ export function LiveShell(): JSX.Element {
   const enqueueSpeech = useCallback(
     (text: string) => {
       if (!voiceOnRef.current) return;
+      // Tier 2 (lib/languages/catalog.ts): nothing can say this language, so
+      // it never enters the queue — no request, no wait, no error. The screen
+      // says "text only" on the voice button so this was never a surprise.
+      if (isTextOnlyLanguage(TTS_LANGS[directionRef.current].targetLanguage)) return;
       const q = speechQueueRef.current;
       q.push({ text, direction: directionRef.current, queuedAt: Date.now() });
       while (q.length > MAX_SPEECH_QUEUE) q.shift(); // drop stale, keep newest
@@ -703,6 +700,14 @@ export function LiveShell(): JSX.Element {
             ? "stopping…"
             : "";
 
+  // The device engine reads its summaries out through /api/tts, so a tier-2
+  // target (lib/languages/catalog.ts) has no voice to offer and the button
+  // should say that rather than sit there claiming "Voice on" over silence.
+  // Ambient AI speaks inside the realtime session and never asks /api/tts, so
+  // it is not subject to this.
+  const readoutTextOnly =
+    engine === "device" && isTextOnlyLanguage(TTS_LANGS[direction].targetLanguage);
+
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
@@ -810,14 +815,22 @@ export function LiveShell(): JSX.Element {
               <button
                 type="button"
                 onClick={toggleVoice}
-                aria-pressed={voiceOn}
+                aria-pressed={voiceOn && !readoutTextOnly}
+                disabled={readoutTextOnly}
+                title={readoutTextOnly ? TEXT_ONLY_TITLE : undefined}
                 className={`rounded-full border px-3 py-1 text-[11px] normal-case tracking-normal transition ${
-                  voiceOn
+                  voiceOn && !readoutTextOnly
                     ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
                     : "border-white/10 bg-white/5 text-amber-100/70"
                 }`}
               >
-                {voiceOn ? (speakingConcept ? "🔊 Voice · speaking" : "🔊 Voice on") : "🔇 Voice off"}
+                {readoutTextOnly
+                  ? "🔇 Text only"
+                  : voiceOn
+                    ? speakingConcept
+                      ? "🔊 Voice · speaking"
+                      : "🔊 Voice on"
+                    : "🔇 Voice off"}
               </button>
               {feed.length > 0 ? (
                 <button
