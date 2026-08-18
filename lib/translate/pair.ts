@@ -18,6 +18,8 @@
 // The pair is what /api/translate scopes auto-detect to, which is why the rule
 // never produces a pair of one repeated language: two identical sides would
 // ask the model to pick between a language and itself.
+import { isLanguageCode, LANGUAGES, type LanguageCode } from "@/lib/languages/catalog";
+
 export function nextPair<T extends string>(
   pair: readonly [T, T],
   tapped: T
@@ -40,17 +42,19 @@ export function nextPair<T extends string>(
 // the read/write pair live here so there is ONE definition of the pair on
 // disk; the pills, flags, and copy stay in the shell that draws them.
 
-export type PairLangCode = "en" | "es" | "bs" | "it" | "zh" | "yue";
+// The pair can hold ANY language in the catalog (8/17). It used to be a
+// six-code union that had to be grown by hand alongside a flag and a block of
+// speaker copy in TranslatorShell — which is exactly why it stayed at six
+// while the pipeline could already handle a hundred. The catalog carries the
+// flag and the native name now, and the shell falls back to English copy for
+// a language it has no translation of, so a language reaches the pair the
+// moment it reaches lib/languages/catalog.ts.
+export type PairLangCode = LanguageCode;
 
-// Every language the pair can hold — the pill row plus the "Other · Otros"
-// guests. Adding a language here is not enough on its own: it also needs a
-// flag and speaker copy in TranslatorShell.
-export const PAIR_LANGUAGES: readonly PairLangCode[] = ["en", "es", "bs", "it", "zh", "yue"];
-
-const PAIR_LANGUAGE_SET = new Set<string>(PAIR_LANGUAGES);
+export const PAIR_LANGUAGES: readonly PairLangCode[] = LANGUAGES.map((l) => l.code);
 
 export function isPairLangCode(value: unknown): value is PairLangCode {
-  return typeof value === "string" && PAIR_LANGUAGE_SET.has(value);
+  return isLanguageCode(value);
 }
 
 export const PAIR_STORAGE_KEY = "taos.translate.languages";

@@ -67,9 +67,17 @@ describe("the saved pair: what survives on a phone", () => {
     expect(parseStoredPair(JSON.stringify(["en"]))).toBeNull();
     expect(parseStoredPair(JSON.stringify(["en", "es", "bs"]))).toBeNull();
     expect(parseStoredPair(JSON.stringify({ mine: "en", theirs: "es" }))).toBeNull();
-    // A language TAOS doesn't speak (or an old build's code) — fall back to
-    // the defaults rather than asking a route to translate into "xx".
-    expect(parseStoredPair(JSON.stringify(["en", "sw"]))).toBeNull();
+    // Not a language at all (a typo, an old build's code) — fall back to the
+    // defaults rather than asking a route to translate into "xx". The example
+    // here used to be "sw": Swahili was unsupported when this test was
+    // written and is a real catalog language since 8/17, which is the whole
+    // point of the change — so the fence moved to a code that can never be
+    // one, not away from the behavior.
+    expect(parseStoredPair(JSON.stringify(["en", "xx"]))).toBeNull();
+    expect(parseStoredPair(JSON.stringify(["en", "english"]))).toBeNull();
+    // …and a language that only became reachable in 8/17 now survives, the
+    // same as the six that were there before it.
+    expect(parseStoredPair(JSON.stringify(["en", "sw"]))).toEqual(["en", "sw"]);
     // Doubled sides can't happen through nextPair, but hand-edited storage
     // must not get past this either.
     expect(parseStoredPair(JSON.stringify(["it", "it"]))).toBeNull();
