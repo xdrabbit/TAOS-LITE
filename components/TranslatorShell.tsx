@@ -13,6 +13,7 @@ import {
 import { HistoryDrawer } from "./HistoryDrawer";
 import { InstallPrompt } from "./InstallPrompt";
 import { Paywall } from "./Paywall";
+import { QrShareModal } from "./QrShareModal";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { isFounder } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
@@ -262,6 +263,7 @@ export function TranslatorShell({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [togetherMenuOpen, setTogetherMenuOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Avatar initial derived from the signed-in email (the only identity the
   // component receives — Profile has no name field). Falls back to a generic
@@ -856,6 +858,32 @@ export function TranslatorShell({
             >
               Translate
             </a>
+            {/* Share: one icon-only button, no label — the point is to hand
+                the app to someone you just met without the translator screen
+                growing another pill. */}
+            <button
+              type="button"
+              onClick={() => setShareOpen(true)}
+              aria-label="Share TAOS / Compartir TAOS"
+              title="Share TAOS · Compartir"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-4 w-4"
+              >
+                <circle cx="18" cy="5" r="3" />
+                <circle cx="6" cy="12" r="3" />
+                <circle cx="18" cy="19" r="3" />
+                <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
+              </svg>
+            </button>
             {/* Tutor lives in the avatar menu (with History) — Tom, 7/27:
                 one fewer pill keeps the header from crowding phone widths. */}
             <div ref={accountMenuRef} className="relative">
@@ -1220,6 +1248,7 @@ export function TranslatorShell({
       </div>
 
       <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <QrShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
     </main>
   );
 }
