@@ -109,6 +109,26 @@ export async function sendVoiceMessage(
   return payload.message;
 }
 
+/**
+ * Change MY language in this thread. The partner's is set on their own phone
+ * — see app/api/chat/language/route.ts for why that is not negotiable.
+ */
+export async function setMyChatLanguage(threadId: string, lang: string): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/chat/language", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ threadId, lang })
+  });
+  const payload = (await res.json().catch(() => ({}))) as { lang?: string; error?: string };
+  if (!res.ok || !payload.lang) {
+    throw new Error(payload.error || "Could not save the language.");
+  }
+  return payload.lang;
+}
+
 // Short-lived signed URL for a voice note's audio (storage RLS restricts this
 // to members of the thread in the path).
 export async function getVoiceUrl(audioPath: string): Promise<string> {

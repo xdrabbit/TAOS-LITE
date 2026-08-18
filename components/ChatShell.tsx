@@ -6,6 +6,15 @@ import { supabase } from "@/lib/supabase";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { TextOnlyNote } from "./TextOnly";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { languageNative, type LanguageCode } from "@/lib/languages/catalog";
+import { isPairLangCode, type PairLangCode } from "@/lib/translate/pair";
+import {
+  readStoredRecent,
+  rememberLanguage,
+  visiblePills,
+  writeStoredRecent
+} from "@/lib/translate/pinned";
 import {
   getChatThread,
   getVoiceUrl,
@@ -13,6 +22,7 @@ import {
   markThreadRead,
   sendMessage,
   sendVoiceMessage,
+  setMyChatLanguage,
   subscribeMessages,
   type ChatMessageRow,
   type ChatThreadInfo
@@ -86,6 +96,27 @@ export function ChatShell(): JSX.Element {
   const [recording, setRecording] = useState(false);
   const [recordSec, setRecordSec] = useState(0);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
+
+  // ── The language picker ───────────────────────────────────────────────────
+  // Same row and same sheet as the other three screens
+  // (components/LanguagePicker.tsx), wired to a different kind of state.
+  //
+  // /chat's languages are NOT the phone's pair. They live one per member on
+  // the thread (taos_lite_chat_members.lang), because they are what the send
+  // and voice routes translate between and the person they matter most to is
+  // on the other phone. So a tap here writes to the database, not to
+  // localStorage, and it can only ever move MY side: the partner's language
+  // is theirs to pick, on their device.
+  //
+  // What IS shared is the ROW — the recency list from lib/translate/pinned.ts.
+  // Reaching for Italian on /translate should leave Italian a tap away here,
+  // even though the two screens keep their languages in different places.
+  const [recent, setRecent] = useState<readonly PairLangCode[]>([]);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [savingLang, setSavingLang] = useState(false);
+  useEffect(() => {
+    setRecent(readStoredRecent());
+  }, []);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const nextTempIdRef = useRef(1);
@@ -372,6 +403,45 @@ export function ChatShell(): JSX.Element {
 
   useEffect(() => cleanupRecording, [cleanupRecording]);
 
+  // Pick the language I write in. Optimistic: the row moves under the thumb
+  // and rolls back if the write fails, because the alternative is a pill that
+  // does nothing for a round trip and gets tapped again.
+  const selectMyLanguage = useCallback(
+    (code: LanguageCode) => {
+      setSheetOpen(false);
+      setRecent((current) => {
+        const updated = rememberLanguage(current, code);
+        writeStoredRecent(updated);
+        return updated;
+      });
+      const t = thread;
+      if (!t || t.myLang === code || savingLang) return;
+      const previous = t.myLang;
+      setThread({ ...t, myLang: code });
+      setSavingLang(true);
+      setMyChatLanguage(t.threadId, code)
+        .then((saved) => {
+          setThread((current) => (current ? { ...current, myLang: saved } : current));
+          setError(null);
+        })
+        .catch((e: unknown) => {
+          setThread((current) => (current ? { ...current, myLang: previous } : current));
+          setError(e instanceof Error ? e.message : "Could not save the language.");
+        })
+        .finally(() => setSavingLang(false));
+    },
+    [thread, savingLang]
+  );
+
+  // The pair for the row's purposes: what I write in, and what my partner
+  // reads. Both always have a pill — a row that could not show the language
+  // this thread is actually translating into would be lying about it.
+  const myLang: PairLangCode = isPairLangCode(thread?.myLang) ? thread.myLang : "en";
+  const partnerLang: PairLangCode | null = isPairLangCode(thread?.partnerLang)
+    ? thread.partnerLang
+    : null;
+  const pills = visiblePills([myLang, partnerLang ?? myLang], recent);
+
   if (!ready) {
     return (
       <main className="flex min-h-screen items-center justify-center text-amber-100/60">
@@ -399,6 +469,29 @@ export function ChatShell(): JSX.Element {
         <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
           Private chat · Chat privado
         </div>
+
+        {/* The language I write in. The solid pill is the one a tap sets —
+            mine — and the outlined one is my partner's, which their phone
+            owns. Everything I send is translated into theirs on the way out
+            (app/api/chat/send). */}
+        {thread ? (
+          <>
+            <LanguagePillRow
+              pills={pills}
+              selected={myLang}
+              paired={partnerLang}
+              caption="You write in · Escribes en"
+              sheetOpen={sheetOpen}
+              onSelect={selectMyLanguage}
+              onOpenSheet={() => setSheetOpen(true)}
+            />
+            <p className="-mt-1 text-xs text-amber-100/50">
+              {partnerLang
+                ? `${languageNative(myLang)} → ${languageNative(partnerLang)}`
+                : `${languageNative(myLang)} — waiting for someone to join`}
+            </p>
+          </>
+        ) : null}
 
         {threadMissing ? (
           <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-4 text-sm text-amber-100/80">
@@ -594,6 +687,16 @@ export function ChatShell(): JSX.Element {
           </div>
         )}
       </div>
+
+      <LanguageSheet
+        open={sheetOpen}
+        selected={myLang}
+        paired={partnerLang}
+        pairedLabel="Theirs"
+        caption="You write in · Escribes en"
+        onSelect={selectMyLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
     </main>
   );
 }
