@@ -1,42 +1,50 @@
+// The server's view of the language catalog.
+//
+// This file used to BE the list — 13 hand-maintained {code,label} pairs that
+// /api/translate, /api/vision and /api/video/process validated against, while
+// TranslatorShell kept its own shorter one. Two lists, one of them always the
+// stale one. Now both derive from lib/languages/catalog.ts and this module is
+// just the shape the routes and the <select>s already expect: code + ENGLISH
+// label, which is the pair the translation prompts interpolate.
+//
+// Widening it from 13 to 100 is the point (8/17): the allow-list was the thing
+// standing between the phone and every language the pipeline could already
+// handle. Anything Whisper can hear now passes validation and gets translated;
+// whether it also comes back as AUDIO is the catalog's `tts` flag, asked
+// through canSpeak() at the point of synthesis — not here.
+import {
+  isLanguageCode,
+  languageLabel,
+  SHEET_LANGUAGES,
+  type LanguageCode
+} from "@/lib/languages/catalog";
+
 export const AUTO_DETECT_LANGUAGE = "auto" as const;
 export const DEFAULT_SOURCE_LANGUAGE = "en" as const;
 export const DEFAULT_TARGET_LANGUAGE = "es" as const;
 
-export const LANGUAGE_OPTIONS = [
-  { code: "en", label: "English" },
-  { code: "es", label: "Spanish" },
-  // Bosnian: added 8/17 for the Bosnia trip. Whisper detects it, and the
-  // ElevenLabs multilingual models speak it (the model has no separate
-  // Bosnian; it renders the Latin-script text with Croatian/Serbian
-  // pronunciation, which is the same language for TTS purposes).
-  { code: "bs", label: "Bosnian" },
-  { code: "fr", label: "French" },
-  { code: "de", label: "German" },
-  { code: "it", label: "Italian" },
-  { code: "pt", label: "Portuguese" },
-  { code: "ja", label: "Japanese" },
-  { code: "ko", label: "Korean" },
-  { code: "zh", label: "Chinese" },
-  { code: "yue", label: "Cantonese" },
-  { code: "hi", label: "Hindi" },
-  { code: "ar", label: "Arabic" },
-  { code: "ru", label: "Russian" }
-] as const;
+export interface LanguageOption {
+  code: LanguageCode;
+  label: string;
+}
 
-export type SupportedLanguageCode = (typeof LANGUAGE_OPTIONS)[number]["code"];
-export type SourceLanguageCode = SupportedLanguageCode | typeof AUTO_DETECT_LANGUAGE;
-
-export const SOURCE_LANGUAGE_OPTIONS = [
-  { code: AUTO_DETECT_LANGUAGE, label: "Auto detect" },
-  ...LANGUAGE_OPTIONS
-] as const;
-
-const SUPPORTED_LANGUAGE_SET = new Set<SupportedLanguageCode>(
-  LANGUAGE_OPTIONS.map((language) => language.code)
+// In the catalog's picker order — the twenty most useful first, then
+// alphabetical — so the dropdowns that render this straight into <option>s
+// (/video, /vision, /live) still open on the languages people actually pick.
+export const LANGUAGE_OPTIONS: readonly LanguageOption[] = SHEET_LANGUAGES.map(
+  ({ code, label }) => ({ code, label })
 );
 
+export type SupportedLanguageCode = LanguageCode;
+export type SourceLanguageCode = SupportedLanguageCode | typeof AUTO_DETECT_LANGUAGE;
+
+export const SOURCE_LANGUAGE_OPTIONS: readonly { code: SourceLanguageCode; label: string }[] = [
+  { code: AUTO_DETECT_LANGUAGE, label: "Auto detect" },
+  ...LANGUAGE_OPTIONS
+];
+
 export function isSupportedLanguageCode(value: string): value is SupportedLanguageCode {
-  return SUPPORTED_LANGUAGE_SET.has(value as SupportedLanguageCode);
+  return isLanguageCode(value);
 }
 
 export function isSourceLanguageCode(value: string): value is SourceLanguageCode {
@@ -48,5 +56,5 @@ export function getLanguageLabel(code: SourceLanguageCode | SupportedLanguageCod
     return "Auto detect";
   }
 
-  return LANGUAGE_OPTIONS.find((language) => language.code === code)?.label ?? code.toUpperCase();
+  return languageLabel(code);
 }
