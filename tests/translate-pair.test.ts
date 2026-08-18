@@ -5,7 +5,9 @@ import {
   DEFAULT_PAIR,
   isPairLangCode,
   nextPair,
-  parseStoredPair
+  parseStoredPair,
+  otherInPair,
+  pairDirection
 } from "@/lib/translate/pair";
 
 describe("language pills: tapping a language picks the OUTPUT", () => {
@@ -90,5 +92,54 @@ describe("the saved pair: what survives on a phone", () => {
       expect(isPairLangCode(a)).toBe(true);
       expect(isPairLangCode(b)).toBe(true);
     }
+  });
+});
+
+// ── Which way a turn runs ──────────────────────────────────────────────────
+// The streaming screens feed these two straight into their request bodies —
+// /live into /api/live-translate and /api/tts, /tabletop into the realtime
+// session's per-turn instructions. Getting them backwards does not throw; it
+// translates someone's own words back at them, in their own language, which
+// looks like the model failing rather than the wiring.
+describe("pairDirection", () => {
+  it("sends a turn to the OTHER side, whoever is talking", () => {
+    const pair = ["en", "it"] as const;
+    expect(pairDirection(pair, "mine")).toEqual({ sourceLanguage: "en", targetLanguage: "it" });
+    expect(pairDirection(pair, "theirs")).toEqual({ sourceLanguage: "it", targetLanguage: "en" });
+  });
+
+  it("is the identity of /live: they speak, I read my own language", () => {
+    // /live is the screen where the persisted pair pays off. A phone left on
+    // [en, it] after ordering dinner follows that same table with no taps —
+    // Italian in, English out.
+    expect(pairDirection(["en", "it"], "theirs")).toEqual({
+      sourceLanguage: "it",
+      targetLanguage: "en"
+    });
+  });
+
+  it("never returns a language to itself", () => {
+    for (const pair of [["en", "es"], ["bs", "it"], ["ja", "th"]] as const) {
+      for (const side of ["mine", "theirs"] as const) {
+        const d = pairDirection(pair, side);
+        expect(d.sourceLanguage).not.toBe(d.targetLanguage);
+      }
+    }
+  });
+});
+
+describe("otherInPair", () => {
+  it("answers the side a speaker is being translated for", () => {
+    expect(otherInPair(["en", "es"], "en")).toBe("es");
+    expect(otherInPair(["en", "es"], "es")).toBe("en");
+    // /tabletop: whoever tapped is the source, the far end is the target.
+    expect(otherInPair(["es", "bs"], "bs")).toBe("es");
+  });
+
+  it("keeps an outsider's turn inside the conversation", () => {
+    // A code that is not at the table at all (a stale exchange from before a
+    // pill tap) answers with the pair's own second side rather than echoing
+    // the outsider's language back at them.
+    expect(otherInPair(["en", "it"], "ja")).toBe("en");
   });
 });

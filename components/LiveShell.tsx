@@ -12,7 +12,7 @@ import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { recognitionTag } from "@/lib/languages/recognition";
 import { languageNative } from "@/lib/languages/catalog";
-import type { PairLangCode } from "@/lib/translate/pair";
+import { pairDirection, type PairDirection, type PairLangCode, type PairSide } from "@/lib/translate/pair";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -37,23 +37,8 @@ type Engine = "ambient" | "device";
 // beside it — the last hard-coded language pair in /live. What the toggle
 // actually asks has never changed: "who is talking, them or me?" The pair
 // (lib/translate/pair.ts) answers which languages that means.
-type Side = "theirs" | "mine";
+type Side = PairSide;
 
-interface DeviceLanguages {
-  sourceLanguage: PairLangCode;
-  targetLanguage: PairLangCode;
-}
-
-/** Who is speaking, and therefore who is being translated for. */
-function deviceLanguages(
-  pair: readonly [PairLangCode, PairLangCode],
-  side: Side
-): DeviceLanguages {
-  const [mine, theirs] = pair;
-  return side === "theirs"
-    ? { sourceLanguage: theirs, targetLanguage: mine }
-    : { sourceLanguage: mine, targetLanguage: theirs };
-}
 
 // Rolling context sent to /api/live-translate so its guesses improve.
 const MAX_CONTEXT = 10;
@@ -167,7 +152,7 @@ export function LiveShell(): JSX.Element {
   const voiceOnRef = useRef(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
-  const speechQueueRef = useRef<{ text: string; languages: DeviceLanguages; queuedAt: number }[]>(
+  const speechQueueRef = useRef<{ text: string; languages: PairDirection; queuedAt: number }[]>(
     []
   );
   const playingRef = useRef(false);
@@ -273,7 +258,7 @@ export function LiveShell(): JSX.Element {
   const enqueueSpeech = useCallback(
     (text: string) => {
       if (!voiceOnRef.current) return;
-      const languages = deviceLanguages(pairRef.current, sideRef.current);
+      const languages = pairDirection(pairRef.current, sideRef.current);
       // Tier 2 (lib/languages/catalog.ts): nothing can say this language, so
       // it never enters the queue — no request, no wait, no error. The screen
       // says "text only" on the voice button so this was never a surprise.
@@ -322,7 +307,7 @@ export function LiveShell(): JSX.Element {
     (chunk: string) => {
       const text = chunk.trim();
       if (!text) return;
-      const languages = deviceLanguages(pairRef.current, sideRef.current);
+      const languages = pairDirection(pairRef.current, sideRef.current);
       const context = contextRef.current.slice(-MAX_CONTEXT);
       const seq = (utterSeqRef.current += 1);
       const startedAt = Date.now();
@@ -441,7 +426,7 @@ export function LiveShell(): JSX.Element {
     const rec = new Ctor();
     // The browser wants BCP-47, the app speaks Whisper's codes
     // (lib/languages/recognition.ts bridges the two).
-    rec.lang = recognitionTag(deviceLanguages(pairRef.current, sideRef.current).sourceLanguage);
+    rec.lang = recognitionTag(pairDirection(pairRef.current, sideRef.current).sourceLanguage);
     rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 1;
@@ -742,7 +727,7 @@ export function LiveShell(): JSX.Element {
   // should say that rather than sit there claiming "Voice on" over silence.
   // Ambient AI speaks inside the realtime session and never asks /api/tts, so
   // it is not subject to this.
-  const spoken = deviceLanguages(pair, side);
+  const spoken = pairDirection(pair, side);
   const readoutTextOnly = engine === "device" && isTextOnlyLanguage(spoken.targetLanguage);
   // What the screen is doing right now, as a pair of language names. Ambient
   // AI always runs room → you; the on-device engine follows the side toggle.

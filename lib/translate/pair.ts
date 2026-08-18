@@ -33,6 +33,54 @@ export function nextPair<T extends string>(
   return [mine, tapped];
 }
 
+// ── Which way round a turn runs ────────────────────────────────────────────
+// The pair says WHICH two languages; these say which of them is the source
+// and which the target for one particular turn. Every screen needs this and
+// each of them used to answer it privately: /live with a DIRECTIONS table
+// keyed by "es-en", /tabletop with an otherLang() that flipped between two
+// hard-coded codes. Both are the same two lines, and both feed the streaming
+// pipeline directly — which is exactly the sort of thing worth being able to
+// unit-test without a phone in the loop.
+
+/** Who is talking: the phone's owner, or the person they are talking with. */
+export type PairSide = "mine" | "theirs";
+
+export interface PairDirection {
+  sourceLanguage: PairLangCode;
+  targetLanguage: PairLangCode;
+}
+
+/**
+ * Source and target for a turn, given who is speaking.
+ *
+ * Named to match the /api/tts and /api/live-translate request bodies so it
+ * can be spread straight into them — the point is that no screen gets to
+ * assemble these two fields by hand any more.
+ */
+export function pairDirection(
+  pair: readonly [PairLangCode, PairLangCode],
+  speaking: PairSide
+): PairDirection {
+  const [mine, theirs] = pair;
+  return speaking === "theirs"
+    ? { sourceLanguage: theirs, targetLanguage: mine }
+    : { sourceLanguage: mine, targetLanguage: theirs };
+}
+
+/**
+ * The OTHER side of the pair from `code` — who a turn spoken in `code` is
+ * being translated for. A code that is not in the pair at all answers with
+ * the pair's own second side, which is the only sane fallback: it keeps the
+ * result inside the conversation rather than echoing an outsider's language
+ * back at them.
+ */
+export function otherInPair(
+  pair: readonly [PairLangCode, PairLangCode],
+  code: PairLangCode
+): PairLangCode {
+  return code === pair[0] ? pair[1] : pair[0];
+}
+
 // ── The pair as shared state ───────────────────────────────────────────────
 // The pair started life inside TranslatorShell, but it is not /translate's
 // private business: it is the answer to "what languages is this phone's owner

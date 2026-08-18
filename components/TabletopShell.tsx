@@ -10,7 +10,10 @@ import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { TextOnlyNote } from "./TextOnly";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { languageNative } from "@/lib/languages/catalog";
-import type { PairLangCode } from "@/lib/translate/pair";
+// Two people, two languages: what one says is always spoken to the other,
+// so a turn's target is the OTHER side of the pair — which is also the code
+// the tier check reads before asking /api/tts for a voice.
+import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -40,12 +43,6 @@ type TurnState =
   | { kind: "recording"; side: Lang }
   | { kind: "processing"; side: Lang };
 
-// Two people, two languages: what one says is always spoken to the other. The
-// target of a turn is therefore the OTHER side, which is also the language
-// /api/tts is asked for — so this is the code the tier check reads.
-function otherLang(pair: readonly [Lang, Lang], side: Lang): Lang {
-  return side === pair[0] ? pair[1] : pair[0];
-}
 
 interface Exchange {
   /** Language the speaker used. */
@@ -238,7 +235,7 @@ export function TabletopShell(): JSX.Element {
         {
           text: ex.translation,
           sourceLanguage: ex.from,
-          targetLanguage: otherLang(pairNow, ex.from)
+          targetLanguage: otherInPair(pairNow, ex.from)
           // No voice override: the shared /api/tts voice-follows-speaker rule
           // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
           // Spanish in Tom's clone) — identical on every screen.
@@ -283,7 +280,7 @@ export function TabletopShell(): JSX.Element {
       // Whoever tapped is the source; the other end of the table is the
       // target. Both are catalog codes — the direction string that used to
       // live here could only spell two of them.
-      const direction: TabletopDirection = { source: side, target: otherLang(pair, side) };
+      const direction: TabletopDirection = { source: side, target: otherInPair(pair, side) };
       try {
         if (!liveRef.current) {
           setTurn({ kind: "connecting", side });
@@ -361,7 +358,7 @@ export function TabletopShell(): JSX.Element {
         const form = new FormData();
         form.append("audio", new File([blob], "turn", { type: blob.type || "audio/webm" }));
         form.append("sourceLanguage", side);
-        form.append("targetLanguage", otherLang(pair, side));
+        form.append("targetLanguage", otherInPair(pair, side));
         form.append("tone", "casual");
         const res = await fetch("/api/translate", { method: "POST", body: form });
         const payload = (await res.json().catch(() => ({}))) as {
