@@ -264,6 +264,17 @@ function copyFor(code: LangCode): (typeof STRINGS)[string] {
   return STRINGS[code] ?? STRINGS.en;
 }
 
+// In auto-detect the record button greets BOTH sides at once ("Speak ·
+// Hablar") so neither person has to wait their turn to read it. That only
+// works while the two have different copy — and since 8/17 a pair can hold two
+// languages that both fall back to English, which would render "Speak ·
+// Speak". A repeat collapses to one.
+function speakPrompt(pair: readonly [LangCode, LangCode]): string {
+  const mine = copyFor(pair[0]).speak;
+  const theirs = copyFor(pair[1]).speak;
+  return mine === theirs ? mine : `${mine} · ${theirs}`;
+}
+
 // Liz's call (8/9, in her words): the Casual/Detallado toggle kept getting
 // forgotten before long turns and casual summarized too much — so /translate
 // always sends "detailed". Talk as long as you want; nothing is trimmed. The
@@ -1482,7 +1493,7 @@ export function TranslatorShell({
               : processing
                 ? s.working
                 : autoDetect
-                  ? `${copyFor(pair[0]).speak} · ${copyFor(pair[1]).speak}`
+                  ? speakPrompt(pair)
                   : `${s.speak} ${speaker.label}`}
           </button>
 
