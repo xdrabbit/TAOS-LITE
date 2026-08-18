@@ -294,6 +294,42 @@ function fileNameFor(mime: string): string {
   return "audio.webm";
 }
 
+// Shared pill chrome — the picker row and the "Other" toggle are the same
+// control at different jobs, so the classes live in one place.
+const PILL_CLASS =
+  "rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95";
+const PILL_SELECTED_CLASS = "border-amber-300 bg-amber-400 text-stone-950"; // the output
+const PILL_MINE_CLASS = "border-amber-300 bg-transparent text-amber-200"; // your side
+const PILL_IDLE_CLASS = "border-amber-300/30 bg-amber-400/10 text-amber-200";
+
+function LanguagePill({
+  code,
+  output,
+  mine,
+  onSelect
+}: {
+  code: LangCode;
+  output: LangCode;
+  mine: LangCode;
+  onSelect: (code: LangCode) => void;
+}): JSX.Element {
+  const isOutput = code === output;
+  const isMine = code === mine;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(code)}
+      aria-pressed={isOutput}
+      title={isMine ? `${SPEAKERS[code].label} — tap to flip` : SPEAKERS[code].label}
+      className={`${PILL_CLASS} ${
+        isOutput ? PILL_SELECTED_CLASS : isMine ? PILL_MINE_CLASS : PILL_IDLE_CLASS
+      }`}
+    >
+      {FLAGS[code]} {code.toUpperCase()}
+    </button>
+  );
+}
+
 export function TranslatorShell({
   email,
   profile,
@@ -1091,38 +1127,21 @@ export function TranslatorShell({
             Translate into · Traducir a
           </div>
           <div className="flex flex-wrap gap-2">
-            {PILL_LANGUAGES.map((code) => {
-              const isOutput = code === output;
-              const isMine = code === mine;
-              return (
-                <button
-                  key={code}
-                  type="button"
-                  onClick={() => selectLanguage(code)}
-                  aria-pressed={isOutput}
-                  title={
-                    isMine ? `${SPEAKERS[code].label} — tap to flip` : SPEAKERS[code].label
-                  }
-                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                    isOutput
-                      ? "border-amber-300 bg-amber-400 text-stone-950"
-                      : isMine
-                        ? "border-amber-300 bg-transparent text-amber-200"
-                        : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-                  }`}
-                >
-                  {FLAGS[code]} {code.toUpperCase()}
-                </button>
-              );
-            })}
+            {PILL_LANGUAGES.map((code) => (
+              <LanguagePill
+                key={code}
+                code={code}
+                output={output}
+                mine={mine}
+                onSelect={selectLanguage}
+              />
+            ))}
             <button
               type="button"
               onClick={() => setOtherOpen((o) => !o)}
               aria-expanded={otherOpen}
-              className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                activeOther
-                  ? "border-amber-300 bg-amber-400 text-stone-950"
-                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+              className={`${PILL_CLASS} ${
+                activeOther ? PILL_SELECTED_CLASS : PILL_IDLE_CLASS
               }`}
             >
               {activeOther ? `${FLAGS[activeOther]} ${activeOther.toUpperCase()}` : "Other · Otros"}{" "}
@@ -1131,28 +1150,15 @@ export function TranslatorShell({
           </div>
           {otherOpen ? (
             <div className="flex flex-wrap gap-2">
-              {MORE_LANGUAGES.map((code) => {
-                const isOutput = code === output;
-                const isMine = code === mine;
-                return (
-                  <button
-                    key={code}
-                    type="button"
-                    onClick={() => selectLanguage(code)}
-                    aria-pressed={isOutput}
-                    title={SPEAKERS[code].label}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                      isOutput
-                        ? "border-amber-300 bg-amber-400 text-stone-950"
-                        : isMine
-                          ? "border-amber-300 bg-transparent text-amber-200"
-                          : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-                    }`}
-                  >
-                    {FLAGS[code]} {code.toUpperCase()}
-                  </button>
-                );
-              })}
+              {MORE_LANGUAGES.map((code) => (
+                <LanguagePill
+                  key={code}
+                  code={code}
+                  output={output}
+                  mine={mine}
+                  onSelect={selectLanguage}
+                />
+              ))}
             </div>
           ) : null}
         </div>
