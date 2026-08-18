@@ -39,6 +39,16 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- Real app icon — the home-screen icon shipped with trip mode is a generated
+  placeholder (an amber speech bubble; scripts/gen-icons.mjs redraws every
+  size). Swap in real art before the app store push or any wide launch.
+  (added 2026-08-17)
+- Bosnian voice check on the trip — Bosnian text synthesizes fine, but
+  ElevenLabs has no Bosnian in its multilingual models; it renders the text
+  with Croatian/Serbian pronunciation, which should pass but has never been
+  heard by anyone who speaks it. First local who reacts to the voice is the
+  verdict — same kind of field check as the Cantonese one above. (added
+  2026-08-17)
 - Expand histories to the other features — Tom (8/16): "can we think about
   expanding histories to the other features. I know that's big and will likely
   require some database work." Today only /translate saves history. Sketch:
@@ -110,6 +120,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- Trip mode for Bosnia + Italy — three things in one branch: TAOS is
+  installable (Add to Home Screen, standalone, real icon), a QR share modal
+  behind one header button hands the app to someone across a table, and
+  /translate's picker is now one pill per LANGUAGE (EN · ES · BS · IT, guests
+  one tap deeper) with Bosnian and Italian wired through detect → translate →
+  voice — 2026-08-17, branch feat/trip-mode
 - v1 release gate — customers see Translate, Live, Chat, Tutor, Photo;
   Call/Tabletop/Video show "Coming soon" and hide from nav unless the
   signed-in email is a founder (Tom hardcoded; Liz via
