@@ -51,22 +51,22 @@ type Status = "idle" | "recording" | "processing" | "done" | "error";
 
 interface Speaker {
   code: LangCode;
-  who: string;
   label: string; // language name in its own language
 }
 
-// Tom and Liz are the household. Everyone else is a guest, not a named member
-// of it — the people met on the road (8/17: Bosnia + Italy), the
-// Mandarin/Cantonese guests, and now anyone else the catalog can reach.
-const HOUSEHOLD: Record<string, string> = { en: "Tom", es: "Liz" };
-
+// A speaker is identified by their LANGUAGE, never by name. There used to be a
+// household table here (the app began as a two-person app) that put a first
+// name in front of the language for subscribers. The app is handed to
+// strangers now — a QR code at a table — and a stranger who subscribes should
+// never read someone else's name on their own phone. The language's name in
+// its OWN language is what the person across the table recognizes anyway,
+// which is what the beta tier has shown all along.
+//
 // This was a hand-written table of six, and it is the reason a seventh
 // language was never a one-line change: a code without a row here crashed the
-// shell. The label — the language's name in its OWN language, which is what
-// someone across a table can recognize — comes from the catalog now, for all
-// hundred of them.
+// shell. The label comes from the catalog now, for all hundred of them.
 function speakerFor(code: LangCode): Speaker {
-  return { code, who: HOUSEHOLD[code] ?? "Guest", label: languageNative(code) };
+  return { code, label: languageNative(code) };
 }
 
 // ── Conversation languages ─────────────────────────────────────────────────
@@ -1355,12 +1355,9 @@ export function TranslatorShell({
                 Auto-detect · Detección automática
               </div>
               <div className="text-2xl font-semibold text-white">
-                {/* Names are the household's UX; beta testers see just the
-                    language (they are not Tom or Liz). */}
+                {/* The language, never a name — see speakerFor above. */}
                 {status === "done"
-                  ? subscriber
-                    ? `${speaker.who} · ${speaker.label}`
-                    : speaker.label
+                  ? speaker.label
                   : `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`}
               </div>
             </div>
@@ -1376,9 +1373,7 @@ export function TranslatorShell({
               <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
                 {s.speakingNow}
               </div>
-              <div className="text-2xl font-semibold text-white">
-                {subscriber ? `${speaker.who} · ${speaker.label}` : speaker.label}
-              </div>
+              <div className="text-2xl font-semibold text-white">{speaker.label}</div>
             </div>
             <div className="flex flex-col items-center gap-1 text-amber-300">
               <span className="text-2xl">⇄</span>
@@ -1392,9 +1387,8 @@ export function TranslatorShell({
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
             <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
               <span>
-                {/* Neutral for the beta: "Translation · English", not "For Tom"
-                    — testers aren't Tom or Liz (7/27). Written in the
-                    LISTENER's language like before. */}
+                {/* Neutral: "Translation · English", never "For <name>".
+                    Written in the LISTENER's language like before. */}
                 {copyFor(target).translationLabel} · {listener.label}
               </span>
               {translation ? (

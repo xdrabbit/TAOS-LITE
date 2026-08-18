@@ -38,7 +38,7 @@ interface DirectionMeta {
 }
 
 const DIRECTIONS: Record<Direction, DirectionMeta> = {
-  "es-en": { label: "Liz (ES → EN)", recognitionLang: "es-ES" },
+  "es-en": { label: "Them · Ellos (ES → EN)", recognitionLang: "es-ES" },
   "en-es": { label: "Me (EN → ES)", recognitionLang: "en-US" }
 };
 

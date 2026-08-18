@@ -17,7 +17,7 @@ type Direction = "en-es" | "es-en";
 
 const DIRECTIONS: Record<Direction, { label: string; placeholder: string }> = {
   "en-es": { label: "You (EN → ES)", placeholder: "Type in English…" },
-  "es-en": { label: "Liz (ES → EN)", placeholder: "Escribe en español…" }
+  "es-en": { label: "Them · Ellos (ES → EN)", placeholder: "Escribe en español…" }
 };
 
 function formatBuilt(iso: string | null): string {
