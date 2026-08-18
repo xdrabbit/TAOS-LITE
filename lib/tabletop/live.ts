@@ -59,7 +59,8 @@ const ENDTURN_DRAIN_TIMEOUT_MS = 8000;
 const IDLE_DISCONNECT_MS = 5 * 60 * 1000;
 
 export async function startTabletopLive(
-  events: TabletopLiveEvents
+  events: TabletopLiveEvents,
+  openingDirection: TabletopDirection = { source: "en", target: "es" }
 ): Promise<ActiveTabletopLive> {
   let pc: RTCPeerConnection | null = null;
   let dc: RTCDataChannel | null = null;
@@ -142,10 +143,13 @@ export async function startTabletopLive(
     });
 
     setState("minting");
+    // The mint only needs A direction to build its first instructions with —
+    // every turn sends its own through session.update below. Passing the
+    // table's real opening direction just saves the first turn one update.
     const mintRes = await fetch("/api/tabletop/realtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ direction: "en-es" })
+      body: JSON.stringify(openingDirection)
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {

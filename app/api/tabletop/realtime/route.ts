@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildTurnInstructions, type TabletopDirection } from "@/lib/tabletop/instructions";
+import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -27,8 +28,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const body = (await req.json().catch(() => ({}))) as { direction?: string };
-  const direction: TabletopDirection = body.direction === "es-en" ? "es-en" : "en-es";
+  // The two ends of the table, as catalog codes. Unknown or missing values
+  // fall back to the pair the table shipped with rather than reaching the
+  // prompt raw — an interpreter told to output "xx" writes whatever it likes.
+  const body = (await req.json().catch(() => ({}))) as {
+    source?: string;
+    target?: string;
+  };
+  const source =
+    typeof body.source === "string" && isSupportedLanguageCode(body.source) ? body.source : "en";
+  const rawTarget =
+    typeof body.target === "string" && isSupportedLanguageCode(body.target) ? body.target : "es";
+  // Never a table of one repeated language: that asks the model to interpret
+  // a language into itself (the doubled-side rule, lib/translate/pair.ts).
+  const target = rawTarget === source ? (source === "en" ? "es" : "en") : rawTarget;
+  const direction: TabletopDirection = { source, target };
 
   // Same model policy as /live and /call: full gpt-realtime (mini drifted at
   // the 7/8 field test). Reuses the /live override env, plus its own.
