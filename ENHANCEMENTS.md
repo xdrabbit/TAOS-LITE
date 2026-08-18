@@ -110,6 +110,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 - Multi-language phase 2 — bring the language-pair picker to /tabletop
   (most likely place to meet strangers). Phase 3: /live and /call. (added
   2026-08-03)
+- Text-only languages on the OTHER screens — /translate handles tier 2
+  gracefully (skips TTS, says "Text only"). /chat, /live, /tabletop and /tutor
+  now let you pick those languages too and will surface a plain error from
+  /api/tts instead. Give them the same quiet degrade. (added 2026-08-17, from
+  the language-catalog change)
 - Guest voice clones — quick-clone a recurring guest so their translations
   play in their real voice instead of the stock one. (added 2026-08-03)
 - Use lib/net's fetchWithRetry in /chat and /live fetches — /translate,
@@ -118,7 +123,62 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 - Decide the fate of the stale `dev` branch — merged-history only or does it
   hold anything worth keeping? (added 2026-08-03)
 
+## Languages: the two tiers, and adding one
+
+TAOS speaks **100 languages** as of 2026-08-17 — the whole list lives in
+`lib/languages/catalog.ts` and nowhere else. Everything derives from it: the
+server allow-list (`lib/realtime/languages.ts`), the /translate pills, the
+search sheet, the /video and /vision dropdowns, and the photo target.
+
+**Tier 1 (34) — the full experience.** Heard, translated, and spoken back.
+These are the languages ElevenLabs' model can actually say out loud: the 32 its
+default model reports, plus Bosnian (which has no entry of its own and rides
+Croatian pronunciation) and Cantonese (which routes to `eleven_v3`).
+
+**Tier 2 (66) — text only.** Whisper hears them and the translation is just as
+good; nothing in the pipeline can say them out loud. The app shows the
+translated text, skips synthesis entirely, and says so up front — a muted
+speaker on the pill, "Text only" in the sheet, and "Text only · Solo texto"
+where the Play button would be. No error, no waiting on audio that was never
+coming. Photos are unaffected: /vision never spoke, so a text-only language
+reads a menu exactly as well as any other.
+
+**To add a language**: add one row to `CATALOG` in `lib/languages/catalog.ts`.
+That is the whole job — no second list, no flag table, no shell edit.
+
+- `code` must be the code the transcriber knows it by (Whisper's), because
+  that is the id every route reasons about.
+- `label` is the ENGLISH name and is load-bearing: the translation prompts
+  interpolate it ("The speaker talks in Bosnian"), so it has to read as a
+  language name to a model.
+- `tts` must be CHECKED, never guessed:
+  `curl -H "xi-api-key: $ELEVENLABS_API_KEY" https://api.elevenlabs.io/v1/models`
+  and look for the code in the model TAOS actually uses (`ELEVENLABS_MODEL`,
+  default `eleven_turbo_v2_5`). Getting this wrong is the one failure the
+  tiers exist to prevent: confident audio in the wrong language's phonology,
+  which a listener has no way to recognize as broken.
+
+The app's own CHROME (buttons, status copy) is translated into six languages,
+which is a separate and much smaller list — `STRINGS` in `TranslatorShell`. A
+language without an entry there gets English buttons and a faithful translation
+in its own language, which is the trade that lets the catalog grow without a
+translator. Adding a seventh is a kindness to a language people keep using; it
+is not a prerequisite for using it.
+
 ## Shipped
+
+- Every language, two taps — /translate was rationed to six languages by a pill
+  row that could not grow (EN · ES · BS · IT, with ZH/YUE behind "Other"), and
+  a 13-language allow-list on the server that a seventh pill would have died
+  against. Both are gone. The row now holds the pair plus recently used, capped
+  at five, and a "+ More · Más" opens a search sheet over the whole catalog —
+  type any of a language's names (its own, English, or Spanish; accents
+  optional) and tap it. Picking one pins it and pushes the oldest off, so the
+  row becomes whatever trip you are actually on. It does not reorder as you
+  tap: position comes from the catalog, because a row that reshuffles between
+  two turns is how you tap Italian and get Bosnian across a table. See the
+  language-tier note below for what "every language" means and how to add one
+  — 2026-08-17, branch feat/trip-mode
 
 - Photos come back in YOUR language — /vision used to run on its own "Auto ·
   EN ↔ ES" rule, so Liz photographing a Bosnian menu got English. It now
