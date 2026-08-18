@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CallShell } from "@/components/CallShell";
+import { FounderGate } from "@/components/FounderGate";
 
 export const metadata: Metadata = {
   title: "Translated call · TAOS",
@@ -8,5 +9,11 @@ export const metadata: Metadata = {
 };
 
 export default function CallPage(): JSX.Element {
-  return <CallShell />;
+  // Held back from v1 (lib/release.ts): /call bills two realtime lines while
+  // connected — not sellable until the cost guards land.
+  return (
+    <FounderGate>
+      <CallShell />
+    </FounderGate>
+  );
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { FounderGate } from "@/components/FounderGate";
 import { VideoShell } from "@/components/VideoShell";
 
 export const metadata: Metadata = {
@@ -8,5 +9,10 @@ export const metadata: Metadata = {
 };
 
 export default function VideoPage(): JSX.Element {
-  return <VideoShell />;
+  // Held back from v1 (lib/release.ts).
+  return (
+    <FounderGate>
+      <VideoShell />
+    </FounderGate>
+  );
 }
