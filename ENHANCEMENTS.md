@@ -120,6 +120,19 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- Photos come back in YOUR language — /vision used to run on its own "Auto ·
+  EN ↔ ES" rule, so Liz photographing a Bosnian menu got English. It now
+  starts on the language the /translate pills already saved on that phone
+  (the pair is [yours, theirs]; the photo target is YOUR side), which carries
+  Bosnian and Italian to photos with no new picker. The source language is
+  still never asked for — the model reads it off the image, which is the only
+  thing that works when the sign could be Bosnian, Croatian, or Serbian. The
+  "Read it in" dropdown stays as a per-photo override (useful if the last
+  person holding the phone flipped the pair) and deliberately does not write
+  the pair back. Verified against the real API on rendered photos: a Mostar
+  menu → English and → Spanish, a Firenze pharmacy sign → English and →
+  Spanish, plus the EN⇄ES photos both directions — 2026-08-17, branch
+  feat/trip-mode
 - Personal voices are Tom & Liz only — the cloned ElevenLabs voices used to
   play for anyone who opened TAOS, which stops being fine the moment the QR
   code is handed around on the trip. Now /api/tts resolves a clone only for a
