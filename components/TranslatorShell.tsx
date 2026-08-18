@@ -15,10 +15,11 @@ import { InstallPrompt } from "./InstallPrompt";
 import { Paywall } from "./Paywall";
 import { QrShareModal } from "./QrShareModal";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
+import { nextPair } from "@/lib/translate/pair";
 import { isFounder } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
-type LangCode = "en" | "es" | "zh" | "yue";
+type LangCode = "en" | "es" | "bs" | "it" | "zh" | "yue";
 type Engine = "elevenlabs" | "openai";
 type Status = "idle" | "recording" | "processing" | "done" | "error";
 
@@ -31,31 +32,59 @@ interface Speaker {
 const SPEAKERS: Record<LangCode, Speaker> = {
   es: { code: "es", who: "Liz", label: "Español" },
   en: { code: "en", who: "Tom", label: "English" },
-  // Mandarin/Cantonese speakers are guests, not named members of the household.
+  // Everyone else is a guest, not a named member of the household — the people
+  // met on the road (8/17: Bosnia + Italy) and the Mandarin/Cantonese guests.
+  bs: { code: "bs", who: "Guest", label: "Bosanski" },
+  it: { code: "it", who: "Guest", label: "Italiano" },
   zh: { code: "zh", who: "Guest", label: "中文" },
   yue: { code: "yue", who: "Guest", label: "廣東話" }
 };
 
-// ── Conversation language pairs ─────────────────────────────────────────────
-// Phase 1 of multi-language: /translate operates on a language PAIR. The
-// picker stacks pairs most-recently-used first (persisted) so the daily pair
-// stays one tap away. To add a pair: add its languages to SPEAKERS + STRINGS,
-// then list it here — the server already supports 12 languages.
-const PAIRS: ReadonlyArray<readonly [LangCode, LangCode]> = [
-  ["en", "es"],
-  ["en", "zh"],
-  ["es", "zh"],
-  // 7/25 Yellowstone promise: the Cantonese/Mandarin guests' own pair, plus
-  // English for talking with them.
-  ["zh", "yue"],
-  ["en", "yue"]
-];
-const pairKey = (p: readonly [LangCode, LangCode]): string => `${p[0]}-${p[1]}`;
-// Tom's 8/15 call: the picker is TWO buttons — EN⇄ES (the daily pair) and
-// "Other · Otros" holding every remaining pair. EN⇄ES never hides behind the
-// menu, and the guest pairs stop crowding the top of the screen.
-const HOME_PAIR = PAIRS[0];
-const PAIR_ORDER_STORAGE_KEY = "taos.translate.pairOrder";
+// ── Conversation languages ─────────────────────────────────────────────────
+// The picker is a row of LANGUAGE pills (Tom, 8/17, for the Bosnia + Italy
+// trip). A tap answers one question — "what should come out?" — instead of
+// asking someone to find the right A⇄B pair. The old picker listed one button
+// per pair, which is why it had already been folded into EN⇄ES + "Other"
+// (8/15): pairs grow as the square of the languages, pills grow one per
+// language.
+//
+// Underneath, a turn is still scoped to a PAIR, and that is deliberate:
+// /api/translate's auto-detect decides between exactly TWO languages because
+// detecting among all fourteen gets flaky, while between two it stays sharp.
+// So the pills express the pair as [yours, theirs]:
+//   - tap a new language  -> it becomes THEIRS (the output); your side stays
+//   - tap your own side   -> the two flip (you become the one being translated
+//                            INTO, e.g. so Liz can run ES⇄IT where Tom runs
+//                            EN⇄IT)
+// Only these taps change the pair. Auto-detect still decides, per turn, which
+// of the two languages was actually spoken (that is `source`), so the pill row
+// never shifts under a live conversation.
+const PAIR_STORAGE_KEY = "taos.translate.languages";
+// [yours, theirs]. Spanish first because `source` still defaults to "es" (Liz
+// speaks first, as it has always been) — so a fresh install reads "translate
+// into English", which is exactly the direction the app took before pills.
+const DEFAULT_PAIR: readonly [LangCode, LangCode] = ["es", "en"];
+
+// The trip row. Keep this SHORT — it is the one row that is always on screen.
+const PILL_LANGUAGES: readonly LangCode[] = ["en", "es", "bs", "it"];
+// Everything else stays one tap deeper so the row can never grow again. The
+// Mandarin/Cantonese guests (7/25) live here and are still fully wired.
+const MORE_LANGUAGES: readonly LangCode[] = ["zh", "yue"];
+
+// Flags are the fastest thing to find on a phone at arm's length; the code is
+// underneath for anyone who reads flags differently than intended. EN gets the
+// US flag because this is Tom and Liz's app.
+const FLAGS: Record<LangCode, string> = {
+  en: "🇺🇸",
+  es: "🇪🇸",
+  bs: "🇧🇦",
+  it: "🇮🇹",
+  zh: "🇨🇳",
+  yue: "🇭🇰"
+};
+
+const isLangCode = (v: unknown): v is LangCode =>
+  typeof v === "string" && Object.prototype.hasOwnProperty.call(FLAGS, v);
 
 // Unobtrusive build marker so we can tell which deploy is live. Vercel injects
 // the commit SHA at build time; falls back to "local" during dev.
@@ -127,6 +156,50 @@ const STRINGS: Record<
     connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
     noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
     tooShort: "Muy corto — toca, di una idea completa y toca otra vez."
+  },
+  bs: {
+    speak: "Govori",
+    stop: "Zaustavi i prevedi",
+    working: "Obrada…",
+    speakingNow: "Sada govori",
+    swap: "Zamijeni",
+    listening: "Slušam…",
+    translating: "Prevodim…",
+    idle: "Dodirni mikrofon, izgovori cijelu misao, pa dodirni ponovo.",
+    heard: "Čulo se",
+    translationLabel: "Prijevod",
+    wrapUp: "Završavam — automatsko zaustavljanje i prijevod za nekoliko sekundi…",
+    micUnavailable:
+      "Mikrofon nije dostupan. Otvori ovu stranicu preko HTTPS-a u Safariju i dozvoli pristup mikrofonu.",
+    micDenied:
+      "Pristup mikrofonu je odbijen. Uključi ga u postavkama Safarija i pokušaj ponovo.",
+    ttsFailed: "Reprodukcija glasa nije uspjela.",
+    translateFailed: "Prijevod nije uspio.",
+    connectionLost: "Problem s vezom — provjeri signal i pokušaj ponovo.",
+    noAudio: "Zvuk nije snimljen. Provjeri mikrofon i pokušaj ponovo.",
+    tooShort: "Prekratko — dodirni, izgovori cijelu misao, pa dodirni ponovo."
+  },
+  it: {
+    speak: "Parla",
+    stop: "Ferma e traduci",
+    working: "Elaborazione…",
+    speakingNow: "Sta parlando",
+    swap: "Cambia",
+    listening: "In ascolto…",
+    translating: "Traduzione…",
+    idle: "Tocca il microfono, di' un pensiero completo, tocca di nuovo.",
+    heard: "Sentito",
+    translationLabel: "Traduzione",
+    wrapUp: "Sto per finire — si ferma e traduce tra pochi secondi…",
+    micUnavailable:
+      "Microfono non disponibile. Apri questa pagina in HTTPS su Safari e consenti l'accesso al microfono.",
+    micDenied:
+      "Permesso del microfono negato. Attivalo nelle impostazioni di Safari e riprova.",
+    ttsFailed: "Riproduzione vocale non riuscita.",
+    translateFailed: "Traduzione non riuscita.",
+    connectionLost: "Problema di connessione — controlla il segnale e riprova.",
+    noAudio: "Nessun audio registrato. Controlla il microfono e riprova.",
+    tooShort: "Troppo breve — tocca, di' un pensiero completo, poi tocca di nuovo."
   },
   zh: {
     speak: "说话",
@@ -237,8 +310,9 @@ export function TranslatorShell({
   const trialBlocked = !subscriber && transLeft <= 0;
 
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
-  const [pair, setPair] = useState<readonly [LangCode, LangCode]>(PAIRS[0]);
-  const [pairOrder, setPairOrder] = useState<string[]>(() => PAIRS.map(pairKey));
+  // pair[0] is YOUR side, pair[1] is theirs (the selected output pill). Only
+  // the picker changes this; `source` moves within it turn by turn.
+  const [pair, setPair] = useState<readonly [LangCode, LangCode]>(DEFAULT_PAIR);
   const [otherOpen, setOtherOpen] = useState(false);
   // Beta (7/27): ElevenLabs cloned voices are for subscribers (Tom, Liz);
   // free-tier beta testers get OpenAI only — ElevenLabs is priced per
@@ -297,49 +371,57 @@ export function TranslatorShell({
   const speaker = SPEAKERS[source];
   const listener = SPEAKERS[target];
   const s = STRINGS[source]; // speaker-facing copy (active speaker's language)
-  const orderedPairs = pairOrder
-    .map((k) => PAIRS.find((p) => pairKey(p) === k))
-    .filter((p): p is (typeof PAIRS)[number] => Boolean(p));
+  // The output pill (their side) and your side, as the picker sees them —
+  // stable across turns, unlike source/target which follow auto-detect.
+  const output = pair[1];
+  const mine = pair[0];
+  // A guest language living behind "Other · Otros" (Mandarin/Cantonese today).
+  const activeOther = MORE_LANGUAGES.find((c) => c === output || c === mine);
 
-  // Restore the most-recently-used pair order (and start on the top pair).
+  // Restore the last languages used on this phone — Tom's is EN⇄IT while
+  // Liz's is ES⇄IT, and neither should have to re-pick every time the app is
+  // opened.
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(PAIR_ORDER_STORAGE_KEY);
+      const saved = window.localStorage.getItem(PAIR_STORAGE_KEY);
       if (!saved) return;
-      const stored = (JSON.parse(saved) as string[]).filter((k) =>
-        PAIRS.some((p) => pairKey(p) === k)
-      );
-      if (!stored.length) return;
-      const rest = PAIRS.map(pairKey).filter((k) => !stored.includes(k));
-      setPairOrder([...stored, ...rest]);
-      const top = PAIRS.find((p) => pairKey(p) === stored[0]);
-      if (top) {
-        setPair(top);
-        setSource((prev) => (prev === top[0] || prev === top[1] ? prev : top[0]));
-      }
+      const stored = JSON.parse(saved) as unknown;
+      if (!Array.isArray(stored) || stored.length !== 2) return;
+      const [a, b] = stored;
+      if (!isLangCode(a) || !isLangCode(b) || a === b) return;
+      setPair([a, b]);
+      setSource(a);
     } catch {
       /* corrupt storage — keep defaults */
     }
   }, []);
 
-  function selectPair(p: readonly [LangCode, LangCode]) {
-    setPair(p);
+  function applyPair(next: readonly [LangCode, LangCode], nextSource: LangCode) {
+    setPair(next);
+    setSource(nextSource);
     setOtherOpen(false);
-    setSource((prev) => (prev === p[0] || prev === p[1] ? prev : p[0]));
     setOriginal("");
     setTranslation("");
     setError(null);
     if (status !== "recording") setStatus("idle");
-    setPairOrder((prev) => {
-      const k = pairKey(p);
-      const next = [k, ...prev.filter((x) => x !== k)];
-      try {
-        window.localStorage.setItem(PAIR_ORDER_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        /* private mode — MRU just won't persist */
-      }
-      return next;
-    });
+    try {
+      window.localStorage.setItem(PAIR_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      /* private mode — the choice just won't survive a reload */
+    }
+  }
+
+  // Tapping a pill picks the OUTPUT language; tapping your own side flips the
+  // two. The rule itself is lib/translate/pair.ts so it can be unit-tested.
+  function selectLanguage(next: LangCode) {
+    const updated = nextPair(pair, next);
+    if (updated === pair) {
+      setOtherOpen(false);
+      return; // already the output — leave the current turn on screen
+    }
+    // pair[0] is the side that speaks next by default; after a flip that is
+    // the language that was just the output.
+    applyPair(updated, updated[0]);
   }
 
   useEffect(() => {
@@ -999,59 +1081,78 @@ export function TranslatorShell({
           </div>
         ) : null}
 
-        {/* Language pair picker — EN⇄ES plus one "Other" button (Tom, 8/15).
-            When a guest pair is active, the Other button wears its label so
-            the current pair is always visible. The expanded list keeps
-            most-recently-used order. */}
+        {/* Language pills — the OUTPUT language is the solid one; your own
+            side wears an outline. Tap another language to translate into it,
+            or tap your own side to flip the direction. Guest languages beyond
+            the trip four stay behind "Other · Otros" so this row keeps its
+            width (Tom, 8/15). */}
         <div className="flex flex-col gap-2">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-amber-100/40">
+            Translate into · Traducir a
+          </div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => selectPair(HOME_PAIR)}
-              className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                pairKey(pair) === pairKey(HOME_PAIR)
-                  ? "border-amber-300 bg-amber-400 text-stone-950"
-                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-              }`}
-            >
-              {HOME_PAIR[0].toUpperCase()} ⇄ {HOME_PAIR[1].toUpperCase()}
-            </button>
+            {PILL_LANGUAGES.map((code) => {
+              const isOutput = code === output;
+              const isMine = code === mine;
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => selectLanguage(code)}
+                  aria-pressed={isOutput}
+                  title={
+                    isMine ? `${SPEAKERS[code].label} — tap to flip` : SPEAKERS[code].label
+                  }
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                    isOutput
+                      ? "border-amber-300 bg-amber-400 text-stone-950"
+                      : isMine
+                        ? "border-amber-300 bg-transparent text-amber-200"
+                        : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+                  }`}
+                >
+                  {FLAGS[code]} {code.toUpperCase()}
+                </button>
+              );
+            })}
             <button
               type="button"
               onClick={() => setOtherOpen((o) => !o)}
-              className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                pairKey(pair) !== pairKey(HOME_PAIR)
+              aria-expanded={otherOpen}
+              className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                activeOther
                   ? "border-amber-300 bg-amber-400 text-stone-950"
                   : "border-amber-300/30 bg-amber-400/10 text-amber-200"
               }`}
             >
-              {pairKey(pair) !== pairKey(HOME_PAIR)
-                ? `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`
-                : "Other · Otros"}{" "}
+              {activeOther ? `${FLAGS[activeOther]} ${activeOther.toUpperCase()}` : "Other · Otros"}{" "}
               {otherOpen ? "▴" : "▾"}
             </button>
           </div>
           {otherOpen ? (
             <div className="flex flex-wrap gap-2">
-              {orderedPairs
-                .filter((p) => pairKey(p) !== pairKey(HOME_PAIR))
-                .map((p) => {
-                  const active = pairKey(p) === pairKey(pair);
-                  return (
-                    <button
-                      key={pairKey(p)}
-                      type="button"
-                      onClick={() => selectPair(p)}
-                      className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                        active
-                          ? "border-amber-300 bg-amber-400 text-stone-950"
+              {MORE_LANGUAGES.map((code) => {
+                const isOutput = code === output;
+                const isMine = code === mine;
+                return (
+                  <button
+                    key={code}
+                    type="button"
+                    onClick={() => selectLanguage(code)}
+                    aria-pressed={isOutput}
+                    title={SPEAKERS[code].label}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
+                      isOutput
+                        ? "border-amber-300 bg-amber-400 text-stone-950"
+                        : isMine
+                          ? "border-amber-300 bg-transparent text-amber-200"
                           : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-                      }`}
-                    >
-                      {p[0].toUpperCase()} ⇄ {p[1].toUpperCase()}
-                    </button>
-                  );
-                })}
+                    }`}
+                  >
+                    {FLAGS[code]} {code.toUpperCase()}
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>

@@ -5,6 +5,11 @@ export const DEFAULT_TARGET_LANGUAGE = "es" as const;
 export const LANGUAGE_OPTIONS = [
   { code: "en", label: "English" },
   { code: "es", label: "Spanish" },
+  // Bosnian: added 8/17 for the Bosnia trip. Whisper detects it, and the
+  // ElevenLabs multilingual models speak it (the model has no separate
+  // Bosnian; it renders the Latin-script text with Croatian/Serbian
+  // pronunciation, which is the same language for TTS purposes).
+  { code: "bs", label: "Bosnian" },
   { code: "fr", label: "French" },
   { code: "de", label: "German" },
   { code: "it", label: "Italian" },
