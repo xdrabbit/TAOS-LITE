@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { authRedirectTarget } from "@/lib/authRedirect";
 import { supabase } from "@/lib/supabase";
 
 // Shared account for the two of you. No email is ever sent; the passcode is the
@@ -36,7 +37,11 @@ export function SignIn(): JSX.Element {
     setError(null);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin }
+      // Come back to the deployment you started on, so a preview tester is
+      // still on the preview afterwards and not quietly reviewing production.
+      // Vetted against lib/authRedirect.ts, which mirrors the Supabase
+      // dashboard's Redirect URLs — see docs/supabase-auth-redirects.md.
+      options: { redirectTo: authRedirectTarget(window.location.origin) }
     });
     if (error) setError("Google sign-in failed. Try again.");
   }

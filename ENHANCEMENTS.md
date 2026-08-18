@@ -211,6 +211,32 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- Google sign-in comes back to the deployment you left from — signing in on a
+  preview landed you on production, silently, so a tester walking through the
+  branch was walking through prod. Supabase never honored the return address
+  the app asked for: it checks `redirectTo` against the project's Redirect URLs
+  list and, on no match, substitutes the Site URL without saying so. That list
+  held production and nothing else, so previews, `www` and localhost all
+  collapsed to taoslite.com — which is also why this was never caught while
+  developing (Google sign-in has never worked on localhost either; the passcode
+  is what everyone uses there).
+  **Tom, one dashboard step — no code change can do it: Supabase → project
+  `duqkmuaceklnfgvoufrz` → Authentication → URL Configuration → Redirect URLs,
+  add the five patterns in `docs/supabase-auth-redirects.md`** (the load-bearing
+  one is `https://taos-lite-*-xdrabbits-projects.vercel.app/**`). That doc also
+  has a one-command check that reads the auth server's answer back without
+  needing a phone. Google Cloud Console needs nothing — previews talk to
+  Supabase, not to Google.
+  The code half (`lib/authRedirect.ts`) is the guardrail rather than the fix:
+  the app only ever asks to return to a host on a pinned allow-list, so
+  widening the dashboard list can't turn the sign-in button into an open
+  redirect. The `-xdrabbits-projects` suffix is the security boundary — anyone
+  can name a Vercel project `taos-lite`, only Tom can deploy into his scope —
+  and tests/auth-redirect.test.ts fences both directions: every real preview
+  hostname shape accepted, and the string tricks (`taoslite.com.evil.com`,
+  `https://taoslite.com@evil.com`, `/@evil.com`) rejected to production.
+  — 2026-08-18, branch feat/trip-mode
+
 - The whole catalog on every screen — /live, /tabletop and /chat could reach
   two languages between them; now they reach all hundred, with the same pill
   row and the same search sheet /translate has. The picker is drawn once
