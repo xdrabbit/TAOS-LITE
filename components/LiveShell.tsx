@@ -8,6 +8,7 @@ import {
   type AmbientTarget
 } from "@/lib/live/ambient";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -221,7 +222,7 @@ export function LiveShell(): JSX.Element {
 
     fetch("/api/tts", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
       body: JSON.stringify({ text: next.text, latency: "flash", ...TTS_LANGS[next.direction] })
     })
       .then(async (res) => {

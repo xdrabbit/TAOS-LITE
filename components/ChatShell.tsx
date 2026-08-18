@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
 import { SignIn } from "./SignIn";
 import {
   getChatThread,
@@ -216,7 +217,7 @@ export function ChatShell(): JSX.Element {
         if (cached) return cached;
         const res = await fetch("/api/tts", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
           body: JSON.stringify({
             text: m.body_translated,
             sourceLanguage: m.source_lang,

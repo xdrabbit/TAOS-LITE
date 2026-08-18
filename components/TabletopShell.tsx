@@ -5,6 +5,7 @@ import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live"
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -173,7 +174,7 @@ export function TabletopShell(): JSX.Element {
         "/api/tts",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
           body: JSON.stringify({
             text: ex.translation,
             sourceLanguage: ex.from,

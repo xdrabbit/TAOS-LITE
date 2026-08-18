@@ -14,6 +14,8 @@ import { HistoryDrawer } from "./HistoryDrawer";
 import { InstallPrompt } from "./InstallPrompt";
 import { Paywall } from "./Paywall";
 import { QrShareModal } from "./QrShareModal";
+import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
+import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { nextPair } from "@/lib/translate/pair";
 import { isFounder } from "@/lib/release";
@@ -374,6 +376,8 @@ export function TranslatorShell({
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [togetherMenuOpen, setTogetherMenuOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [personalVoiceOpen, setPersonalVoiceOpen] = useState(false);
+  const personalVoiceTap = useSecretTaps(() => setPersonalVoiceOpen(true));
 
   // Avatar initial derived from the signed-in email (the only identity the
   // component receives — Profile has no name field). Falls back to a generic
@@ -645,7 +649,10 @@ export function TranslatorShell({
         "/api/tts",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          // The personal-voice code, when this phone has one: it is what
+          // makes /api/tts eligible to answer in Tom's or Liz's clone. Absent
+          // (every borrowed/shared phone) the reply is the standard voice.
+          headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
           body: JSON.stringify({ text, engine, sourceLanguage: src, targetLanguage: tgt })
         },
         { retries: 2, timeoutMs: 60000 }
@@ -909,7 +916,14 @@ export function TranslatorShell({
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
         <header className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
+          {/* Five taps on the title open the personal-voice sheet. Looks and
+              behaves like plain text to everyone who isn't looking for it. */}
+          <h1
+            onClick={personalVoiceTap}
+            className="cursor-default select-none text-lg font-semibold tracking-tight text-amber-200"
+          >
+            TAOS·LITE
+          </h1>
           <div className="flex items-center gap-2">
             <a
               href="/live"
@@ -1356,6 +1370,10 @@ export function TranslatorShell({
 
       <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <QrShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
+      <PersonalVoiceModal
+        open={personalVoiceOpen}
+        onClose={() => setPersonalVoiceOpen(false)}
+      />
     </main>
   );
 }

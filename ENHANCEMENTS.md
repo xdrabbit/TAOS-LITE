@@ -120,6 +120,20 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Shipped
 
+- Personal voices are Tom & Liz only — the cloned ElevenLabs voices used to
+  play for anyone who opened TAOS, which stops being fine the moment the QR
+  code is handed around on the trip. Now /api/tts resolves a clone only for a
+  request carrying the right `x-taos-voice-key`; every other phone silently
+  gets the stock multilingual voice (no error, no hint the clones exist).
+  **Tom, before the trip: set `TAOS_PERSONAL_VOICE_CODE` in the Vercel
+  project (`taos-lite`) for BOTH Production and Preview** — pick something
+  long and random, there is no rate limit in front of the check, and while it
+  is unset NOBODY gets a cloned voice (it fails closed on purpose). Then on
+  each of your two phones: **tap the TAOS·LITE title five times** and type the
+  code; the sheet shows "✓ Unlocked on this phone" and has a "Lock this phone
+  again" button. The code lives in that phone's localStorage, so clearing
+  site data re-locks it. Nothing on screen advertises the gesture.
+  — 2026-08-17, branch feat/trip-mode
 - Trip mode for Bosnia + Italy — three things in one branch: TAOS is
   installable (Add to Home Screen, standalone, real icon), a QR share modal
   behind one header button hands the app to someone across a table, and
