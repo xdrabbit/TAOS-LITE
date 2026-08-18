@@ -24,6 +24,11 @@ describe("which languages get a pill", () => {
     expect(visiblePills(pair("en", "es"), [])).toHaveLength(2);
   });
 
+  it("leaves room for the \"+\" button on the same row", () => {
+    // Five CONTROLS total, which is what the row held before this change.
+    expect(MAX_PILLS).toBe(4);
+  });
+
   it("always keeps the pair on the row", () => {
     // Even when recency is full of other languages: a row that couldn't show
     // the language you are speaking into would be lying about the app's state.
@@ -35,11 +40,11 @@ describe("which languages get a pill", () => {
   });
 
   it("fills the rest from recency, most recent first", () => {
-    // Three slots left after the pair; the four oldest recents lose out.
+    // Two slots left after the pair; the three oldest recents lose out.
     const pills = visiblePills(pair("en", "es"), ["it", "bs", "fr", "de", "ja"]);
     expect(pills).toContain("it");
     expect(pills).toContain("bs");
-    expect(pills).toContain("fr");
+    expect(pills).not.toContain("fr");
     expect(pills).not.toContain("de");
     expect(pills).not.toContain("ja");
   });
@@ -74,7 +79,10 @@ describe("which languages get a pill", () => {
     const before = visiblePills(pair("es", "en"), recent);
     const after = visiblePills(pair("en", "fr"), rememberLanguage(recent, "fr"));
     expect(before).toEqual(["en", "es", "it", "bs"]);
-    expect(after).toEqual(["en", "es", "fr", "it", "bs"]);
+    // French lands in its catalog slot — between es and bs, not on the end —
+    // and Italian, the least recently used of the four, is what falls off to
+    // make room. Everything that stays, stays where it was.
+    expect(after).toEqual(["en", "es", "fr", "bs"]);
   });
 });
 

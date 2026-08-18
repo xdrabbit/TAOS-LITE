@@ -21,11 +21,17 @@ import { SHEET_LANGUAGES } from "@/lib/languages/catalog";
 import { isPairLangCode, type PairLangCode } from "./pair";
 
 /**
- * The most pills that can be on screen at once. Five plus the "+" is about
- * what a phone holds in one line at arm's length, and it is one more than the
- * trip row (8/17) that this replaces.
+ * The most LANGUAGE pills that can be on screen at once.
+ *
+ * Four, not five, because the "+ More · Más" button sits on the same row and
+ * counts against the same width: five controls total, which is exactly what
+ * the row held before this change (the trip four plus "Other · Otros") and
+ * exactly what fits on one line on the narrowest phone either of them carries.
+ * The row is `flex-wrap` — a sixth control does not overflow, it silently
+ * becomes a second line, which is the thing this whole design exists to
+ * prevent. If a wider row is ever wanted, this constant is the only edit.
  */
-export const MAX_PILLS = 5;
+export const MAX_PILLS = 4;
 
 /**
  * Recency is remembered deeper than it is shown, so a language pushed off the
