@@ -1,5 +1,7 @@
 "use client";
 
+import type { LanguageCode } from "@/lib/languages/catalog";
+
 // WebRTC client for /live "Ambient AI" mode. Streams the mic continuously to a
 // GA Realtime session (minted by POST /api/live/realtime) whose only job is to
 // speak/write micro-summaries of the surrounding conversation in the target
@@ -17,11 +19,19 @@ export type AmbientState =
   | "stopping"
   | "error";
 
-export type AmbientTarget = "en" | "es";
+// Any catalog language, not the old "en" | "es". The session's instructions
+// are minted server-side from these two codes (app/api/live/realtime) — the
+// WebRTC plumbing below neither knows nor cares which languages they are, and
+// nothing about the response gate, the VAD settings or the freshness rules
+// moves with them.
+export type AmbientTarget = LanguageCode;
 export type AmbientStopReason = "user" | "cap" | "idle" | "error";
 
 export interface AmbientConfig {
+  /** What the listener reads and hears — their own language. */
   target: AmbientTarget;
+  /** What is being spoken around them, so the prompt can name it. */
+  source: AmbientTarget;
   /** Start with output audio muted (text-only). */
   muted?: boolean;
   /** Hard session cap; default 2 h — a long dinner. */
@@ -186,7 +196,7 @@ export async function startAmbientLive(
     const mintRes = await fetch("/api/live/realtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target: config.target })
+      body: JSON.stringify({ target: config.target, source: config.source })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {

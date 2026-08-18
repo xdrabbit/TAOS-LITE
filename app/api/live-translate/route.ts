@@ -4,6 +4,9 @@ import {
   chatCompletion,
   getOpenAIKey
 } from "@/lib/translateProvider";
+import { languageLabel } from "@/lib/languages/catalog";
+import { buildConceptInstructions } from "@/lib/live/instructions";
+import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 
 export const runtime = "nodejs";
 
@@ -11,25 +14,20 @@ export const runtime = "nodejs";
 // a short micro-summary of the CONCEPT being spoken, not a real translation.
 // Use case: Tom follows Liz's Spanish phone call in real time.
 
-type LiveDirection = "es-en" | "en-es";
-
-const DEFAULT_DIRECTION: LiveDirection = "es-en";
 // Rolling window of prior chunks/summaries is capped server-side so a long
 // call can't grow the prompt without bound.
 const MAX_CONTEXT_ENTRIES = 10;
 
-interface DirectionLabels {
-  source: string;
-  target: string;
-}
+// The direction used to be an "es-en" | "en-es" string with a hand-written
+// label table beside it, which is exactly the two-language ceiling this route
+// shared with the rest of /live. It is a pair of catalog codes now; the labels
+// the prompt interpolates come from the catalog, which is where every other
+// route already gets them.
+const DEFAULT_SOURCE = "es";
+const DEFAULT_TARGET = "en";
 
-const DIRECTION_LABELS: Record<LiveDirection, DirectionLabels> = {
-  "es-en": { source: "Spanish", target: "English" },
-  "en-es": { source: "English", target: "Spanish" }
-};
-
-function parseDirection(value: unknown): LiveDirection {
-  return value === "en-es" ? "en-es" : DEFAULT_DIRECTION;
+function parseLanguage(value: unknown, fallback: string): string {
+  return typeof value === "string" && isSupportedLanguageCode(value) ? value : fallback;
 }
 
 function parseContext(value: unknown): string[] {
@@ -39,19 +37,6 @@ function parseContext(value: unknown): string[] {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
     .slice(-MAX_CONTEXT_ENTRIES);
-}
-
-function buildInstructions(labels: DirectionLabels): string {
-  return (
-    `You help someone follow a live ${labels.source} conversation in ${labels.target}. ` +
-    `You are given a short, possibly fragmentary chunk of ${labels.source} speech. ` +
-    `Do NOT translate word for word. Compress it to its CORE CONCEPT as a micro-summary ` +
-    `of 3 to 12 words in ${labels.target} (e.g. "she's asking about the rent payment"). ` +
-    `Use any provided conversation context to predict and disambiguate meaning when the ` +
-    `chunk is fragmentary — educated guessing from the conversation flow is desired. ` +
-    `If your summary is mostly a prediction or guess rather than clearly stated content, ` +
-    `prefix it with "~". Output ONLY the micro-summary: no preamble, no quotes, no labels.`
-  );
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -75,12 +60,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "`text` is required and cannot be empty." }, { status: 400 });
   }
 
-  const direction = parseDirection(payload.direction);
+  const source = parseLanguage(payload.sourceLanguage, DEFAULT_SOURCE);
+  const target = parseLanguage(payload.targetLanguage, DEFAULT_TARGET);
   const context = parseContext(payload.context);
-  const labels = DIRECTION_LABELS[direction];
 
   const messages = [
-    { role: "system" as const, content: buildInstructions(labels) },
+    { role: "system" as const, content: buildConceptInstructions(source, target) },
     ...(context.length > 0
       ? [
           {
@@ -89,7 +74,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           }
         ]
       : []),
-    { role: "user" as const, content: `Latest ${labels.source} chunk:\n${text}` }
+    { role: "user" as const, content: `Latest ${languageLabel(source)} chunk:\n${text}` }
   ];
 
   try {
@@ -100,7 +85,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     });
     const isGuess = raw.startsWith("~");
     const concept = isGuess ? raw.slice(1).trim() : raw;
-    return NextResponse.json({ concept, isGuess, direction });
+    return NextResponse.json({ concept, isGuess, sourceLanguage: source, targetLanguage: target });
   } catch (error) {
     if (error instanceof ProviderError) {
       return NextResponse.json(
