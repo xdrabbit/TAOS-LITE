@@ -23,10 +23,26 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   guards (below) should land before real customers can rack up realtime
   minutes. (added 2026-08-16)
   → Screen cut SHIPPED 2026-08-18 (see Shipped): customers see Translate,
-  Live, Chat, Tutor, Photo; Call/Tabletop/Video are founders-only. STILL TO
+  Live, Chat, Photo; Call/Tabletop/Video are founders-only. STILL TO
   DO before charging: Stripe live keys + live price ids + production webhook
   (Tom's dashboard work), one real end-to-end purchase, and ideally the call
   cost guards.
+  → Tutor pulled from RC1 2026-08-18 (second cut): it is unfinished and is
+  planned as a PREMIUM feature, so it is gated behind
+  NEXT_PUBLIC_ENABLE_TUTOR (lib/release.ts), off by default. Hidden from
+  everyone including founders — nav link gone, /tutor redirects to /, and
+  all three /api/tutor routes 404 so a disabled feature cannot bill OpenAI
+  realtime or Azure. Nothing was deleted; set the var to 1 and redeploy to
+  bring it back.
+- ⚠️ The pricing page still sells tutor minutes — BLOCKS charging anyone.
+  Landing.tsx and Paywall.tsx advertise "15 / 45 / 200 tutor minutes /
+  month" on every plan, lib/stripe.ts sells add-on minute packs, and
+  layout.tsx's site title and description say "AI language tutor". With
+  tutor gated off, all of that sells something the app will not do. Pick one
+  before the first real charge: rewrite the plans around translation limits,
+  or turn tutor back on for paying tiers only. This was the exact reason
+  tutor was kept in v1 on 8/18 (tests/release.test.ts said so), so pulling
+  it reopened the question rather than settling it. (added 2026-08-18)
 - Chat push notifications (tier 2) — phones buzz when a message lands while
   the app is closed. Planned since chat tier 1 shipped. (added 2026-08-03)
 - Call cost guards — /call bills two realtime sessions the whole time it's
@@ -117,6 +133,15 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   (added 2026-08-03)
 - Decide the fate of the stale `dev` branch — merged-history only or does it
   hold anything worth keeping? (added 2026-08-03)
+- The /about dedication — Tom's call, deliberately left alone. RC1 stripped
+  first names from every label a stranger reads (the speaker card, the two
+  direction toggles, the landing footer link, which now reads "Why we built
+  TAOS"). /about was NOT touched: it is signed, authored prose — "Made for
+  Lizmariett Marquez", the two paragraphs, "— Tom" — and that is a dedication,
+  not a leftover label. It is still linked from the landing footer and its
+  page title still carries the full name, so a stranger who taps it reads it.
+  Keep it as is, soften it, or move it behind a founders-only link — but that
+  is Tom's to decide, not a cleanup. (added 2026-08-18)
 
 ## Languages: the two tiers, and adding one
 
