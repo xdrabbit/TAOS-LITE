@@ -123,9 +123,30 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   already generic; needs accounts for guests, a thread picker, sender names
   on bubbles. Two-language groups fit the current design; 3+ languages needs
   per-language translations. (added 2026-08-03, designed 7/22)
-- Multi-language phase 2 — bring the language-pair picker to /tabletop
-  (most likely place to meet strangers). Phase 3: /live and /call. (added
-  2026-08-03)
+- Multi-language phase 3 — /call is the last screen still hardcoded EN⇄ES.
+  (Phase 2 — /tabletop, /live and /chat — SHIPPED 2026-08-18, see Shipped.)
+  /call is two realtime sessions pointed at each other, so it needs the pair
+  on BOTH phones and a way for each end to know what the other picked;
+  that handshake is the actual work, not the picker. (added 2026-08-03,
+  narrowed 2026-08-18)
+- Per-seat languages at /tabletop — the table is one PAIR today, which is
+  exactly right for two people and wrong for four. A party where one end of
+  the table is Italian, one is Bosnian and two are English needs a language
+  per SEAT and a translation per listener, which is the same shape as the
+  "Group chat" idea above and probably wants solving once for both. Deferred
+  out of the 8/18 catalog work deliberately: the pair maps cleanly onto two
+  ends of a phone and anything richer is a new screen, not a wider one.
+  (added 2026-08-18)
+- Chrome for more than six languages — the app's own buttons and status copy
+  are translated into six (STRINGS in TranslatorShell, L in TabletopShell).
+  All hundred get a faithful translation in their own language; what they get
+  in English is the furniture around it — "TAP TO TALK", "Translating…".
+  Worth adding one for a language people keep using. (added 2026-08-18)
+- Delete lib/realtime/tabletop.ts — dead since /tabletop moved to explicit
+  push-to-talk turns; nothing imports it. It hardcodes en/es language
+  inference and a speaker1_en/speaker2_es routing model, so it is the most
+  likely place for the two-language ceiling to grow back if someone reaches
+  for it. Left alone on 8/18 rather than deleted uninvited. (added 2026-08-18)
 - Guest voice clones — quick-clone a recurring guest so their translations
   play in their real voice instead of the stock one. (added 2026-08-03)
 - Use lib/net's fetchWithRetry in /chat and /live fetches — /translate,
@@ -190,6 +211,42 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- The whole catalog on every screen — /live, /tabletop and /chat could reach
+  two languages between them; now they reach all hundred, with the same pill
+  row and the same search sheet /translate has. The picker is drawn once
+  (components/LanguagePicker.tsx) and the pair is held once
+  (lib/translate/useLanguagePair.ts), so the languages you set while ordering
+  dinner are the languages waiting on the next screen.
+
+  The direction differs per screen and that is the point. /translate speaks
+  INTO the other language; /live listens OUT of it (they talk, you read your
+  own); /tabletop does both, turn by turn, one end of the phone each. Same
+  pair, same solid pill — "the other language in play" — with each screen
+  captioning its own row so nobody has to infer it.
+
+  /chat is deliberately not on the shared pair: a chat language belongs to
+  the MEMBERSHIP row, because the person it matters to is on the other phone.
+  It gets the same row over a database write (new POST /api/chat/language),
+  and can only ever change your own side.
+
+  Streaming was the thing not to break, and it was not: every language on
+  /live's hot path is read through a ref rather than the render closure, so
+  changing one cannot re-create the recognizer's handlers or re-arm the
+  interim flush mid-conversation. Chunking, debounce, the response gate, the
+  freshness windows and turn handling are unchanged. Five hard-coded language
+  tables came out (/live's DIRECTIONS + TARGETS + TTS_LANGS, /tabletop's
+  direction string, both chat routes' {en,es} label maps — an Italian chat
+  thread had been asking the model to "translate into it"), and
+  tests/screen-language-wiring.test.ts reads the source and fails if any of
+  them grow back.
+
+  Verified against the live APIs, not just in tests: real gpt-realtime
+  sessions summarizing an Italian dinner into English and an English one into
+  Thai, /tabletop interpreting both ways between English and Italian, ES⇄EN
+  re-checked on both, and /api/tts answering audio for Italian and its 422
+  `{textOnly:true}` for Thai — which the app renders as quiet, never an
+  error — 2026-08-18, branch feat/trip-mode
+
 - Every language, two taps — /translate was rationed to six languages by a pill
   row that could not grow (EN · ES · BS · IT, with ZH/YUE behind "Other"), and
   a 13-language allow-list on the server that a seventh pill would have died
@@ -235,11 +292,10 @@ is not a prerequisite for using it.
   that asks the catalog first and treats the route's 422 `{textOnly:true}` as
   silence rather than an error, so a text-only language is never a red banner.
   The "Text only" mark is one component (components/TextOnly.tsx) shared with
-  /translate. Note for whoever picks up "Multi-language phase 2" in Ideas: those
-  three screens are still hardcoded EN⇄ES, so this is the fence waiting for
-  them rather than a bug anyone could hit today — /chat is the exception,
-  since its languages come out of the database — 2026-08-18, branch
-  feat/trip-mode
+  /translate. (The note that used to end this entry — "those three screens are
+  still hardcoded EN⇄ES, so this is a fence waiting for them" — came true the
+  same day: see "The whole catalog on every screen" below.) — 2026-08-18,
+  branch feat/trip-mode
 - Trip mode for Bosnia + Italy — three things in one branch: TAOS is
   installable (Add to Home Screen, standalone, real icon), a QR share modal
   behind one header button hands the app to someone across a table, and
