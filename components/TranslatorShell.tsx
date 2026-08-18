@@ -39,7 +39,7 @@ import {
   searchLanguages,
   type Language
 } from "@/lib/languages/catalog";
-import { isFounder } from "@/lib/release";
+import { isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 // The pair's languages, its storage, and the tap rule all live in
@@ -1198,7 +1198,8 @@ export function TranslatorShell({
               </svg>
             </button>
             {/* Tutor lives in the avatar menu (with History) — Tom, 7/27:
-                one fewer pill keeps the header from crowding phone widths. */}
+                one fewer pill keeps the header from crowding phone widths.
+                Hidden entirely for RC1 (lib/release.ts). */}
             <div ref={accountMenuRef} className="relative">
               <button
                 type="button"
@@ -1229,13 +1230,15 @@ export function TranslatorShell({
                   aria-label="Account"
                   className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
-                  <a
-                    href="/tutor"
-                    role="menuitem"
-                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Tutor
-                  </a>
+                  {tutorEnabled() ? (
+                    <a
+                      href="/tutor"
+                      role="menuitem"
+                      className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Tutor
+                    </a>
+                  ) : null}
                   {/* Video joins Tutor here rather than as a header pill —
                       same phone-width rationale (Tom, 7/27). Founders-only
                       in v1 (lib/release.ts). */}
@@ -1243,7 +1246,7 @@ export function TranslatorShell({
                     <a
                       href="/video"
                       role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition first:border-t-0 hover:bg-amber-400/10"
                     >
                       Video captions · Subtítulos
                     </a>
@@ -1251,7 +1254,7 @@ export function TranslatorShell({
                   <a
                     href="/vision"
                     role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition first:border-t-0 hover:bg-amber-400/10"
                   >
                     Photo translator · Fotos
                   </a>

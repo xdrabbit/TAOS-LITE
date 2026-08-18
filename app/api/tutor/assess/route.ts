@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { tutorEnabled } from "@/lib/release";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -55,6 +56,12 @@ async function coach(reference: string, result: {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // RC1: tutor is off (lib/release.ts) — see /api/tutor/realtime. Azure
+  // pronunciation scoring is billed per request too.
+  if (!tutorEnabled()) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
   const key = process.env.AZURE_SPEECH_KEY;
   const region = process.env.AZURE_SPEECH_REGION;
 
