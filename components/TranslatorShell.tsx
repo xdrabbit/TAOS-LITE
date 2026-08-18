@@ -17,11 +17,20 @@ import { QrShareModal } from "./QrShareModal";
 import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
 import { personalVoiceHeaders } from "@/lib/tts/personalVoiceClient";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
-import { nextPair } from "@/lib/translate/pair";
+import {
+  DEFAULT_PAIR,
+  nextPair,
+  readStoredPair,
+  writeStoredPair,
+  type PairLangCode
+} from "@/lib/translate/pair";
 import { isFounder } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
-type LangCode = "en" | "es" | "bs" | "it" | "zh" | "yue";
+// The pair's languages, its storage, and the tap rule all live in
+// lib/translate/pair.ts — /vision reads the same saved pair to decide what
+// language a photo comes back in.
+type LangCode = PairLangCode;
 type Engine = "elevenlabs" | "openai";
 type Status = "idle" | "recording" | "processing" | "done" | "error";
 
@@ -61,12 +70,6 @@ const SPEAKERS: Record<LangCode, Speaker> = {
 // Only these taps change the pair. Auto-detect still decides, per turn, which
 // of the two languages was actually spoken (that is `source`), so the pill row
 // never shifts under a live conversation.
-const PAIR_STORAGE_KEY = "taos.translate.languages";
-// [yours, theirs]. Spanish first because `source` still defaults to "es" (Liz
-// speaks first, as it has always been) — so a fresh install reads "translate
-// into English", which is exactly the direction the app took before pills.
-const DEFAULT_PAIR: readonly [LangCode, LangCode] = ["es", "en"];
-
 // The trip row. Keep this SHORT — it is the one row that is always on screen.
 const PILL_LANGUAGES: readonly LangCode[] = ["en", "es", "bs", "it"];
 // Everything else stays one tap deeper so the row can never grow again. The
@@ -84,9 +87,6 @@ const FLAGS: Record<LangCode, string> = {
   zh: "🇨🇳",
   yue: "🇭🇰"
 };
-
-const isLangCode = (v: unknown): v is LangCode =>
-  typeof v === "string" && Object.prototype.hasOwnProperty.call(FLAGS, v);
 
 // Unobtrusive build marker so we can tell which deploy is live. Vercel injects
 // the commit SHA at build time; falls back to "local" during dev.
@@ -422,18 +422,10 @@ export function TranslatorShell({
   // Liz's is ES⇄IT, and neither should have to re-pick every time the app is
   // opened.
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(PAIR_STORAGE_KEY);
-      if (!saved) return;
-      const stored = JSON.parse(saved) as unknown;
-      if (!Array.isArray(stored) || stored.length !== 2) return;
-      const [a, b] = stored;
-      if (!isLangCode(a) || !isLangCode(b) || a === b) return;
-      setPair([a, b]);
-      setSource(a);
-    } catch {
-      /* corrupt storage — keep defaults */
-    }
+    const stored = readStoredPair();
+    if (!stored) return;
+    setPair(stored);
+    setSource(stored[0]);
   }, []);
 
   function applyPair(next: readonly [LangCode, LangCode], nextSource: LangCode) {
@@ -444,11 +436,7 @@ export function TranslatorShell({
     setTranslation("");
     setError(null);
     if (status !== "recording") setStatus("idle");
-    try {
-      window.localStorage.setItem(PAIR_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      /* private mode — the choice just won't survive a reload */
-    }
+    writeStoredPair(next);
   }
 
   // Tapping a pill picks the OUTPUT language; tapping your own side flips the

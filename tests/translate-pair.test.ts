@@ -1,7 +1,12 @@
 // Fences the language-pill rule on /translate (8/17, the Bosnia + Italy trip).
 // The pair is [yours, theirs]; "theirs" is the output the pills show selected.
 import { describe, expect, it } from "vitest";
-import { nextPair } from "@/lib/translate/pair";
+import {
+  DEFAULT_PAIR,
+  isPairLangCode,
+  nextPair,
+  parseStoredPair
+} from "@/lib/translate/pair";
 
 describe("language pills: tapping a language picks the OUTPUT", () => {
   it("tapping a new language makes it the output and keeps your side", () => {
@@ -45,5 +50,37 @@ describe("language pills: tapping a language picks the OUTPUT", () => {
     // where the trip left the picker.
     expect(nextPair(["en", "it"], "es")).toEqual(["en", "es"]);
     expect(nextPair(["es", "bs"], "en")).toEqual(["es", "en"]);
+  });
+});
+
+describe("the saved pair: what survives on a phone", () => {
+  // /translate writes it, /vision reads it — a pair that parses loosely would
+  // send someone's menu translation to the wrong language.
+  it("reads back a pair /translate wrote", () => {
+    expect(parseStoredPair(JSON.stringify(["en", "bs"]))).toEqual(["en", "bs"]);
+  });
+
+  it("treats missing, corrupt, or unsupported storage as nothing saved", () => {
+    expect(parseStoredPair(null)).toBeNull();
+    expect(parseStoredPair("")).toBeNull();
+    expect(parseStoredPair("not json")).toBeNull();
+    expect(parseStoredPair(JSON.stringify(["en"]))).toBeNull();
+    expect(parseStoredPair(JSON.stringify(["en", "es", "bs"]))).toBeNull();
+    expect(parseStoredPair(JSON.stringify({ mine: "en", theirs: "es" }))).toBeNull();
+    // A language TAOS doesn't speak (or an old build's code) — fall back to
+    // the defaults rather than asking a route to translate into "xx".
+    expect(parseStoredPair(JSON.stringify(["en", "sw"]))).toBeNull();
+    // Doubled sides can't happen through nextPair, but hand-edited storage
+    // must not get past this either.
+    expect(parseStoredPair(JSON.stringify(["it", "it"]))).toBeNull();
+  });
+
+  it("keeps the guest languages behind Other readable too", () => {
+    expect(parseStoredPair(JSON.stringify(["es", "yue"]))).toEqual(["es", "yue"]);
+    expect(DEFAULT_PAIR).toEqual(["es", "en"]);
+    for (const [a, b] of [DEFAULT_PAIR]) {
+      expect(isPairLangCode(a)).toBe(true);
+      expect(isPairLangCode(b)).toBe(true);
+    }
   });
 });

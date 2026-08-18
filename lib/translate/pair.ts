@@ -30,3 +30,68 @@ export function nextPair<T extends string>(
   if (tapped === mine) return [theirs, mine];
   return [mine, tapped];
 }
+
+// ── The pair as shared state ───────────────────────────────────────────────
+// The pair started life inside TranslatorShell, but it is not /translate's
+// private business: it is the answer to "what languages is this phone's owner
+// working between right now?", and the photo translator needs the same answer
+// (8/17 — a menu in Mostar should come back in the language its reader picked
+// on the pills, not in whatever the auto rule guesses). Type, storage key, and
+// the read/write pair live here so there is ONE definition of the pair on
+// disk; the pills, flags, and copy stay in the shell that draws them.
+
+export type PairLangCode = "en" | "es" | "bs" | "it" | "zh" | "yue";
+
+// Every language the pair can hold — the pill row plus the "Other · Otros"
+// guests. Adding a language here is not enough on its own: it also needs a
+// flag and speaker copy in TranslatorShell.
+export const PAIR_LANGUAGES: readonly PairLangCode[] = ["en", "es", "bs", "it", "zh", "yue"];
+
+const PAIR_LANGUAGE_SET = new Set<string>(PAIR_LANGUAGES);
+
+export function isPairLangCode(value: unknown): value is PairLangCode {
+  return typeof value === "string" && PAIR_LANGUAGE_SET.has(value);
+}
+
+export const PAIR_STORAGE_KEY = "taos.translate.languages";
+
+// [yours, theirs]. Spanish first because /translate's `source` still defaults
+// to "es" (Liz speaks first, as it has always been) — so a fresh install reads
+// "translate into English", which is the direction the app took before pills.
+export const DEFAULT_PAIR: readonly [PairLangCode, PairLangCode] = ["es", "en"];
+
+// Anything can be in localStorage — an old format, half a write, a value some
+// other tab wrote. A pair only survives if it is two DIFFERENT supported
+// languages (the doubled-side rule from nextPair above); everything else
+// reads as "nothing saved" so the caller falls back to its own default.
+export function parseStoredPair(raw: string | null): readonly [PairLangCode, PairLangCode] | null {
+  if (!raw) return null;
+  try {
+    const stored = JSON.parse(raw) as unknown;
+    if (!Array.isArray(stored) || stored.length !== 2) return null;
+    const [a, b] = stored;
+    if (!isPairLangCode(a) || !isPairLangCode(b) || a === b) return null;
+    return [a, b];
+  } catch {
+    return null;
+  }
+}
+
+// Browser-only helpers. localStorage throws in Safari private browsing and is
+// absent during SSR, so both sides swallow — a phone that cannot persist just
+// starts from the defaults every time.
+export function readStoredPair(): readonly [PairLangCode, PairLangCode] | null {
+  try {
+    return parseStoredPair(window.localStorage.getItem(PAIR_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export function writeStoredPair(pair: readonly [PairLangCode, PairLangCode]): void {
+  try {
+    window.localStorage.setItem(PAIR_STORAGE_KEY, JSON.stringify(pair));
+  } catch {
+    /* private mode — the choice just won't survive a reload */
+  }
+}
