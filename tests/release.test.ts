@@ -10,8 +10,14 @@ import {
 } from "@/lib/release";
 
 // The v1 release scope, decided 8/18 (Tom: "take us to minimum first release
-// candidate"). Customers see Translate, Live, Chat, and the Photo translator;
-// Call, Tabletop, and Video are founders-only.
+// candidate"). Customers see Translate, Live, Chat, Table, and the Photo
+// translator; Call and Video are founders-only.
+//
+// Tabletop was founders-only until 8/19, when Tom walked RC1 on the Droid and
+// found Table had no way in at all. It came out of the held-back set on his
+// say-so — see the /tabletop note in lib/release.ts. What stops the reverse
+// mistake now is tests/nav-completeness.test.ts, which pins the nav rather
+// than the scope list.
 //
 // Tutor USED to be pinned here as in-scope, on the grounds that the paid plans
 // sell tutor minutes and holding it back would make the pricing page a lie.
@@ -50,15 +56,23 @@ function read(path: string): string {
 }
 
 describe("v1 held-back set", () => {
-  it("holds back exactly call, tabletop, and video", () => {
-    expect([...HELD_BACK_V1].sort()).toEqual(["call", "tabletop", "video"]);
+  it("holds back exactly call and video", () => {
+    expect([...HELD_BACK_V1].sort()).toEqual(["call", "video"]);
   });
 
   it("never holds back the customer-facing screens", () => {
     const held = new Set<string>(HELD_BACK_V1);
-    for (const screen of ["translate", "live", "chat", "vision"]) {
+    for (const screen of ["translate", "live", "chat", "tabletop", "vision"]) {
       expect(held.has(screen)).toBe(false);
     }
+  });
+
+  it("leaves /tabletop un-gated in the page itself, not just in the list", () => {
+    // Removing a screen from HELD_BACK_V1 and forgetting to un-wrap its page
+    // is the silent half of this change: the list would say customer-facing
+    // while the route still showed "Coming soon". The import is the tell —
+    // the page's comment still names the gate it used to sit behind.
+    expect(read("app/tabletop/page.tsx")).not.toContain('from "@/components/FounderGate"');
   });
 
   it("does not route tutor through the founders gate — it has its own flag", () => {

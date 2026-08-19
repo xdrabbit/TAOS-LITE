@@ -1042,6 +1042,17 @@ export function TranslatorShell({
                   >
                     History · Historial
                   </button>
+                  {/* /about is the product page a stranger reads after
+                      scanning the QR — Landing.tsx links it, but Landing is
+                      only ever shown to logged-OUT visitors, so signing in
+                      used to be a one-way door away from it. */}
+                  <a
+                    href="/about"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    About TAOS · Acerca de TAOS
+                  </a>
                   <button
                     type="button"
                     role="menuitem"

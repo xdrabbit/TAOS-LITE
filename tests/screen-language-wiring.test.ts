@@ -15,9 +15,22 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-/** The screens that must reach the whole catalog. */
+/**
+ * The screens that must reach the whole catalog.
+ *
+ * Two of these are called Translate and they are NOT the same screen — which
+ * is most of how the second one got missed. `translate` is the home screen's
+ * spoken turns (components/TranslatorShell.tsx); `typeTranslate` is the typing
+ * surface behind the "Translate" nav pill (components/TranslateShell.tsx). The
+ * 8/18 wiring did /live, /tabletop and /chat, the name scrub did the copy on
+ * both, and nobody noticed the typing surface still held a two-language table
+ * until Tom walked it on a phone. Every screen with a picker is listed here
+ * now, so the next one to grow a private pair fails this file instead of a
+ * trip.
+ */
 const SCREENS = {
   translate: "components/TranslatorShell.tsx",
+  typeTranslate: "components/TranslateShell.tsx",
   live: "components/LiveShell.tsx",
   tabletop: "components/TabletopShell.tsx",
   chat: "components/ChatShell.tsx"
@@ -29,7 +42,8 @@ const ROUTES = {
   liveTranslate: "app/api/live-translate/route.ts",
   tabletopRealtime: "app/api/tabletop/realtime/route.ts",
   chatSend: "app/api/chat/send/route.ts",
-  chatVoice: "app/api/chat/voice/route.ts"
+  chatVoice: "app/api/chat/voice/route.ts",
+  textTranslate: "app/api/text-translate/route.ts"
 } as const;
 
 function read(path: string): string {
@@ -60,9 +74,22 @@ describe("no screen keeps its own language pair", () => {
     // "es-en" / "en-es" were the keys of /live's DIRECTIONS + TTS_LANGS and
     // /tabletop's TabletopDirection. Every one of them was a two-language
     // ceiling with a table hanging off it.
-    for (const path of [SCREENS.live, SCREENS.tabletop]) {
+    // The typing surface is here for the same reason and was found late: its
+    // DIRECTIONS Record keyed by "en-es" carried a label AND a placeholder,
+    // so the ceiling was three deep in one table.
+    for (const path of [SCREENS.live, SCREENS.tabletop, SCREENS.typeTranslate]) {
       expect(code(path)).not.toMatch(/["']es-en["']|["']en-es["']/);
     }
+  });
+
+  it("has no direction strings left in the route the typing surface calls", () => {
+    // /api/text-translate answered in "en-es" | "es-en" and interpolated its
+    // own { es: "Spanish", en: "English" }. Fixing the SCREEN alone would have
+    // left the pair stopping at the network boundary.
+    const src = code(ROUTES.textTranslate);
+    expect(src).not.toMatch(/["']es-en["']|["']en-es["']/);
+    expect(src).not.toContain("LANG_LABEL");
+    expect(src).toContain("languageLabel(");
   });
 
   it("has no BCP-47 recognition tags written into the shell", () => {
@@ -114,15 +141,35 @@ describe("the pair screens share one pair", () => {
     // One pair on disk, one restore, one recency list. Three copies of the
     // restore effect is how you get a phone whose languages depend on which
     // screen you happened to open first.
-    for (const path of [SCREENS.translate, SCREENS.live, SCREENS.tabletop]) {
+    for (const path of [
+      SCREENS.translate,
+      SCREENS.typeTranslate,
+      SCREENS.live,
+      SCREENS.tabletop
+    ]) {
       expect(code(path)).toContain("useLanguagePair");
     }
+  });
+
+  it("the typing surface asks pairDirection who is typing", () => {
+    // The You/Them toggle keeps a real job — which SIDE is at the keyboard —
+    // but it is not allowed to be the thing that knows the languages. A
+    // toggle that sets a direction string instead of a PairSide is the old
+    // bug growing back with different spelling.
+    const src = code(SCREENS.typeTranslate);
+    expect(src).toContain("pairDirection");
+    expect(src).toContain("PairSide");
   });
 
   it("none of them reach past the hook to the storage helpers", () => {
     // writeStoredPair outside the hook means a second writer, and a second
     // writer is a pair that disagrees with itself across screens.
-    for (const path of [SCREENS.translate, SCREENS.live, SCREENS.tabletop]) {
+    for (const path of [
+      SCREENS.translate,
+      SCREENS.typeTranslate,
+      SCREENS.live,
+      SCREENS.tabletop
+    ]) {
       expect(code(path)).not.toContain("writeStoredPair");
       expect(code(path)).not.toContain("readStoredPair");
     }
@@ -148,6 +195,14 @@ describe("streaming screens ask the catalog before they ask for a voice", () => 
       expect(code(path)).toContain("requestSpeech");
       expect(code(path)).not.toMatch(/fetch\(\s*["']\/api\/tts["']/);
     }
+  });
+
+  it("the typing surface has no private road to /api/tts", () => {
+    // It has no audio control at all today — the muted speaker on the shared
+    // pill is the whole of what it says about tier 2. This is here so that if
+    // one is ever added it goes through requestSpeech like the others, rather
+    // than showing a red banner for a language working as designed.
+    expect(code(SCREENS.typeTranslate)).not.toMatch(/fetch\(\s*["']\/api\/tts["']/);
   });
 
   it("both say 'text only' somewhere a person will see it", () => {
