@@ -18,8 +18,10 @@
 // lists are a pair: change one, change the other.
 //
 // Since 8/18 this is also the fence for every OTHER route that turns a
-// client-supplied `Origin` into a URL somebody else will follow — see
-// `trustedOrigin` at the bottom. Same allow-list, one place to widen it.
+// client-supplied `Origin` into a URL somebody else will follow — the three
+// Stripe routes that build `success_url` / `cancel_url` / `return_url`, and
+// since 8/19 the /chat invite link. They all call `trustedOrigin` below.
+// Same allow-list, one place to widen it.
 
 /** Where an unrecognized host gets sent instead. Also Supabase's Site URL. */
 export const PRODUCTION_ORIGIN = "https://taoslite.com";
@@ -86,12 +88,20 @@ export function isAllowedAuthOrigin(candidate: string | null | undefined): boole
 }
 
 /**
- * The origin Google sign-in should return to, given the origin the person is
- * actually on. Anything unrecognized falls back to production rather than being
- * passed through: an unknown host is either a mistake or an attack, and neither
- * one should be handed a session.
+ * The vetted ORIGIN, and nothing else — scheme, host, no trailing slash.
+ *
+ * This is the shared half: the origin every caller starts from, whether it is
+ * building a sign-in return address (below) or a Stripe `success_url` or a
+ * /chat invite link. Anything unrecognized falls back to production rather
+ * than being passed through: an unknown host is either a mistake or an attack,
+ * and neither one should be handed a session — or a paying customer.
+ *
+ * Deliberately one function rather than a list per caller. An origin we would
+ * not let Google drop a session on is not one we should bounce a customer
+ * through either, and two allow-lists drift apart the first time one of them
+ * gains a host.
  */
-export function authRedirectTarget(candidate: string | null | undefined): string {
+export function trustedOrigin(candidate: string | null | undefined): string {
   if (!isAllowedAuthOrigin(candidate)) return PRODUCTION_ORIGIN;
   // Return the PARSED origin, never the caller's string. `new URL` has already
   // normalized case, escapes and the default port, and the normalized form is
@@ -100,14 +110,51 @@ export function authRedirectTarget(candidate: string | null | undefined): string
 }
 
 /**
- * The same fence, for the other places a client-supplied `Origin` header gets
- * turned into a URL we hand to somebody else — today, the three Stripe routes
- * that build `success_url` / `cancel_url` / `return_url` out of it.
+ * Where inside the app a sign-in may land. Only ever an absolute path on the
+ * origin above — never a URL, never a host — because the origin is what was
+ * vetted and the path is not allowed to move it. Anything else becomes "/".
  *
- * Deliberately the same function rather than a second list. An origin we would
- * not let Google drop a session on is not one we should bounce a paying
- * customer through either, and two allow-lists drift apart the first time one
- * of them gains a host. The alias exists only so a billing route does not have
- * to import something called `authRedirectTarget` to say what it means.
+ * The character set is what an app route can actually contain, which today
+ * means `/chat/join/<base64url token>`. No query and no fragment: Supabase
+ * appends its own `?code=` to whatever it is handed, and a second one is how a
+ * redirect target gets smuggled in.
  */
-export const trustedOrigin = authRedirectTarget;
+const INTERNAL_PATH = /^\/[A-Za-z0-9\-._~/]*$/;
+
+function internalPath(path: string): string {
+  if (!INTERNAL_PATH.test(path)) return "/";
+  // `//host` is a URL to somebody else in every context that resolves it as a
+  // reference. Appended to an origin it is only ever a path here — but this
+  // value is also read by people, and one that LOOKS like an open redirect is
+  // not worth the second reading.
+  if (path.startsWith("//")) return "/";
+  return path;
+}
+
+/**
+ * The full URL Google sign-in should return to: the vetted origin, plus where
+ * in the app to come back to.
+ *
+ * ── Why there is always a path ─────────────────────────────────────────────
+ * This used to be `trustedOrigin` itself, returning a bare origin with no
+ * trailing slash — and that one missing character was still sending preview
+ * testers to production on 8/19, a day after the dashboard was edited. The
+ * allow-list entries are patterns ending in `/**`, and Supabase matches them
+ * against the whole URL, so an origin with no path matches nothing and
+ * silently collapses to the Site URL. Asked directly:
+ *
+ *   https://taos-lite-git-feat-trip-mode-….vercel.app   -> https://taoslite.com/   ← the bug
+ *   https://taos-lite-git-feat-trip-mode-….vercel.app/  -> itself                  ← one slash
+ *
+ * So a return address is now an origin AND a path, "/" by default. The second
+ * argument is what /chat/join needs: an invite link opened by a signed-out
+ * stranger has to come back to the invite, not to the home screen with the
+ * token gone.
+ *
+ * Stripe's `success_url` and the /chat invite link keep calling `trustedOrigin`
+ * directly — they append their own paths, and a slash from both ends is how
+ * you get `//?checkout=success`.
+ */
+export function authRedirectTarget(candidate: string | null | undefined, path = "/"): string {
+  return `${trustedOrigin(candidate)}${internalPath(path)}`;
+}

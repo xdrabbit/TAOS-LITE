@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
+import { ChatInviteRow, ChatInviteSheet, ChatStartCard } from "./ChatInvite";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { type LanguageCode } from "@/lib/languages/catalog";
@@ -28,6 +29,7 @@ import {
   writeStoredRecent
 } from "@/lib/translate/pinned";
 import {
+  createChatInvite,
   getChatThread,
   getVoiceUrl,
   listMessages,
@@ -36,6 +38,7 @@ import {
   sendVoiceMessage,
   setMyChatLanguage,
   subscribeMessages,
+  type ChatInvite,
   type ChatMessageRow,
   type ChatThreadInfo
 } from "@/lib/chat";
@@ -100,6 +103,15 @@ export function ChatShell(): JSX.Element {
   const [ready, setReady] = useState(false);
   const [thread, setThread] = useState<ChatThreadInfo | null>(null);
   const [threadMissing, setThreadMissing] = useState(false);
+  // ── Getting a second person in ──────────────────────────────────────────
+  // The thread used to be a fact of the database: seeded by hand for two
+  // accounts, unreachable for everyone else. `reloadKey` is what makes it a
+  // thing this screen can CREATE — starting a chat writes a thread and a
+  // membership, and the loader below has to go and find them.
+  const [invite, setInvite] = useState<ChatInvite | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [messages, setMessages] = useState<ChatMessageRow[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -213,7 +225,7 @@ export function ChatShell(): JSX.Element {
       active = false;
       unsubscribe?.();
     };
-  }, [session]);
+  }, [session, reloadKey]);
 
   // Keep the newest message in view — and the confirmation line too, which is
   // drawn at the foot of the same list and would otherwise land below the fold
@@ -432,6 +444,27 @@ export function ChatShell(): JSX.Element {
 
   useEffect(() => cleanupRecording, [cleanupRecording]);
 
+  // Start a chat, or invite the second person into the one I already have.
+  // One call for both (app/api/chat/invite): from the user's side they are the
+  // same act, and a thread with nobody in it is not a state worth showing.
+  const startOrInvite = useCallback(() => {
+    if (inviteBusy) return;
+    setInviteBusy(true);
+    setError(null);
+    createChatInvite()
+      .then((made) => {
+        setInvite(made);
+        setInviteOpen(true);
+        // A thread that did not exist a moment ago has to be loaded before the
+        // pill row and the composer mean anything.
+        if (made.created) setReloadKey((n) => n + 1);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Could not create the invite link.");
+      })
+      .finally(() => setInviteBusy(false));
+  }, [inviteBusy]);
+
   // Pick the language I READ. Optimistic: the row moves under the thumb and
   // rolls back if the write fails, because the alternative is a pill that does
   // nothing for a round trip and gets tapped again.
@@ -546,6 +579,13 @@ export function ChatShell(): JSX.Element {
                 </span>
               ) : null}
             </div>
+            {/* "No one else in this chat yet" is a sentence that has to come
+                with a door. This is the same call the empty state makes — the
+                link is minted fresh each tap and the old one stops working,
+                so somebody who closed the sheet has nothing to hunt for. */}
+            {partnerLang ? null : (
+              <ChatInviteRow busy={inviteBusy} onInvite={startOrInvite} />
+            )}
             {showLangHint ? (
               <div className="flex items-start gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/80">
                 <p className="flex-1">{CHAT_READ_HINT}</p>
@@ -562,14 +602,24 @@ export function ChatShell(): JSX.Element {
           </>
         ) : null}
 
-        {threadMissing ? (
-          <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-4 text-sm text-amber-100/80">
-            This account isn&apos;t part of a chat yet. Sign in with your own Google account (not
-            the shared passcode account).
-          </div>
+        {/* The way in.
+            This was a banner reading "This account isn't part of a chat yet.
+            Sign in with your own Google account (not the shared passcode
+            account)" — shown to people who WERE signed in, under a composer
+            that could not send, on a screen with no way to start anything. It
+            told the truth about the database and a lie about the reader, and
+            there was nothing behind it: no route in the app had ever created a
+            thread. Now the state that has no chat is the state that offers
+            one. See lib/chatInvite.ts. */}
+        {threadMissing && !thread ? (
+          <ChatStartCard busy={inviteBusy} error={error} onStart={startOrInvite} />
         ) : null}
 
-        {/* Messages */}
+        {/* Messages. Only once there is a thread: an account with none used to
+            get this list, its empty state, and a live composer whose Send
+            button was disabled with nothing on screen saying why. */}
+        {thread ? (
+          <>
         <div
           ref={listRef}
           className="flex-1 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-3"
@@ -793,7 +843,15 @@ export function ChatShell(): JSX.Element {
             </div>
           </div>
         )}
+          </>
+        ) : null}
       </div>
+
+      <ChatInviteSheet
+        open={inviteOpen}
+        url={invite?.url ?? null}
+        onClose={() => setInviteOpen(false)}
+      />
 
       <LanguageSheet
         open={sheetOpen}

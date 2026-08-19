@@ -15,7 +15,12 @@
 // dashboard too (docs/supabase-auth-redirects.md) — the allow-list in code
 // cannot widen what Supabase will accept, only narrow it.
 import { describe, expect, it } from "vitest";
-import { authRedirectTarget, isAllowedAuthOrigin, PRODUCTION_ORIGIN } from "@/lib/authRedirect";
+import {
+  authRedirectTarget,
+  isAllowedAuthOrigin,
+  PRODUCTION_ORIGIN,
+  trustedOrigin
+} from "@/lib/authRedirect";
 
 describe("origins sign-in may return to", () => {
   it("accepts production, with and without www", () => {
@@ -114,27 +119,105 @@ describe("origins sign-in must refuse", () => {
 });
 
 describe("authRedirectTarget", () => {
+  // ── The trailing slash is the whole feature ──────────────────────────────
+  // These four assertions used to expect a BARE origin, and that is how the
+  // 8/18 fix was still half-broken on 8/19. Supabase's allow-list entries are
+  // patterns ending in `/**`, matched against the whole URL, so an origin with
+  // no path matches nothing and silently collapses to the Site URL. Asked
+  // directly, on the live project, with the dashboard already edited:
+  //
+  //   https://taos-lite-git-feat-trip-mode-….vercel.app   -> https://taoslite.com/
+  //   https://taos-lite-git-feat-trip-mode-….vercel.app/  -> itself
+  //
+  // Same host, one character apart. So a return address is an origin AND a
+  // path now, and the bare-origin job moved to `trustedOrigin` below — which
+  // is what Stripe and the /chat invite link want, because they append their
+  // own paths.
   it("returns you to the preview you signed in from", () => {
     const preview = "https://taos-lite-git-feat-trip-mode-xdrabbits-projects.vercel.app";
-    expect(authRedirectTarget(preview)).toBe(preview);
+    expect(authRedirectTarget(preview)).toBe(`${preview}/`);
   });
 
   it("leaves production sign-in on production", () => {
-    expect(authRedirectTarget("https://taoslite.com")).toBe("https://taoslite.com");
+    expect(authRedirectTarget("https://taoslite.com")).toBe("https://taoslite.com/");
   });
 
   it("falls back to production for anything it does not recognize", () => {
     // Falling back rather than throwing is deliberate: a bad origin should cost
     // an unexpected landing page, never a broken sign-in button.
-    expect(authRedirectTarget("https://evil.com")).toBe(PRODUCTION_ORIGIN);
-    expect(authRedirectTarget("not a url")).toBe(PRODUCTION_ORIGIN);
-    expect(authRedirectTarget(null)).toBe(PRODUCTION_ORIGIN);
+    expect(authRedirectTarget("https://evil.com")).toBe(`${PRODUCTION_ORIGIN}/`);
+    expect(authRedirectTarget("not a url")).toBe(`${PRODUCTION_ORIGIN}/`);
+    expect(authRedirectTarget(null)).toBe(`${PRODUCTION_ORIGIN}/`);
   });
 
   it("returns the normalized origin, never the caller's string", () => {
     // Whatever came in, what goes out is what `new URL` vetted — so a host that
     // passed the check cannot smuggle its original spelling past Supabase.
-    expect(authRedirectTarget("https://TAOSLITE.com")).toBe("https://taoslite.com");
-    expect(authRedirectTarget("https://taoslite.com:443")).toBe("https://taoslite.com");
+    expect(authRedirectTarget("https://TAOSLITE.com")).toBe("https://taoslite.com/");
+    expect(authRedirectTarget("https://taoslite.com:443")).toBe("https://taoslite.com/");
+  });
+
+  it("comes back to the page that sent you, when asked", () => {
+    // /chat/join's reason for existing: the invite token is IN the path, so a
+    // sign-in that returns to "/" has thrown the invitation away.
+    expect(authRedirectTarget("https://taoslite.com", "/chat/join/abc-123_XYZ")).toBe(
+      "https://taoslite.com/chat/join/abc-123_XYZ"
+    );
+    const preview = "https://taos-lite-git-feat-trip-mode-xdrabbits-projects.vercel.app";
+    expect(authRedirectTarget(preview, "/chat/join/tok")).toBe(`${preview}/chat/join/tok`);
+  });
+
+  it("refuses a path that is trying to be a host", () => {
+    // The path never gets to move the origin. Anything that is not a plain
+    // in-app path collapses to "/" rather than being appended — an absolute
+    // URL, a scheme, a protocol-relative host, a backslash (which browsers
+    // read as a slash), and a query or fragment, since Supabase appends its
+    // own `?code=` and a second one is where a redirect target hides.
+    for (const path of [
+      "//evil.com",
+      "https://evil.com",
+      "http://evil.com",
+      "/\\evil.com",
+      "evil.com",
+      "/chat?next=https://evil.com",
+      "/chat#@evil.com",
+      "/chat/join/tok ",
+      ""
+    ]) {
+      expect(authRedirectTarget("https://taoslite.com", path), path).toBe("https://taoslite.com/");
+    }
+  });
+});
+
+describe("trustedOrigin", () => {
+  // The bare origin, for the callers that append their own path: the three
+  // Stripe routes (`${origin}/?checkout=success`) and the /chat invite link.
+  // A slash from both ends is how you get `//?checkout=success`.
+  it("is an origin, with no trailing slash", () => {
+    expect(trustedOrigin("https://taoslite.com")).toBe("https://taoslite.com");
+    const preview = "https://taos-lite-git-feat-trip-mode-xdrabbits-projects.vercel.app";
+    expect(trustedOrigin(preview)).toBe(preview);
+  });
+
+  it("falls back to production, same as sign-in", () => {
+    expect(trustedOrigin("https://evil.com")).toBe(PRODUCTION_ORIGIN);
+    expect(trustedOrigin(null)).toBe(PRODUCTION_ORIGIN);
+  });
+
+  it("is the SAME allow-list, not a second one", () => {
+    // The two used to be one function under two names. They are two functions
+    // now — different return shapes — and the thing worth pinning is that they
+    // still agree about which hosts exist.
+    for (const host of [
+      "https://taoslite.com",
+      "https://www.taoslite.com",
+      "https://taos-lite.vercel.app",
+      "http://localhost:3017",
+      "https://evil.com",
+      "https://taoslite.com.evil.com",
+      null
+    ]) {
+      expect(authRedirectTarget(host), String(host)).toBe(`${trustedOrigin(host)}/`);
+    }
   });
 });

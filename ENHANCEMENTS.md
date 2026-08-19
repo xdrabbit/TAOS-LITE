@@ -99,6 +99,14 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- More than one chat per account — joining a second invite is refused today
+  ("You're already in a chat, and TAOS holds one at a time") because
+  lib/chat.ts draws the FIRST thread an account belongs to and there is no
+  switcher. Fine for two people on a trip; the first person who wants a chat
+  with a guide AND one with their partner will want a list. The invite
+  machinery already supports it — it is `getChatThread` and the header that
+  assume one. (added 2026-08-19)
+
 - /chat should translate on what you WROTE, not on what you read — the send
   and voice routes take the sender's own member language as the source
   (`sourceLang = me.lang`) and feed it to the prompt as "the sender usually
@@ -260,6 +268,63 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **/chat had no way in, so a second person could never arrive** — Tom, 8/19,
+  two-phone walkthrough: signed in on the second device with a different
+  Google account, opened /chat, and was told *"This account isn't part of a
+  chat yet. Sign in with your own Google account (not the shared passcode
+  account)"* — an instruction to do the thing he had just done, in English
+  only, under a live composer whose Send button was disabled with nothing
+  saying why.
+
+  Nothing was wrong with his account. There was no flow. `taos_lite_chat_*`
+  has SELECT policies and nothing else, and **no route in the app had ever
+  created a thread or a membership** — the single row in the database ("Tom &
+  Liz", 2026-07-18) was typed into the SQL editor by hand. /chat worked for
+  exactly two accounts and dead-ended for every other one that has ever
+  opened it. The answer to "can a QR scanner start a chat self-serve?" was
+  no, and the founder could not find the flow because there wasn't one.
+
+  Now there is:
+
+  - **"Start a chat · Inicia un chat"** is the empty state. It creates the
+    thread and the membership (seeded with the phone's own language from the
+    /translate pair) and hands back a **QR + link** in the existing share
+    sheet — `components/QrShareModal.tsx` grew props rather than a twin.
+  - **The second person opens the link** at `/chat/join/<token>`, signs in if
+    they need to, and is in. The invite is a 192-bit url-safe token,
+    **single-use** (claimed with a conditional UPDATE, so two phones racing
+    produce one member and one honest "already used"), **7-day expiry**, and
+    it never decides WHO joins — the Supabase session does, so a leaked link
+    can add only the account holding the phone that opens it.
+  - **Two people, hard.** The route counts and a `before insert` trigger with
+    a `for update` on the thread row counts again, because lib/chat.ts reads
+    a thread as "me and the one other member" and /api/chat/send translates
+    into exactly one partner language.
+  - **"Invite someone · Invita a alguien"** sits next to "No one else in this
+    chat yet", so the door is where the sentence about the missing person is.
+    Tapping it retires the previous unused link — the one on your screen is
+    always the one that works.
+  - **Every refusal is now a true statement about the LINK** ("This link has
+    already been used", "That chat already has two people in it"), bilingual,
+    and none of them says "sign in" to somebody who is signed in.
+    `tests/chat-invite.test.ts` pins that, the mechanics, and the schema.
+  - **The invites table has RLS on and zero policies** — a browser has no
+    business listing tokens; the routes reach it with the service role.
+
+  Also fixed on the way past, because it stood between the invite and the
+  preview test: **`authRedirectTarget` returned a bare origin**, and
+  Supabase's allow-list entries end in `/**`, matched against the whole URL.
+  So a preview origin with no path matched nothing and silently collapsed to
+  production — the 8/18 bug, still live on 8/19 with the dashboard already
+  edited, one character wide. Asked directly:
+  `…vercel.app` → `taoslite.com/`, `…vercel.app/` → itself. Sign-in now
+  returns an origin AND a path ("/" by default), which is also how the invite
+  survives a signed-out scan: Google brings the stranger back to
+  `/chat/join/<token>`, not to the home screen with the token gone.
+  `trustedOrigin` keeps the bare-origin job for Stripe's `success_url` and the
+  invite link, which append their own paths.
+  (2026-08-19, branch `feat/trip-mode`)
 
 - The language row proves itself instead of describing itself — Tom, 8/19,
   third misread of the same control, after the labels above had already

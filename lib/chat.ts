@@ -1,5 +1,6 @@
 "use client";
 
+import { readStoredPair } from "@/lib/translate/pair";
 import { supabase } from "@/lib/supabase";
 
 // Client helpers for the tier-1 private chat. Reads go straight through
@@ -174,4 +175,75 @@ export async function markThreadRead(threadId: string): Promise<void> {
     .eq("thread_id", threadId)
     .neq("sender_id", myUserId)
     .is("read_at", null);
+}
+
+// ── Getting a second person in ─────────────────────────────────────────────
+// Until 8/19 there was nothing here: threads were seeded by hand in SQL and
+// getChatThread's `null` was the end of the road for every other account. The
+// two calls below are that road — mint a link, or walk in through one. Both
+// go through routes for the same reason the send routes do: taos_lite_chat_*
+// has no INSERT policy for a browser, deliberately.
+
+/** The language this phone would speak in, for seeding a brand-new membership. */
+function myPhoneLanguage(): string {
+  return readStoredPair()?.[0] ?? "en";
+}
+
+export interface ChatInvite {
+  /** The link to send or show as a QR. Minted once; nothing can read it back. */
+  url: string;
+  threadId: string;
+  expiresAt: string;
+  /** True when this call also created the thread — "start a chat", not "invite". */
+  created: boolean;
+}
+
+export async function createChatInvite(): Promise<ChatInvite> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/chat/invite", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ lang: myPhoneLanguage() })
+  });
+  const payload = (await res.json().catch(() => ({}))) as Partial<ChatInvite> & { error?: string };
+  if (!res.ok || !payload.url || !payload.threadId || !payload.expiresAt) {
+    throw new Error(payload.error || "Could not create the invite link.");
+  }
+  return {
+    url: payload.url,
+    threadId: payload.threadId,
+    expiresAt: payload.expiresAt,
+    created: Boolean(payload.created)
+  };
+}
+
+export interface ChatJoinResult {
+  threadId: string;
+  /** False when the link was already theirs — not an error, just nothing to do. */
+  joined: boolean;
+  message?: string;
+}
+
+export async function joinChatWithToken(inviteToken: string): Promise<ChatJoinResult> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/chat/join", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ token: inviteToken, lang: myPhoneLanguage() })
+  });
+  const payload = (await res.json().catch(() => ({}))) as Partial<ChatJoinResult> & {
+    error?: string;
+  };
+  if (!res.ok || !payload.threadId) {
+    throw new Error(payload.error || "Could not open the invite.");
+  }
+  return {
+    threadId: payload.threadId,
+    joined: Boolean(payload.joined),
+    message: payload.message
+  };
 }

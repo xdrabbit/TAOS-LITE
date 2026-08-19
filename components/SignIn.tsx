@@ -8,7 +8,21 @@ import { supabase } from "@/lib/supabase";
 // password, verified by Supabase, and Row-Level Security protects the history.
 const SHARED_EMAIL = "taos@ritualstack.io";
 
-export function SignIn(): JSX.Element {
+export interface SignInProps {
+  /**
+   * Where in the app Google should put them back down, if not the home
+   * screen. /chat/join needs this: an invite link opened by a signed-out
+   * stranger has to come back to the invite, or the token is gone and the
+   * whole point of the link with it.
+   */
+  redirectPath?: string;
+  /** Replaces the heading, for a sign-in that is on the way to somewhere. */
+  title?: string;
+  /** Replaces the two lines under it. */
+  blurb?: string;
+}
+
+export function SignIn({ redirectPath, title, blurb }: SignInProps = {}): JSX.Element {
   const [passcode, setPasscode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +55,7 @@ export function SignIn(): JSX.Element {
       // still on the preview afterwards and not quietly reviewing production.
       // Vetted against lib/authRedirect.ts, which mirrors the Supabase
       // dashboard's Redirect URLs — see docs/supabase-auth-redirects.md.
-      options: { redirectTo: authRedirectTarget(window.location.origin) }
+      options: { redirectTo: authRedirectTarget(window.location.origin, redirectPath) }
     });
     if (error) setError("Google sign-in failed. Try again.");
   }
@@ -49,11 +63,17 @@ export function SignIn(): JSX.Element {
   return (
     <main className="flex min-h-screen items-center justify-center px-5">
       <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
-        <h1 className="text-2xl font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-        <p className="mt-1 text-sm text-amber-100/60">
-          Enter the passcode to open your translator.
-          <br />
-          Escribe el código para abrir tu traductor.
+        <h1 className="text-2xl font-semibold tracking-tight text-amber-200">
+          {title ?? "TAOS·LITE"}
+        </h1>
+        <p className="mt-1 text-sm leading-snug text-amber-100/60">
+          {blurb ?? (
+            <>
+              Enter the passcode to open your translator.
+              <br />
+              Escribe el código para abrir tu traductor.
+            </>
+          )}
         </p>
 
         <button

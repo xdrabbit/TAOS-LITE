@@ -107,10 +107,40 @@ open the preview URL on a phone, tap **Continue with Google**, and confirm the
 address bar still says `taos-lite-git-…vercel.app` when the app comes back. Then
 do the same on `https://taoslite.com` and confirm it stays on production.
 
+## <a id="the-slash"></a>The trailing slash (8/19) — the other half of the same bug
+
+The dashboard entries above went in, and the probe below still showed this:
+
+```
+https://taos-lite-git-feat-trip-mode-…vercel.app   -> https://taoslite.com/   ← still wrong
+https://taos-lite-git-feat-trip-mode-…vercel.app/  -> itself                  ← correct
+```
+
+Same host, one character apart. Every entry in the allow-list is a pattern
+ending in `/**`, Supabase matches it against the **whole URL**, and a bare
+origin has no path to match — so it fell through to the Site URL exactly as if
+the entry were missing. The dashboard was right; the code was asking with a
+string the dashboard could never match.
+
+`authRedirectTarget` therefore returns an origin **and a path**, `/` by
+default. If you re-run the probe, note that the loop above asks with bare
+origins: add the trailing slash to see what the app actually sends.
+
+The second argument is what `/chat/join/<token>` needs — an invite link opened
+by a signed-out stranger has to come back to the invite, not to the home screen
+with the token gone. The path is fenced too (`INTERNAL_PATH`): an in-app path
+and nothing else, no query, no fragment, no host.
+
+The bare-origin job moved to `trustedOrigin`, which is what Stripe's
+`success_url` and the /chat invite link want — they append their own paths, and
+a slash from both ends gives you `//?checkout=success`.
+
 ## The code half
 
 `lib/authRedirect.ts` holds the same allow-list, applied before any host is
-handed to Supabase, and `tests/auth-redirect.test.ts` fences it.
+handed to Supabase, and `tests/auth-redirect.test.ts` fences it — including the
+trailing slash above, which is pinned as an assertion rather than left to be
+re-lost.
 
 It cannot fix the bug on its own — Supabase's list is what decides, and code
 cannot widen it. What it does is stop the dashboard change from becoming an open
