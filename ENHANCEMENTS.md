@@ -324,6 +324,23 @@ is not a prerequisite for using it.
   `/chat/join/<token>`, not to the home screen with the token gone.
   `trustedOrigin` keeps the bare-origin job for Stripe's `success_url` and the
   invite link, which append their own paths.
+
+  **Walked end-to-end on the preview, 2026-08-19** — three throwaway accounts
+  against the deployed branch, not a local mock, then deleted (the database is
+  back to the one hand-seeded thread). A had no thread and no membership, the
+  state Tom's second account was stuck in: *Start a chat* → thread + invite
+  URL **on the preview origin**; B opened the link, joined, set Spanish; A's
+  *"Where should we meet for dinner?"* reached B as *"¿Dónde nos encontramos
+  para cenar?"*, and B's Spanish reply reached A in English. Every refusal
+  fired as written — reused link 200 *"You're already in this chat"*, guessed
+  token 404, no session 401, full thread 409, stranger on a spent link 410,
+  second chat 409 — and a third account could read neither the messages nor
+  the invites table through RLS. The Supabase probe in
+  `docs/supabase-auth-redirects.md` confirms the last leg: a `/chat/join/<token>`
+  URL echoes itself back, so a signed-out scanner returns to the invite with
+  the token intact, while the bare origin still collapses to production. The
+  one thing not exercised is Google itself — the accounts were email/password,
+  so the OAuth round trip is still Tom's to tap.
   (2026-08-19, branch `feat/trip-mode`)
 
 - The language row proves itself instead of describing itself — Tom, 8/19,
