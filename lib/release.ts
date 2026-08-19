@@ -1,6 +1,6 @@
 // First-release scope (Tom, 8/18: "take us to minimum first release
 // candidate"). Customers see the screens the product actually sells:
-// Translate, Live, Chat, and the Photo translator.
+// Translate, Live, Chat, Table, and the Photo translator.
 //
 // Tutor was in that list until RC1 — the paid plans sell tutor minutes, so
 // hiding it makes the pricing page write a cheque the app cannot cash. That
@@ -17,13 +17,21 @@
 //               in ENHANCEMENTS.md land. Now ALSO off entirely for RC1 —
 //               see callEnabled() below; the founders gate is what it falls
 //               back to once the flag is on again.
-// - /tabletop — niche party mode; every extra screen is a day-one support
-//               surface.
 // - /video    — works, but heavy (uploads, ffmpeg) for a first release.
+//
+// /tabletop was held here too, as "niche party mode; every extra screen is a
+// day-one support surface". Tom took it back out on 8/19, walking RC1 on the
+// Droid and finding no way to reach it: Table is the across-the-table dinner
+// mode, the reason to lay the phone down between two people at all, and it
+// has been wired to the whole language catalog since the catalog landed. The
+// day-one-support argument holds for /video and /call, which are heavy and
+// unfinished respectively; it was never an argument against a screen that
+// works. tests/nav-completeness.test.ts now pins the nav itself, so the next
+// refactor cannot quietly orphan a screen the way this one was orphaned.
 //
 // To un-hold a screen: remove it here and un-wrap its page from
 // <FounderGate>. tests/release.test.ts pins this set — change both together.
-export const HELD_BACK_V1 = ["call", "tabletop", "video"] as const;
+export const HELD_BACK_V1 = ["call", "video"] as const;
 
 // /tutor is held back a different way, and for a different reason. The screens
 // above are finished work waiting on cost guards or on a day-one support
