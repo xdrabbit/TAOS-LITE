@@ -211,6 +211,25 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- Stripe can only send you back somewhere we own — the same open-redirect hole
+  as the sign-in bug below, one floor down. `/api/stripe/checkout`, `/pack` and
+  `/portal` built `success_url` / `cancel_url` / `return_url` by concatenating
+  the request's own `Origin` header, which the caller picks. Anyone who could
+  reach those routes could mint a real Stripe session that drops the customer on
+  their host the moment checkout finishes — a convincing place to ask for the
+  card details Stripe just took, with our checkout page as the referrer. All
+  three now run the header through `trustedOrigin` in `lib/authRedirect.ts`: the
+  same allow-list Google sign-in uses, deliberately not a second copy, since an
+  origin we won't hand a session to isn't one we should bounce a payment
+  through. The `?? new URL(req.url).origin` fallback went with it — that host
+  came from the same untrusted request, so it was never the safer branch, and
+  `fetch` sends `Origin` on same-origin POSTs anyway.
+  Buying on a preview still comes back to that preview; production and `www`
+  are byte-identical to before. tests/stripe-origin.test.ts is route-level on
+  purpose — the allow-list is already pinned next door, what needed a fence is
+  that these three routes still run the header *through* it.
+  — 2026-08-18, branch feat/trip-mode
+
 - Google sign-in comes back to the deployment you left from — signing in on a
   preview landed you on production, silently, so a tester walking through the
   branch was walking through prod. Supabase never honored the return address

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
+import { trustedOrigin } from "@/lib/authRedirect";
 
 export const runtime = "nodejs";
 
@@ -26,7 +27,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "No billing account yet." }, { status: 400 });
     }
 
-    const origin = req.headers.get("origin") ?? new URL(req.url).origin;
+    // Stripe bounces the customer to whatever we put below, so the raw Origin
+    // header cannot go in — that is an open redirect with a checkout page in
+    // front of it. The `new URL(req.url).origin` fallback is gone with it:
+    // req.url's host comes from the same untrusted request, so it was never the
+    // safer branch. `fetch` sends Origin on same-origin POSTs too, which is why
+    // dropping it costs nothing on prod, previews or localhost.
+    const origin = trustedOrigin(req.headers.get("origin"));
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
       return_url: origin

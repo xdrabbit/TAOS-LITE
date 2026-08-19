@@ -16,6 +16,10 @@
 // widening the dashboard list cannot turn the sign-in button into an open
 // redirect — a stolen session is a worse bug than the one being fixed. The two
 // lists are a pair: change one, change the other.
+//
+// Since 8/18 this is also the fence for every OTHER route that turns a
+// client-supplied `Origin` into a URL somebody else will follow — see
+// `trustedOrigin` at the bottom. Same allow-list, one place to widen it.
 
 /** Where an unrecognized host gets sent instead. Also Supabase's Site URL. */
 export const PRODUCTION_ORIGIN = "https://taoslite.com";
@@ -94,3 +98,16 @@ export function authRedirectTarget(candidate: string | null | undefined): string
   // the one that was vetted a line ago.
   return new URL(candidate as string).origin;
 }
+
+/**
+ * The same fence, for the other places a client-supplied `Origin` header gets
+ * turned into a URL we hand to somebody else — today, the three Stripe routes
+ * that build `success_url` / `cancel_url` / `return_url` out of it.
+ *
+ * Deliberately the same function rather than a second list. An origin we would
+ * not let Google drop a session on is not one we should bounce a paying
+ * customer through either, and two allow-lists drift apart the first time one
+ * of them gains a host. The alias exists only so a billing route does not have
+ * to import something called `authRedirectTarget` to say what it means.
+ */
+export const trustedOrigin = authRedirectTarget;
