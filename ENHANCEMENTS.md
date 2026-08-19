@@ -27,6 +27,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   DO before charging: Stripe live keys + live price ids + production webhook
   (Tom's dashboard work), one real end-to-end purchase, and ideally the call
   cost guards.
+  → Tabletop un-cut 2026-08-19 (see Shipped): Tom walked RC1 on the Droid and
+  could not reach Table at all. It is customer-facing now; Call and Video stay
+  founders-only.
   → Tutor pulled from RC1 2026-08-18 (second cut): it is unfinished and is
   planned as a PREMIUM feature, so it is gated behind
   NEXT_PUBLIC_ENABLE_TUTOR (lib/release.ts), off by default. Hidden from
@@ -263,6 +266,48 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **Table comes back to the nav, and the nav gets a fence** — Tom, 8/19, on
+  the Droid walkthrough: the header read Live · Chat · Translate and there was
+  no way to reach /tabletop. (shipped 2026-08-19)
+
+  The reported cause was a nav refactor dropping the "Together ▾" menu when
+  /chat became a thread list. That is not what happened — the chat-multiples
+  commits never touched the nav, and the menu, the Table link and /tabletop
+  itself were all still there. /tabletop was simply founders-only by design
+  (`HELD_BACK_V1` in lib/release.ts, "niche party mode; every extra screen is
+  a day-one support surface"), and the whole Together menu rendered behind
+  `{founder ? …}` with customers getting a plain Chat pill instead. Anyone
+  reading the nav source saw a Table entry and moved on; only walking it as a
+  non-founder showed the hole.
+
+  So this is a scope change, not a repair: **/tabletop left the founders gate
+  on Tom's say-so** — out of `HELD_BACK_V1`, page un-wrapped from
+  `<FounderGate>`, and one Together menu for everyone. Call and Video stay
+  held (still expensive and still heavy), and /tutor stays dark.
+
+  The Together menu was kept rather than promoting Table to a fourth header
+  pill: Live · Chat · Table · Translate plus the title and two icons does not
+  fit a 360px phone, which is the sideways-slide bug the menu was built to fix
+  in the first place. With Call dark the menu opens to Chat · Table.
+
+  `/about` was orphaned the same way and is fixed in passing — Landing.tsx
+  links it, but Landing only ever renders for logged-OUT visitors, so signing
+  in was a one-way door away from the product page. It is in the account menu
+  now.
+
+  The actual deliverable is **tests/nav-completeness.test.ts**, which pins the
+  nav instead of the scope list: it enumerates the route directories under
+  `app/` and fails unless every one is declared either reachable (linked from
+  TranslatorShell or Landing *with the release flags stripped out of the
+  source*) or gated (behind its flag, and absent when that flag is off). A new
+  screen with no nav entry fails on the day it is added; a screen that slips
+  behind a conditional fails the same way. Both halves were mutation-tested —
+  re-wrapping the Table link in `{founder ? …}` and adding an unlinked
+  `app/` route each turn it red. /tabletop verified on a served production
+  build: 200, no "Coming soon", pill row and "More languages · Más idiomas"
+  present, while /call and /tutor still 307 home — 2026-08-19, branch
+  feat/trip-mode
 
 - **Type & Translate follows the pills** — Tom, 8/19, on the two-phone
   walkthrough: the home screen was happily doing BS⇄EN, and the typing surface
