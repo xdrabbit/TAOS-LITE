@@ -22,7 +22,7 @@ import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
-import { isFounder, tutorEnabled } from "@/lib/release";
+import { callEnabled, isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 // The pair's languages, its storage, and the tap rule all live in
@@ -885,7 +885,8 @@ export function TranslatorShell({
             {/* Call / Chat / Table stacked under one pill — six pills overflowed
                 a phone width and made the whole page slide sideways. In v1,
                 Call and Table are founders-only (lib/release.ts), so customers
-                get a plain Chat pill instead of a one-item menu. */}
+                get a plain Chat pill instead of a one-item menu — and for RC1
+                Call is off even for founders, leaving them Chat + Table. */}
             {founder ? (
               <div ref={togetherMenuRef} className="relative">
                 <button
@@ -903,17 +904,25 @@ export function TranslatorShell({
                     aria-label="Together"
                     className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                   >
-                    <a
-                      href="/call"
-                      role="menuitem"
-                      className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Call · Llamada
-                    </a>
+                    {/* Call is off for RC1 (lib/release.ts) — it never got
+                        wired to the language catalog. Chat leads the menu
+                        when it's gone, so it drops the top border the way a
+                        first item should. */}
+                    {callEnabled() ? (
+                      <a
+                        href="/call"
+                        role="menuitem"
+                        className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Call · Llamada
+                      </a>
+                    ) : null}
                     <a
                       href="/chat"
                       role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      className={`block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10 ${
+                        callEnabled() ? "border-t border-white/10" : ""
+                      }`}
                     >
                       Chat · Chat
                     </a>

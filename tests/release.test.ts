@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  callEnabled,
   founderEmails,
   HELD_BACK_V1,
   isFounder,
@@ -27,6 +28,7 @@ import {
 const ORIGINAL_ENV = process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
 const ORIGINAL_TUTOR = process.env.NEXT_PUBLIC_ENABLE_TUTOR;
 const ORIGINAL_ONDEVICE = process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT;
+const ORIGINAL_CALL = process.env.NEXT_PUBLIC_ENABLE_CALL;
 
 function restore(name: string, original: string | undefined): void {
   if (original === undefined) {
@@ -40,6 +42,7 @@ afterEach(() => {
   restore("NEXT_PUBLIC_FOUNDER_EMAILS", ORIGINAL_ENV);
   restore("NEXT_PUBLIC_ENABLE_TUTOR", ORIGINAL_TUTOR);
   restore("NEXT_PUBLIC_ENABLE_ONDEVICE_STT", ORIGINAL_ONDEVICE);
+  restore("NEXT_PUBLIC_ENABLE_CALL", ORIGINAL_CALL);
 });
 
 function read(path: string): string {
@@ -171,5 +174,78 @@ describe("onDeviceSttEnabled (RC1: /live has one engine)", () => {
     const live = read("components/LiveShell.tsx");
     expect(live).not.toMatch(/localStorage|sessionStorage/);
     expect(live).toContain('useState<Engine>("ambient")');
+  });
+});
+
+// /call is off for RC1 — and note it is BOTH flagged off here and still a
+// member of HELD_BACK_V1 above. That is deliberate, not a leftover: the flag
+// is the RC1 decision (nobody sees /call, founders included), the founders
+// gate is what it lands back on when the flag goes to 1, and the cost
+// argument that put it behind the gate in the first place is still unanswered.
+// Turning the flag on must not quietly ship /call to customers.
+describe("callEnabled (RC1: /call is dark)", () => {
+  it("is off when the flag is unset — the RC1 default, and what production ships", () => {
+    delete process.env.NEXT_PUBLIC_ENABLE_CALL;
+    expect(callEnabled()).toBe(false);
+  });
+
+  it("is off for every value that is not an explicit opt-in", () => {
+    for (const value of ["", " ", "0", "false", "no", "off", "undefined", "soon"]) {
+      process.env.NEXT_PUBLIC_ENABLE_CALL = value;
+      expect(callEnabled()).toBe(false);
+    }
+  });
+
+  it("turns on with 1 or true, tolerating case and stray whitespace", () => {
+    for (const value of ["1", " 1 ", "true", "TRUE", " True "]) {
+      process.env.NEXT_PUBLIC_ENABLE_CALL = value;
+      expect(callEnabled()).toBe(true);
+    }
+  });
+
+  it("reads the literal process.env expression, so Next can inline it client-side", () => {
+    expect(read("lib/release.ts")).toContain("process.env.NEXT_PUBLIC_ENABLE_CALL");
+  });
+
+  it("stays in the founders-held set, so flag-on is not flag-on-for-everyone", () => {
+    expect(new Set<string>(HELD_BACK_V1).has("call")).toBe(true);
+    expect(read("app/call/page.tsx")).toContain("<FounderGate>");
+  });
+
+  it("redirects /call home rather than rendering it, and dynamically", () => {
+    // force-dynamic matters as much as the redirect: statically prerendered,
+    // Next turns redirect() into a post-hydration bounce with no Location
+    // header — a visible flash of a screen that is supposed to be gone.
+    const page = read("app/call/page.tsx");
+    expect(page).toContain('export const dynamic = "force-dynamic"');
+    expect(page).toContain('if (!callEnabled()) redirect("/")');
+    // A shared /call?room=XYZ link should not preview a title either.
+    expect(page).toContain("if (!callEnabled()) return {};");
+  });
+
+  it("404s the one route that spends money", () => {
+    // /api/call/realtime is unauthenticated and its duration cap lives in the
+    // client, so an off feature that still mints sessions is a live billing
+    // hole, not a cosmetic one.
+    const route = read("app/api/call/realtime/route.ts");
+    expect(route).toContain("callEnabled");
+    expect(route).toMatch(/if \(!callEnabled\(\)\) \{[\s\S]*?status: 404/);
+  });
+
+  it("has no /call link left in the nav outside the flag", () => {
+    // The Together menu is the only place /call was ever linked. Every link
+    // to it must sit directly under a callEnabled() gate — checked positionally
+    // rather than by stripping the block, because a second, ungated copy
+    // pasted in later is exactly the failure worth catching.
+    for (const path of ["components/TranslatorShell.tsx", "components/Landing.tsx"]) {
+      const lines = read(path).split("\n");
+      lines.forEach((line, i) => {
+        if (!line.includes('href="/call"')) return;
+        const preceding = lines.slice(Math.max(0, i - 3), i).join("\n");
+        expect(preceding).toContain("callEnabled() ? (");
+      });
+    }
+    // ...and the gate is really there, so the loop above is not vacuous.
+    expect(read("components/TranslatorShell.tsx")).toContain("callEnabled() ? (");
   });
 });

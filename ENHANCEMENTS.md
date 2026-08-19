@@ -72,6 +72,24 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   connected, silence included: auto-hangup after ~10 min with no speech,
   shrink the 4h hard cap to ~90 min, show an elapsed/cost timer on screen.
   (added 2026-08-03, from the July 14/22 OpenAI bill spikes)
+  → /call is GATED OFF for RC1 (2026-08-18) behind NEXT_PUBLIC_ENABLE_CALL
+  (lib/release.ts), dark to everyone including founders: nav link gone, /call
+  redirects home, POST /api/call/realtime 404s. The trigger was not cost but
+  the language catalog — when the 100 languages landed (1711a3f4), /live,
+  /tabletop and /chat were wired to the catalog and **/call was not**. It
+  still takes a hardcoded `"en" | "es"` target and builds an English/Spanish
+  interpreter prompt, so on a trip with the pair set to, say, [en, it] the
+  call screen interprets into the wrong language. It has also never been
+  walked end-to-end with two phones. Before the flag goes back on:
+  1. Wire CallShell to `useLanguagePair()` like the other three screens.
+  2. Make `buildCallInterpreterInstructions` take a language pair instead of
+     `TargetLang`, and drop the `en`/`es` name table with it.
+  3. Land the cost guards above — the client-side duration cap in
+     lib/call/interpreter.ts is on the wrong side of the wire for an
+     unauthenticated minting route.
+  4. Two phones, two networks, one real conversation.
+  Flag on restores the *previous* behavior exactly, founders gate included —
+  it does not ship /call to customers. Nothing was deleted.
 - Cantonese field verdict — have the Cantonese-speaking guest judge the v3
   voice and the zh⇄yue auto-detection; swap ELEVENLABS_YUE_MODEL or tune the
   detect prompt based on her review. (added 2026-08-03)

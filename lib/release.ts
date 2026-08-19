@@ -14,7 +14,9 @@
 // and their nav links are hidden:
 // - /call     — bills two realtime lines the whole time it's connected
 //               (the July 14/22 spikes); not sellable until the cost guards
-//               in ENHANCEMENTS.md land.
+//               in ENHANCEMENTS.md land. Now ALSO off entirely for RC1 —
+//               see callEnabled() below; the founders gate is what it falls
+//               back to once the flag is on again.
 // - /tabletop — niche party mode; every extra screen is a day-one support
 //               surface.
 // - /video    — works, but heavy (uploads, ffmpeg) for a first release.
@@ -44,6 +46,34 @@ export const HELD_BACK_V1 = ["call", "tabletop", "video"] as const;
 // product decision, not a refactor.
 export function tutorEnabled(): boolean {
   const flag = (process.env.NEXT_PUBLIC_ENABLE_TUTOR ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
+// /call is off for RC1 the way tutor is off: dark to everyone, founders
+// included, rather than founders-only behind the gate above.
+//
+// The founders gate was the right answer while /call was finished work
+// waiting on cost guards. It stopped being the right answer when the
+// 100-language catalog landed (commit 1711a3f4): /live, /tabletop and /chat
+// were wired to it, /call was not. It still mints an interpreter session with
+// a hardcoded "en" | "es" target and an English/Spanish prompt, so on a trip
+// where the pair is [en, it] the call screen quietly interprets into the
+// wrong language. Half-integrated and never verified with two phones is not
+// something to hand a founder either — the founders are the people who would
+// reach for it in a real conversation and be let down by it.
+//
+// So: nav link gone, /call redirects home, and POST /api/call/realtime — the
+// one route it has, and the one that spends money — answers 404. Setting
+//
+//     NEXT_PUBLIC_ENABLE_CALL=1
+//
+// restores exactly the previous behavior, founders gate and all; it does not
+// ship /call to customers. Before that flag goes on for real: wire CallShell
+// to the language catalog (useLanguagePair, like the other three) and make
+// the interpreter prompt take a language pair instead of TargetLang, then
+// walk it with two phones. ENHANCEMENTS.md carries the list.
+export function callEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_CALL ?? "").trim().toLowerCase();
   return flag === "1" || flag === "true";
 }
 
