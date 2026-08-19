@@ -24,6 +24,7 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callEnabled, isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { BUILD_LABEL } from "@/lib/version";
 
 // The pair's languages, its storage, and the tap rule all live in
 // lib/translate/pair.ts — /vision reads the same saved pair to decide what
@@ -79,11 +80,7 @@ function speakerFor(code: LangCode): Speaker {
 // what this phone has reached for lately, capped at five. The rest live in the
 // search sheet, one tap deep, which is where the old disclosure's job went.
 
-// Unobtrusive build marker so we can tell which deploy is live. Vercel injects
-// the commit SHA at build time; falls back to "local" during dev.
-const APP_VERSION = "0.4";
-const BUILD_SHA = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7);
-const BUILD_LABEL = `v${APP_VERSION}${BUILD_SHA ? ` · ${BUILD_SHA}` : " · local"}`;
+// The build marker moved to lib/version.ts when /about started showing it too.
 
 // Speaker-facing copy flips to whoever is talking (Tom = en, Liz = es) so each
 // person reads the controls they act on in their own language.

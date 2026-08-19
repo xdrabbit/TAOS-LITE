@@ -204,14 +204,15 @@ export function Landing({ onSignIn }: { onSignIn: () => void }): JSX.Element {
         </section>
 
         <footer className="mt-10 flex flex-col items-center gap-1 text-center">
-          {/* The storefront is handed to strangers (a QR at a table), so the
-              link that reaches the dedication is named for what it says, not
-              for who it names. The dedication itself still lives at /about. */}
+          {/* The storefront is handed to strangers (a QR at a table), so this
+              link is named for what it reaches. It used to reach a signed
+              dedication and read "Why we built TAOS"; on 8/19 /about became a
+              product page, and the dedication moved to docs/backstory.md. */}
           <a
             href="/about"
             className="text-sm text-amber-100/70 underline-offset-2 hover:underline"
           >
-            Why we built TAOS <span aria-hidden>❤️</span>
+            About TAOS · Acerca de TAOS
           </a>
           <span className="text-xs text-amber-100/30">
             © {new Date().getFullYear()} TAOS · Real-time translation &amp; language tutoring

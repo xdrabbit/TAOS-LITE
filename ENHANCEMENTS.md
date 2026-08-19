@@ -210,15 +210,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   (added 2026-08-03)
 - Decide the fate of the stale `dev` branch — merged-history only or does it
   hold anything worth keeping? (added 2026-08-03)
-- The /about dedication — Tom's call, deliberately left alone. RC1 stripped
-  first names from every label a stranger reads (the speaker card, the two
-  direction toggles, the landing footer link, which now reads "Why we built
-  TAOS"). /about was NOT touched: it is signed, authored prose — "Made for
-  Lizmariett Marquez", the two paragraphs, "— Tom" — and that is a dedication,
-  not a leftover label. It is still linked from the landing footer and its
-  page title still carries the full name, so a stranger who taps it reads it.
-  Keep it as is, soften it, or move it behind a founders-only link — but that
-  is Tom's to decide, not a cleanup. (added 2026-08-18)
 
 ## Languages: the two tiers, and adding one
 
@@ -266,6 +257,33 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- /about reads as a product; the dedication is kept, not cut — Tom, 8/19,
+  closing the open RC1 question: TAOS is handed to strangers by QR
+  code, so the page they land on should be professional. It was a signed
+  personal dedication.
+
+  **Preserved first.** The original prose — the title, both paragraphs, "Para
+  Liz y su familia en Venezuela", the "— Tom" signature, the "Made for…"
+  footer — is in `docs/backstory.md` verbatim, marked as the v1 dedication and
+  held for a future "Our story" page. It was moved for being private, not for
+  being wrong, and `tests/about-page.test.ts` fails if that file loses it.
+
+  **The new page**, bilingual EN · ES per the app's convention: one paragraph
+  on what TAOS is (spoken conversation, messages between two phones, photo
+  translation, the catalog's language count), a support line, and the build
+  marker. No personal names in the copy, the title, the meta description, or
+  the source comments — fenced by regex over both the strings and the file.
+
+  Along the way: `APP_VERSION`/`BUILD_LABEL` moved out of TranslatorShell into
+  `lib/version.ts` now that two screens print it, and the landing footer link
+  — named "Why we built TAOS" because it reached a dedication — now reads
+  "About TAOS · Acerca de TAOS", because it no longer does.
+
+  OPEN: **support@taoslite.com does not exist yet.** Nothing in the repo,
+  Stripe's settings, or env defined a support address, so the page now
+  promises one that must be created and routed before the QR codes go out.
+  (2026-08-19)
 
 - Whose language is this? /chat says it out loud — Tom, 8/19, on the same
   walkthrough that turned up the database ceiling below: he tapped PL on
