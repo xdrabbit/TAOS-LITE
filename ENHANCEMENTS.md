@@ -252,6 +252,40 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- /chat can leave English and Spanish — tapping PL on /chat came back "Could
+  not save the language." while /translate on the same phone was doing EN⇄PL
+  happily. Nothing in the TypeScript was wrong: `POST /api/chat/language`
+  already validated through `isSupportedLanguageCode`, the shell already drew
+  all hundred pills, and the send/voice routes already interpolated the
+  catalog's English label. The ceiling was in the DATABASE.
+  `taos_lite_chat_members.lang` had carried `check (lang in ('en','es'))`
+  since chat tier 1 landed (2026-07-18), when two languages was the whole app.
+  When the catalog went 13 → 100 every list in the code came down and this
+  one — the one no amount of reading the repo would find — did not. A valid
+  code passed every check the app could see, reached Postgres, and came back
+  23514, which the route honestly reports as a save failure.
+
+  The replacement constraint is a SHAPE check (`lang ~ '^[a-z]{2,3}$'`), not a
+  membership list. A hundred codes enumerated in the schema would be a second
+  catalog needing a migration every time someone adds a row to the first one,
+  which is the failure being cleaned up here; the app owns which languages
+  exist and the database only insists the column holds something a translation
+  prompt can safely interpolate. Migration recorded at
+  `supabase/migrations/20260819_chat_members_lang_catalog.sql` and applied to
+  the project.
+
+  tests/chat-language.test.ts is the new fence, and it reads the migrations as
+  well as the route — the schema was the one place a language list could hide
+  where no source-reading test was looking. It fails if any migration re-pins
+  a language column to a fixed set, and it checks every catalog code against
+  the shape constraint, so adding a language can never again break /chat for
+  it alone. Verified on the live database: `pl` (tier 1) and `bn` (tier 2)
+  both save, prose and `not-a-language` are still refused, Tom and Liz's rows
+  restored to en/es. Tier 2 in chat is unchanged and correct — text-only is a
+  property of synthesis, asked at `requestSpeech`, never a reason a language
+  cannot be saved on a thread.
+  — 2026-08-19, branch feat/trip-mode
+
 - Stripe can only send you back somewhere we own — the same open-redirect hole
   as the sign-in bug below, one floor down. `/api/stripe/checkout`, `/pack` and
   `/portal` built `success_url` / `cancel_url` / `return_url` by concatenating
