@@ -264,6 +264,52 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **Type & Translate follows the pills** — Tom, 8/19, on the two-phone
+  walkthrough: the home screen was happily doing BS⇄EN, and the typing surface
+  behind the "Translate" nav pill still said *"You (EN → ES)"*. (shipped
+  2026-08-19)
+
+  It was the screen the 8/18 catalog wiring missed. /live, /tabletop and /chat
+  were each taken off a private two-language table that day; this one kept a
+  `Direction = "en-es" | "es-en"` Record with a label AND a placeholder hanging
+  off it, and received only the name scrub. The fence that was supposed to
+  catch exactly this listed three screens and not this one — partly because
+  two different files are called Translate (`TranslatorShell` is the home
+  screen's spoken turns, `TranslateShell` is the typing surface), which is most
+  of how it stayed invisible.
+
+  - **The pair is shared, not private.** It comes from `useLanguagePair` now —
+    the same pair, off the same key on disk, as the home screen, /live and
+    /tabletop — drawn with the same `LanguagePillRow` and `LanguageSheet`, not
+    a fork. The You/Them toggle keeps the job it was really doing: the pair
+    says which two languages, the toggle says which of the two is at the
+    keyboard (`pairDirection`).
+  - **The route underneath it too.** `/api/text-translate` spoke the same
+    two-string direction and interpolated its own
+    `{ es: "Spanish", en: "English" }`, so fixing the screen alone would have
+    left the pair stopping at the network boundary. It takes a catalog pair
+    now; auto-detect chooses between the two sides it was handed instead of
+    between English and Spanish. The legacy string still parses — it is a
+    documented contract.
+  - **Suggestions stay EN⇄ES, and say so.** The predict model is not a
+    language feature, it is Tom & Liz's own history n-grammed, and there is no
+    history in Bosnian. `/api/predict/model` used to answer *any* unrecognised
+    direction with the English model, which after this change would have
+    offered English completions to someone typing Bosnian. It answers a null
+    model now — which the engine already reads as "predict nothing" — and the
+    screen says *"no suggestions for this pair — typing works as usual"*.
+  - **Tier 2 needs nothing extra here.** Text always works; the shared pill
+    already draws the muted speaker, and there is no audio control on this
+    screen to disappoint.
+  - **The sweep found one more.** The history drawer had its own
+    `{ en: "English", es: "Español" }`, so a saved Bosnian turn read "bs → en".
+    It asks the catalog now.
+
+  Verified against the real API through the route: EN→BS came back
+  *"Mnogo mi nedostaješ. Vidimo se sutra."*, EN→BN (tier 2) came back in
+  Bengali script, and ES⇄EN is unchanged. The fence now covers every wired
+  screen including this one, and names which Translate is which.
+
 - **More than one chat per account** — Tom, 8/19, on the second half of the
   two-phone walkthrough: he opened a second invite on his own app and was
   refused by his own copy, *"You're already in a chat, and TAOS holds one at a
