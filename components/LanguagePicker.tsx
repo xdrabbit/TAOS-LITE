@@ -43,16 +43,20 @@ interface PickerCommon {
   selected: LanguageCode;
   /**
    * The other language in play, drawn as an outline. On the pair screens this
-   * is your own side and tapping it flips the pair; on /chat it is the
-   * partner's language and it is not yours to change.
+   * is your own side and tapping it flips the pair; /chat passes it to the
+   * sheet only, where it is the partner's language and not yours to change.
    */
   paired?: LanguageCode | null;
   /** Badge for `paired` in the sheet. "Yours" on the pair screens. */
   pairedLabel?: string;
   /**
-   * What tapping `paired` does, for its tooltip and screen-reader name. The
-   * pair screens flip; /chat's outlined pill is the PARTNER's language and a
-   * tap moves your own side onto it, so "tap to flip" would be a lie there.
+   * What tapping `paired` does, for its tooltip and screen-reader name. Only
+   * the pair screens draw a `paired` PILL now, and all three of them flip, so
+   * all three take the default. /chat tried an outlined partner pill here and
+   * gave it up on 8/19 — a second marked pill in a single-selection row reads
+   * as a second selection whatever its tooltip says (lib/chatLabels.ts,
+   * partnerChip). It still passes `paired` to the SHEET, where a hundred rows
+   * and a "Theirs · Suyo" badge leave no such ambiguity.
    */
   pairedTitle?: string;
   onSelect: (code: LanguageCode) => void;

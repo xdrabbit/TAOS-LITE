@@ -10,11 +10,13 @@ import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { type LanguageCode } from "@/lib/languages/catalog";
 import {
   CHAT_PARTNER_LABEL,
-  CHAT_PARTNER_PILL_TITLE,
   CHAT_READ_CAPTION,
   CHAT_READ_HINT,
+  CHAT_THEY_SEE_PREFIX,
   hasSeenReadLangHint,
   outgoingLine,
+  partnerChip,
+  readConfirmation,
   rememberReadLangHint,
   theyReadLine
 } from "@/lib/chatLabels";
@@ -131,6 +133,13 @@ export function ChatShell(): JSX.Element {
   // reload doesn't hand it back.
   const [showLangHint, setShowLangHint] = useState(false);
   const langHintSeenRef = useRef(true);
+  // The confirmation (lib/chatLabels.ts): the language of the LAST tap, held
+  // so the thread can show a system line in it. Set before the network call,
+  // not after — the whole job of this line is to land while the thumb is
+  // still on the pill — and cleared again if the save turns out to have
+  // failed, because a confirmation of something that did not happen is worse
+  // than the silence it replaced.
+  const [confirmedLang, setConfirmedLang] = useState<LanguageCode | null>(null);
   useEffect(() => {
     setRecent(readStoredRecent());
     langHintSeenRef.current = hasSeenReadLangHint();
@@ -206,11 +215,13 @@ export function ChatShell(): JSX.Element {
     };
   }, [session]);
 
-  // Keep the newest message in view.
+  // Keep the newest message in view — and the confirmation line too, which is
+  // drawn at the foot of the same list and would otherwise land below the fold
+  // in a thread long enough to scroll.
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, pending]);
+  }, [messages, pending, confirmedLang]);
 
   // ── Audio playback (voice notes + cloned-voice TTS) ───────────────────────
 
@@ -427,6 +438,7 @@ export function ChatShell(): JSX.Element {
   const selectMyLanguage = useCallback(
     (code: LanguageCode) => {
       setSheetOpen(false);
+      setConfirmedLang(code);
       if (!langHintSeenRef.current) {
         langHintSeenRef.current = true;
         rememberReadLangHint();
@@ -449,6 +461,7 @@ export function ChatShell(): JSX.Element {
         })
         .catch((e: unknown) => {
           setThread((current) => (current ? { ...current, myLang: previous } : current));
+          setConfirmedLang(null);
           setError(e instanceof Error ? e.message : "Could not save the language.");
         })
         .finally(() => setSavingLang(false));
@@ -466,6 +479,11 @@ export function ChatShell(): JSX.Element {
     : null;
   const pills = visiblePills([myLang, partnerLang ?? myLang], recent);
   const outgoing = outgoingLine(partnerLang);
+  // Messages FROM THEM. The count that decides which confirmation to show is
+  // not messages.length: Tom's thread was full of his own bubbles and empty of
+  // anything his reading language could have changed.
+  const incomingCount = messages.filter((m) => m.sender_id !== thread?.myUserId).length;
+  const confirmation = confirmedLang ? readConfirmation(confirmedLang, { incomingCount }) : null;
 
   if (!ready) {
     return (
@@ -504,17 +522,30 @@ export function ChatShell(): JSX.Element {
             composer where the typing happens. */}
         {thread ? (
           <>
+            {/* No `paired` here on purpose — see partnerChip in
+                lib/chatLabels.ts. The row is MINE and holds exactly one marked
+                pill; the partner's language still has a plain pill in it (it
+                is in `pills`), it just no longer wears the outline that made
+                it look like a second thing I had chosen. */}
             <LanguagePillRow
               pills={pills}
               selected={myLang}
-              paired={partnerLang}
-              pairedTitle={CHAT_PARTNER_PILL_TITLE}
               caption={CHAT_READ_CAPTION}
               sheetOpen={sheetOpen}
               onSelect={selectMyLanguage}
               onOpenSheet={() => setSheetOpen(true)}
             />
-            <p className="-mt-1 text-xs text-amber-100/50">{theyReadLine(partnerLang)}</p>
+            <div className="-mt-1 flex items-center gap-2 text-xs text-amber-100/50">
+              <p>{theyReadLine(partnerLang)}</p>
+              {partnerLang ? (
+                <span
+                  title={CHAT_PARTNER_LABEL}
+                  className="shrink-0 rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                >
+                  {partnerChip(partnerLang)}
+                </span>
+              ) : null}
+            </div>
             {showLangHint ? (
               <div className="flex items-start gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/80">
                 <p className="flex-1">{CHAT_READ_HINT}</p>
@@ -595,6 +626,17 @@ export function ChatShell(): JSX.Element {
                             : "border-white/10 text-amber-100/50"
                         }`}
                       >
+                        {/* On MY bubble this grey line is the recipient
+                            preview — what LIZ reads, not what I asked for.
+                            Uncaptioned it is Spanish sitting under a message I
+                            typed in English with Hindi selected, which reads
+                            as the app ignoring me. Every bubble, not once per
+                            thread: the caption has to be where the eye lands. */}
+                        {mine ? (
+                          <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-stone-950/45">
+                            {CHAT_THEY_SEE_PREFIX}
+                          </span>
+                        ) : null}
                         {secondary}
                       </div>
                     ) : null}
@@ -655,6 +697,26 @@ export function ChatShell(): JSX.Element {
               </div>
             </div>
           ))}
+          {/* The confirmation, as a system line IN the thread rather than a
+              toast: it has to survive a glance away, and the thread is where
+              the tap's consequence lives. Three lines — the proof, its frame,
+              and what it means for the messages (or that there are none from
+              them yet, which is the whole reason a solo tester sees nothing
+              change). `dir="auto"` because seven of the hundred read the
+              other way, and the sentence's own first letter knows which. */}
+          {confirmation ? (
+            <div className="pt-2">
+              <div className="mx-auto max-w-[92%] rounded-2xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-center">
+                <p dir="auto" className="text-[15px] leading-snug text-amber-100">
+                  ✓ {confirmation.native}
+                </p>
+                <p className="mt-1 text-xs text-amber-100/70">{confirmation.frame}</p>
+                <p className="mt-1 text-[11px] leading-snug text-amber-100/45">
+                  {confirmation.detail}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {error ? (

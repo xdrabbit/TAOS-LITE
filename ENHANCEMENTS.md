@@ -261,6 +261,50 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- The language row proves itself instead of describing itself — Tom, 8/19,
+  third misread of the same control, after the labels above had already
+  shipped: **"Spanish stays selected no matter what I select."** The
+  screenshot explains it and nothing in it is a bug: HI filled (his choice,
+  saved), ES outlined beside it (Liz's, hers to set), grey Spanish under his
+  own bubbles (the recipient preview), and not one incoming message in the
+  thread. Every word on that screen was true, and none of them CHANGED when he
+  tapped, because a solo tester's reading language has nothing to translate.
+
+  So this round adds no words about the setting. It shows it:
+
+  - **The tap answers in the language it just chose.** Pick HI and a system
+    line lands in the thread instantly: "✓ अब आप हिन्दी में पढ़ेंगे — You now
+    read in Hindi · Ahora lees en hindi". Devanagari on screen is the one
+    proof no caption can fake. A hundred sentences ship in the bundle
+    (`lib/languages/readConfirmation.ts`, one per catalog language, typed
+    `Record<LanguageCode, string>` so a new language cannot skip one) rather
+    than a translate call — the proof only lands if it lands under the thumb.
+    It is drawn IN the thread, not as a toast, so it survives a glance away,
+    and it is taken back if the save turns out to have failed.
+  - **The empty-thread case says so out loud**, because it is the state that
+    burned him all three times and is the default state of every chat a QR
+    code opens: "Nothing to translate yet — messages FROM them will appear in
+    हिन्दी". Counted on messages FROM the partner, never on the thread's
+    length — his thread was full of his own bubbles.
+  - **The grey line under his own bubbles is captioned "They see · Ellos
+    ven:"**, per bubble, not once per thread: it is Liz's copy, and
+    uncaptioned it reads as the app ignoring the language he picked.
+  - **The partner's language left his row.** The outlined ES pill sat in the
+    "You read in" row one gap from his filled one, and two marked pills in a
+    single-selection row read as two selections however they are shaded. It
+    moves to the "They read:" line as a non-interactive chip; the row now
+    holds exactly one marked pill. ES keeps a plain pill in the row — "let me
+    read Spanish too" is a real thing to want — it just no longer looks
+    chosen. `CHAT_PARTNER_PILL_TITLE` went with it (the entry below described
+    that pill's tooltip; the pill is gone, the sheet's "Theirs · Suyo" badge
+    stays).
+
+  Verified against the real API: an en+hi thread turns "Are you home yet? I
+  made dinner." into "तुम घर पहुँच गए हो क्या? मैंने खाना बनाया है।", and the
+  confirmation renders in Devanagari in both the solo and the active variant.
+  284 tests green (11 new in tests/chat-labels.test.ts).
+  — 2026-08-19, branch feat/trip-mode
+
 - /about reads as a product; the dedication is kept, not cut — Tom, 8/19,
   closing the open RC1 question: TAOS is handed to strangers by QR
   code, so the page they land on should be professional. It was a signed

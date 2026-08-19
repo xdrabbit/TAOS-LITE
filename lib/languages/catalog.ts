@@ -41,6 +41,12 @@
 // ("The speaker talks in Bosnian"), so it has to read as a language name to a
 // model. `tts` must be checked against GET /v1/models, never guessed.
 //
+// One row is still the whole edit here, but there is a SECOND file keyed by
+// this list: lib/languages/readConfirmation.ts, one written-out sentence per
+// language. It is typed `Record<LanguageCode, string>` on purpose — add a row
+// below without a sentence and the build stops, rather than /chat quietly
+// confirming a language change in English.
+//
 // Verified against both providers on 2026-08-17:
 //   curl -H "xi-api-key: $ELEVENLABS_API_KEY" https://api.elevenlabs.io/v1/models
 //   https://github.com/openai/whisper -> whisper/tokenizer.py LANGUAGES
@@ -199,6 +205,11 @@ export function getLanguage(code: string): Language | undefined {
 /** ENGLISH name, the one the prompts name to the model. */
 export function languageLabel(code: string): string {
   return BY_CODE.get(code)?.label ?? code.toUpperCase();
+}
+
+/** SPANISH name, so a line can be framed for Liz the way `label` is for Tom. */
+export function languageLabelEs(code: string): string {
+  return BY_CODE.get(code)?.labelEs ?? code.toUpperCase();
 }
 
 /** The language's own name — what a person looks for on the picker. */
