@@ -34,6 +34,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   all three /api/tutor routes 404 so a disabled feature cannot bill OpenAI
   realtime or Azure. Nothing was deleted; set the var to 1 and redeploy to
   bring it back.
+  → Curriculum plan for bringing it back: `docs/tutor-curriculum-plan.md`
+  (14 language-agnostic intent modules, crawl/walk/run loop, engineering
+  order — cost guards land before customers). (added 2026-08-19)
 - /live "On-device" mode: find out why it never works, or delete it — Tom
   (8/18): it has never once worked for him. Gated off for RC1 behind
   NEXT_PUBLIC_ENABLE_ONDEVICE_STT (lib/release.ts), so /live now has one
