@@ -1,5 +1,6 @@
 "use client";
 
+import type { ChatThreadSummary } from "@/lib/chatThreads";
 import { readStoredPair } from "@/lib/translate/pair";
 import { supabase } from "@/lib/supabase";
 
@@ -23,35 +24,35 @@ export interface ChatMessageRow {
   read_at: string | null;
 }
 
-export interface ChatThreadInfo {
-  threadId: string;
+export interface ChatThreadList {
   myUserId: string;
-  myLang: string;
-  partnerLang: string | null;
+  threads: ChatThreadSummary[];
 }
 
-// The user's first (for Tom & Liz: only) chat thread, or null when they are
-// not a member of any thread.
-export async function getChatThread(): Promise<ChatThreadInfo | null> {
-  const { data: auth } = await supabase.auth.getUser();
-  const myUserId = auth.user?.id;
-  if (!myUserId) return null;
-
-  const { data, error } = await supabase
-    .from("taos_lite_chat_members")
-    .select("thread_id, user_id, lang")
-    .order("created_at", { ascending: true });
-  if (error || !data?.length) return null;
-
-  const mine = data.find((m) => m.user_id === myUserId);
-  if (!mine) return null;
-  const partner = data.find((m) => m.thread_id === mine.thread_id && m.user_id !== myUserId);
-  return {
-    threadId: mine.thread_id,
-    myUserId,
-    myLang: mine.lang,
-    partnerLang: partner?.lang ?? null
+/**
+ * Every chat this account is in, newest first.
+ *
+ * This replaced `getChatThread()`, which read the members table directly and
+ * answered with the FIRST membership it found — the line that made /chat a
+ * one-chat app and that /api/chat/join then had to apologise for ("TAOS holds
+ * one at a time"). The list goes through a route rather than supabase-js for
+ * one reason: a row is labelled with the other person's display name, and that
+ * lives in auth.users, which no browser key may read. See the route.
+ */
+export async function listChatThreads(): Promise<ChatThreadList> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/chat/threads", {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const payload = (await res.json().catch(() => ({}))) as Partial<ChatThreadList> & {
+    error?: string;
   };
+  if (!res.ok || !payload.myUserId || !Array.isArray(payload.threads)) {
+    throw new Error(payload.error || "Could not open your chats.");
+  }
+  return { myUserId: payload.myUserId, threads: payload.threads };
 }
 
 export async function listMessages(threadId: string, limit = 200): Promise<ChatMessageRow[]> {
@@ -179,7 +180,7 @@ export async function markThreadRead(threadId: string): Promise<void> {
 
 // ── Getting a second person in ─────────────────────────────────────────────
 // Until 8/19 there was nothing here: threads were seeded by hand in SQL and
-// getChatThread's `null` was the end of the road for every other account. The
+// an empty thread list was the end of the road for every other account. The
 // two calls below are that road — mint a link, or walk in through one. Both
 // go through routes for the same reason the send routes do: taos_lite_chat_*
 // has no INSERT policy for a browser, deliberately.

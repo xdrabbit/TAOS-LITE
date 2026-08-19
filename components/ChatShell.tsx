@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { ChatInviteRow, ChatInviteSheet, ChatStartCard } from "./ChatInvite";
+import { ChatThreadList } from "./ChatThreadList";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { type LanguageCode } from "@/lib/languages/catalog";
@@ -30,8 +31,8 @@ import {
 } from "@/lib/translate/pinned";
 import {
   createChatInvite,
-  getChatThread,
   getVoiceUrl,
+  listChatThreads,
   listMessages,
   markThreadRead,
   sendMessage,
@@ -39,12 +40,21 @@ import {
   setMyChatLanguage,
   subscribeMessages,
   type ChatInvite,
-  type ChatMessageRow,
-  type ChatThreadInfo
+  type ChatMessageRow
 } from "@/lib/chat";
+import {
+  CHAT_LIST_BACK,
+  initialThreadId,
+  type ChatThreadSummary
+} from "@/lib/chatThreads";
 
 // ── /chat: private translated messages ──────────────────────────────────────
-// Tier 1+ of the private message app: one thread between Tom and Liz. Text
+// Tier 1+ of the private message app: as many 1:1 threads as an account wants,
+// two people in each. It held ONE until 8/19, and said so when a second invite
+// was opened — "You're already in a chat, and TAOS holds one at a time" — which
+// Tom read on his own app during the two-phone walkthrough. The switcher that
+// refusal was apologising for is components/ChatThreadList.tsx; this file is
+// what a row opens into, and everything below the header is per-THREAD. Text
 // messages are stored as typed AND auto-translated into the partner's
 // language. Voice messages (🎤) upload the audio, transcribe it, translate the
 // transcript, and can be replayed either as the real recording or as the
@@ -98,11 +108,24 @@ function pickRecordingMime(): string {
   return "";
 }
 
-export function ChatShell(): JSX.Element {
+/**
+ * `openThreadId` is the ?t= on the URL — where /chat/join sends somebody it
+ * has just let into a thread, and the only way an incoming link can name which
+ * of several chats it means. Ignored when it is not one of mine.
+ */
+export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
-  const [thread, setThread] = useState<ChatThreadInfo | null>(null);
-  const [threadMissing, setThreadMissing] = useState(false);
+  // Every chat this account is in, and which one is on screen. `null` threads
+  // means "not loaded yet", which is a different state from "no chats" — the
+  // second one gets ChatStartCard and the first one gets nothing.
+  const [threads, setThreads] = useState<ChatThreadSummary[] | null>(null);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(openThreadId ?? null);
+  // Asking for the list OUT LOUD, which is not the same as having no thread
+  // open: an account with exactly one chat auto-opens it, so without this flag
+  // its "Chats" link would bounce straight back into the thread it just left.
+  const [listOpen, setListOpen] = useState(false);
   // ── Getting a second person in ──────────────────────────────────────────
   // The thread used to be a fact of the database: seeded by hand for two
   // accounts, unreachable for everyone else. `reloadKey` is what makes it a
@@ -157,6 +180,11 @@ export function ChatShell(): JSX.Element {
     langHintSeenRef.current = hasSeenReadLangHint();
   }, []);
 
+  // The chat on screen, derived rather than stored: one source of truth for a
+  // thread's languages, so a pill tap that updates the list updates the header
+  // in the same render and the two can never disagree.
+  const thread = threads?.find((t) => t.threadId === activeId) ?? null;
+
   const listRef = useRef<HTMLDivElement | null>(null);
   const nextTempIdRef = useRef(1);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -187,37 +215,67 @@ export function ChatShell(): JSX.Element {
     };
   }, []);
 
-  // Load the thread + history, subscribe to live inserts.
+  // ── Which chats ───────────────────────────────────────────────────────────
+  // The list, and the decision about what to draw. Reloaded when a chat is
+  // started or joined (reloadKey) and whenever the list is asked for, so a
+  // preview is never older than the last time somebody looked at it.
   useEffect(() => {
     if (!session) {
-      setThread(null);
+      setThreads(null);
+      setMyUserId(null);
+      setMessages([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const list = await listChatThreads();
+        if (!active) return;
+        setMyUserId(list.myUserId);
+        setThreads(list.threads);
+        // One chat opens straight into itself, exactly as this screen behaved
+        // before there was a list; more than one shows the list. A ?t= on the
+        // URL beats both, and is ignored if it is not one of mine.
+        setActiveId((current) => initialThreadId(list.threads, current));
+      } catch (e: unknown) {
+        if (!active) return;
+        setThreads([]);
+        setError(e instanceof Error ? e.message : "Could not open your chats.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [session, reloadKey]);
+
+  // ── The open thread ───────────────────────────────────────────────────────
+  // History and the live INSERT stream, per thread. Keyed on activeId, so
+  // switching chats tears the old subscription down and takes its messages
+  // with it — a bubble from thread A appearing in thread B would be the worst
+  // bug this screen could have.
+  useEffect(() => {
+    if (!session || !activeId || !myUserId) {
       setMessages([]);
       return;
     }
     let active = true;
     let unsubscribe: (() => void) | null = null;
+    setMessages([]);
+    setPending([]);
 
     void (async () => {
-      const t = await getChatThread();
-      if (!active) return;
-      if (!t) {
-        setThreadMissing(true);
-        return;
-      }
-      setThread(t);
-      setThreadMissing(false);
       try {
-        const rows = await listMessages(t.threadId);
+        const rows = await listMessages(activeId);
         if (!active) return;
         setMessages(rows);
       } catch {
         if (active) setError("Could not load messages.");
       }
-      void markThreadRead(t.threadId);
+      void markThreadRead(activeId);
 
-      unsubscribe = subscribeMessages(t.threadId, (row) => {
+      unsubscribe = subscribeMessages(activeId, (row) => {
         setMessages((prev) => (prev.some((m) => m.id === row.id) ? prev : [...prev, row]));
-        if (row.sender_id !== t.myUserId) void markThreadRead(t.threadId);
+        if (row.sender_id !== myUserId) void markThreadRead(activeId);
       });
     })();
 
@@ -225,7 +283,29 @@ export function ChatShell(): JSX.Element {
       active = false;
       unsubscribe?.();
     };
-  }, [session, reloadKey]);
+  }, [session, activeId, myUserId]);
+
+  // The confirmation line is the answer to a tap in ONE thread. Carrying it
+  // across a switch would put "you now read in Hindi" at the foot of a chat
+  // whose language was never touched.
+  useEffect(() => {
+    setConfirmedLang(null);
+    setError(null);
+  }, [activeId]);
+
+  // Keep the URL pointing at the chat on screen, so a reload (or the phone
+  // waking the PWA up) comes back to the same conversation. replaceState
+  // rather than the router: this is a bookmark, not a navigation, and a
+  // re-render here would tear down the message subscription.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (activeId && !listOpen) url.searchParams.set("t", activeId);
+    else url.searchParams.delete("t");
+    if (url.toString() !== window.location.href) {
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [activeId, listOpen]);
 
   // Keep the newest message in view — and the confirmation line too, which is
   // drawn at the foot of the same list and would otherwise land below the fold
@@ -444,26 +524,52 @@ export function ChatShell(): JSX.Element {
 
   useEffect(() => cleanupRecording, [cleanupRecording]);
 
-  // Start a chat, or invite the second person into the one I already have.
-  // One call for both (app/api/chat/invite): from the user's side they are the
+  // Start a chat, or invite the second person into one I am already in. One
+  // call for both (app/api/chat/invite): from the user's side they are the
   // same act, and a thread with nobody in it is not a state worth showing.
-  const startOrInvite = useCallback(() => {
-    if (inviteBusy) return;
-    setInviteBusy(true);
-    setError(null);
-    createChatInvite()
-      .then((made) => {
-        setInvite(made);
-        setInviteOpen(true);
-        // A thread that did not exist a moment ago has to be loaded before the
-        // pill row and the composer mean anything.
-        if (made.created) setReloadKey((n) => n + 1);
-      })
-      .catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : "Could not create the invite link.");
-      })
-      .finally(() => setInviteBusy(false));
-  }, [inviteBusy]);
+  //
+  // `threadId` is what tells them apart now. Passing one means "invite into
+  // THIS chat"; leaving it out always makes a new one, which is what Start on
+  // the list has to do — it was the absence of that distinction that let an
+  // account hold exactly one chat.
+  const startOrInvite = useCallback(
+    (threadId?: string) => {
+      if (inviteBusy) return;
+      setInviteBusy(true);
+      setError(null);
+      createChatInvite(threadId)
+        .then((made) => {
+          setInvite(made);
+          setInviteOpen(true);
+          // A thread that did not exist a moment ago has to be loaded before
+          // the pill row and the composer mean anything — and it is the one
+          // the user is now looking at.
+          if (made.created) {
+            setActiveId(made.threadId);
+            setListOpen(false);
+            setReloadKey((n) => n + 1);
+          }
+        })
+        .catch((e: unknown) => {
+          setError(e instanceof Error ? e.message : "Could not create the invite link.");
+        })
+        .finally(() => setInviteBusy(false));
+    },
+    [inviteBusy]
+  );
+
+  /** Open a chat from the list. */
+  const openThread = useCallback((threadId: string) => {
+    setActiveId(threadId);
+    setListOpen(false);
+  }, []);
+
+  /** Back to the list, and refresh it — the previews are a moment out of date
+   *  the instant a message is sent. */
+  const openList = useCallback(() => {
+    setListOpen(true);
+    setReloadKey((n) => n + 1);
+  }, []);
 
   // Pick the language I READ. Optimistic: the row moves under the thumb and
   // rolls back if the write fails, because the alternative is a pill that does
@@ -485,15 +591,24 @@ export function ChatShell(): JSX.Element {
       const t = thread;
       if (!t || t.myLang === code || savingLang) return;
       const previous = t.myLang;
-      setThread({ ...t, myLang: code });
+      // The language is a property of THIS membership, so the optimistic write
+      // is scoped to this row of the list. The other chats keep theirs — that
+      // is the whole of "per-thread reading language", and getting it wrong
+      // would silently re-language a conversation nobody was looking at.
+      const setLangHere = (lang: string) =>
+        setThreads((current) =>
+          current?.map((row) => (row.threadId === t.threadId ? { ...row, myLang: lang } : row)) ??
+          current
+        );
+      setLangHere(code);
       setSavingLang(true);
       setMyChatLanguage(t.threadId, code)
         .then((saved) => {
-          setThread((current) => (current ? { ...current, myLang: saved } : current));
+          setLangHere(saved);
           setError(null);
         })
         .catch((e: unknown) => {
-          setThread((current) => (current ? { ...current, myLang: previous } : current));
+          setLangHere(previous);
           setConfirmedLang(null);
           setError(e instanceof Error ? e.message : "Could not save the language.");
         })
@@ -515,8 +630,20 @@ export function ChatShell(): JSX.Element {
   // Messages FROM THEM. The count that decides which confirmation to show is
   // not messages.length: Tom's thread was full of his own bubbles and empty of
   // anything his reading language could have changed.
-  const incomingCount = messages.filter((m) => m.sender_id !== thread?.myUserId).length;
+  const incomingCount = messages.filter((m) => m.sender_id !== myUserId).length;
   const confirmation = confirmedLang ? readConfirmation(confirmedLang, { incomingCount }) : null;
+
+  // ── What the screen is ────────────────────────────────────────────────────
+  // Three states, and the middle one is new. No chats at all is still the
+  // start card. One chat still opens straight into itself. More than one — or
+  // an explicit tap on "Chats" — is the list.
+  const loaded = threads !== null;
+  const noChats = loaded && threads.length === 0;
+  const showList = loaded && threads.length > 0 && (listOpen || !thread);
+  // The door to the list, from inside a thread. Shown even to somebody with a
+  // single chat, because the list is also where "Start a chat" lives and a
+  // one-chat account is exactly who needs a second one.
+  const canReachList = loaded && threads.length > 0 && !showList;
 
   if (!ready) {
     return (
@@ -534,16 +661,47 @@ export function ChatShell(): JSX.Element {
       <div className="mx-auto flex h-[calc(100dvh-1.5rem)] max-w-md flex-col gap-3">
         <header className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
+          <div className="flex items-center gap-2">
+            {canReachList ? (
+              <button
+                type="button"
+                onClick={openList}
+                className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
+              >
+                {CHAT_LIST_BACK}
+              </button>
+            ) : null}
+            <a
+              href="/"
+              className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
+            >
+              ← Home
+            </a>
+          </div>
         </header>
 
-        <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
-          Private chat · Chat privado
+        {showList ? (
+          <>
+            <ChatThreadList
+              threads={threads}
+              busy={inviteBusy}
+              onOpen={openThread}
+              onStart={() => startOrInvite()}
+            />
+            {error ? (
+              <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-3 py-2 text-xs text-red-200">
+                {error}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+        {/* Which conversation this is. It was the screen's name, which is the
+            only thing it could be when there was one chat; with a list behind
+            it, the useful line is who you are talking to — and it is their own
+            display name, off their own account. */}
+        <div className="truncate text-xs uppercase tracking-[0.2em] text-amber-100/50">
+          {thread?.partnerName ?? "Private chat · Chat privado"}
         </div>
 
         {/* Whose language is whose, said twice on purpose. The solid pill is
@@ -584,7 +742,7 @@ export function ChatShell(): JSX.Element {
                 link is minted fresh each tap and the old one stops working,
                 so somebody who closed the sheet has nothing to hunt for. */}
             {partnerLang ? null : (
-              <ChatInviteRow busy={inviteBusy} onInvite={startOrInvite} />
+              <ChatInviteRow busy={inviteBusy} onInvite={() => startOrInvite(thread.threadId)} />
             )}
             {showLangHint ? (
               <div className="flex items-start gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/80">
@@ -611,8 +769,8 @@ export function ChatShell(): JSX.Element {
             there was nothing behind it: no route in the app had ever created a
             thread. Now the state that has no chat is the state that offers
             one. See lib/chatInvite.ts. */}
-        {threadMissing && !thread ? (
-          <ChatStartCard busy={inviteBusy} error={error} onStart={startOrInvite} />
+        {noChats ? (
+          <ChatStartCard busy={inviteBusy} error={error} onStart={() => startOrInvite()} />
         ) : null}
 
         {/* Messages. Only once there is a thread: an account with none used to
@@ -630,7 +788,7 @@ export function ChatShell(): JSX.Element {
             </div>
           ) : null}
           {messages.map((m, i) => {
-            const mine = m.sender_id === thread?.myUserId;
+            const mine = m.sender_id === myUserId;
             const primary = mine ? m.body : m.body_translated ?? m.body;
             const secondary = mine ? m.body_translated : m.body_translated ? m.body : null;
             const newDay = i === 0 || dayKey(messages[i - 1].created_at) !== dayKey(m.created_at);
@@ -845,6 +1003,8 @@ export function ChatShell(): JSX.Element {
         )}
           </>
         ) : null}
+          </>
+        )}
       </div>
 
       <ChatInviteSheet

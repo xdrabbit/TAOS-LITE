@@ -52,6 +52,7 @@ function code(path: string): string {
 const SHELL = "components/ChatShell.tsx";
 const PICKER = "components/LanguagePicker.tsx";
 const CLIENT = "lib/chat.ts";
+const THREADS_ROUTE = "app/api/chat/threads/route.ts";
 
 describe("the pill row says what it actually controls", () => {
   it("is captioned READ, never WRITE", () => {
@@ -108,12 +109,15 @@ describe("the recipient's language is on screen, sourced from THEM", () => {
   });
 
   it("takes partnerLang from the OTHER member's row", () => {
-    // lib/chat.ts is where "theirs" comes from: the member of my thread who
-    // is not me. Threads are two people today; a group would summarize in
-    // theyReadLine, which is why it takes the language as an argument.
-    const src = code(CLIENT);
-    expect(src).toMatch(/user_id !== myUserId/);
-    expect(src).toMatch(/partnerLang: partner\?\.lang \?\? null/);
+    // "Theirs" is the member of the thread who is not me. This moved out of
+    // lib/chat.ts and into the list route when /chat learned to hold more than
+    // one chat — the derivation is the same one, per thread, and it is still a
+    // find() over the members rather than anything computed from my own row.
+    // Threads are two people today; a group would summarize in theyReadLine,
+    // which is why it takes the language as an argument.
+    const src = code(THREADS_ROUTE);
+    expect(src).toMatch(/m\.user_id !== user\.id/);
+    expect(src).toMatch(/partnerLang: \(partner\?\.lang[^\n]*\?\? null/);
   });
 });
 
@@ -239,7 +243,7 @@ describe("a language tap confirms itself IN that language", () => {
     expect(src).toMatch(/selectMyLanguage[\s\S]{0,200}setConfirmedLang\(code\)/);
     expect(src).toMatch(/setConfirmedLang\(code\)[\s\S]{0,900}setMyChatLanguage\(/);
     // …and is taken back if the save failed, next to the rollback of the pill.
-    expect(src).toMatch(/myLang: previous[\s\S]{0,200}setConfirmedLang\(null\)/);
+    expect(src).toMatch(/setLangHere\(previous\)[\s\S]{0,200}setConfirmedLang\(null\)/);
   });
 
   it("lives in the thread, not in a toast that vanishes", () => {
@@ -281,7 +285,7 @@ describe("the solo tester is told why nothing moved", () => {
     // messages.length would have shown him the wrong line at the exact moment
     // the right one existed for him.
     const src = code(SHELL);
-    expect(src).toMatch(/m\.sender_id !== thread\?\.myUserId/);
+    expect(src).toMatch(/m\.sender_id !== myUserId/);
     expect(src).toContain("{ incomingCount }");
     expect(src).not.toMatch(/incomingCount: messages\.length/);
   });

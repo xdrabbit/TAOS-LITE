@@ -58,10 +58,15 @@ export function ChatJoinShell({ token }: { token: string }): JSX.Element {
 
   const join = useCallback(async () => {
     try {
-      await joinChatWithToken(token);
+      const { threadId } = await joinChatWithToken(token);
       // replace(), not push(): the invite is spent, and Back should be the
       // page before the link, not a token that now answers "already used".
-      router.replace("/chat");
+      //
+      // ?t= names the thread, because an account can hold several and a bare
+      // /chat would open whichever one sorts first — which for somebody who
+      // just followed an invitation is any chat except the one they were
+      // invited to.
+      router.replace(`/chat?t=${encodeURIComponent(threadId)}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : CHAT_JOIN_BAD_LINK);
     }
