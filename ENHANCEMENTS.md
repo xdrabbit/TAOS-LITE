@@ -190,6 +190,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   already generic; needs accounts for guests, a thread picker, sender names
   on bubbles. Two-language groups fit the current design; 3+ languages needs
   per-language translations. (added 2026-08-03, designed 7/22)
+  Planned in docs/group-chat-plan.md — trip-critical, targeted before Spencer's
+  Bosnia/Italy trip; "Per-seat languages at /tabletop" below shares the design.
+  (planned 2026-08-19)
 - Multi-language phase 3 — /call is the last screen still hardcoded EN⇄ES.
   (Phase 2 — /tabletop, /live and /chat — SHIPPED 2026-08-18, see Shipped.)
   /call is two realtime sessions pointed at each other, so it needs the pair
