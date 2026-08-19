@@ -43,8 +43,12 @@ function read(path: string): string {
  */
 function code(path: string): string {
   return read(path)
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "") // JSX comment blocks
-    .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+    // Block comments FIRST, then whatever braces a JSX comment left behind.
+    // The other way round, `{/* … */}` and a doc comment three functions
+    // apart pair up into one match and everything between them vanishes from
+    // the source these tests are reading.
+    .replace(/\/\*[\s\S]*?\*\//g, "") // block and doc comments
+    .replace(/\{\s*\}/g, "") // the braces a JSX comment left behind
     .split("\n")
     .filter((line) => !/^\s*(\/\/|\*)/.test(line)) // whole-line comments
     .map((line) => line.replace(/\s+\/\/(?!\/).*$/, "")) // trailing comments

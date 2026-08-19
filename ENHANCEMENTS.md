@@ -96,6 +96,21 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- /chat should translate on what you WROTE, not on what you read — the send
+  and voice routes take the sender's own member language as the source
+  (`sourceLang = me.lang`) and feed it to the prompt as "the sender usually
+  writes X". In practice the model translates whatever actually arrives — a
+  Polish message in an en→es thread still comes out Spanish (verified 8/19) —
+  so the hint is harmless. The GATE is not: `targetLang === sourceLang` skips
+  translation altogether, so if both members read the same language, a message
+  typed in a third one is delivered raw. Real detection (the JSON
+  `source_lang` + `translation` shape /api/translate already uses — see the
+  field-name warning in lib/translate/prompts.ts) would fix both, make the
+  stored `source_lang` true, and let the composer line name the language it
+  detected instead of "anything you write". Note the one thing the current
+  behavior gets right by accident: `source_lang` = the sender's own language
+  is what makes the cloned voice follow the SPEAKER, so a detector must not be
+  wired straight into the voice choice. (added 2026-08-19)
 - Real app icon — the home-screen icon shipped with trip mode is a generated
   placeholder (an amber speech bubble; scripts/gen-icons.mjs redraws every
   size). Swap in real art before the app store push or any wide launch.
@@ -251,6 +266,43 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- Whose language is this? /chat says it out loud — Tom, 8/19, on the same
+  walkthrough that turned up the database ceiling below: he tapped PL on
+  /chat expecting to send Polish and his message went out in Spanish. That was
+  correct — Liz reads Spanish, and /chat's languages are one per MEMBER — but
+  nothing on the screen said so, and the header underneath read
+  "Polski → Español" to a man who does not write a word of Polish.
+
+  The model was right; every word around it was wrong. /chat borrows the pill
+  row from three screens where a pill means "TRANSLATE INTO", and its own pill
+  means nearly the opposite — the language coming IN, to you — under a caption
+  reading "You write in · Escribes en". So the fix is all labels and
+  affordances, and no change at all to what the routes do:
+
+  - the row and its sheet are captioned **"You read in · Lees en"**;
+  - under the row, the other side, sourced from THEIR saved language:
+    **"They read: Español · Ellos leen: Español"**;
+  - above the composer, what happens to what you type:
+    **"Anything you write → Español"**. The left side is deliberately not a
+    language — nothing in /chat detects the language of a draft, so naming one
+    there was the exact claim that misled him;
+  - the partner's outlined pill no longer says "tap to flip" (it doesn't — it
+    moves YOUR side onto their language), and the sheet badges it "Theirs ·
+    Suyo";
+  - the first language tap in a chat, once per phone, gets a dismissible note:
+    "This sets the language YOU read. They pick theirs on their own phone."
+
+  Verified against the real API with the route's own code and only auth and
+  the database mocked: an en+pl thread turns "Hi love — I'm at the station…"
+  into "Cześć kochanie — jestem na dworcu…" (Tom's missing Polish proof), and
+  en+es reads exactly as it did in his screenshots. Typing POLISH into an
+  en+es thread still comes out Spanish, so the member language really is only
+  a soft hint to the prompt — with one exception, now an Idea below: when both
+  members read the SAME language the send route skips translation entirely, so
+  a message typed in a third language arrives untranslated.
+  tests/chat-labels.test.ts holds the words.
+  — 2026-08-19, branch feat/trip-mode
 
 - /chat can leave English and Spanish — tapping PL on /chat came back "Could
   not save the language." while /translate on the same phone was doing EN⇄PL

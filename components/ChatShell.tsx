@@ -7,7 +7,17 @@ import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
-import { languageNative, type LanguageCode } from "@/lib/languages/catalog";
+import { type LanguageCode } from "@/lib/languages/catalog";
+import {
+  CHAT_PARTNER_LABEL,
+  CHAT_PARTNER_PILL_TITLE,
+  CHAT_READ_CAPTION,
+  CHAT_READ_HINT,
+  hasSeenReadLangHint,
+  outgoingLine,
+  rememberReadLangHint,
+  theyReadLine
+} from "@/lib/chatLabels";
 import { isPairLangCode, type PairLangCode } from "@/lib/translate/pair";
 import {
   readStoredRecent,
@@ -114,8 +124,16 @@ export function ChatShell(): JSX.Element {
   const [recent, setRecent] = useState<readonly PairLangCode[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [savingLang, setSavingLang] = useState(false);
+  // The first-tap note (lib/chatLabels.ts). Shown ONCE per phone, on the first
+  // language tap in a chat, because that tap is the moment the misreading
+  // happens: Tom picked Polish and his message went out Spanish, which is
+  // right and looks broken. Read from localStorage rather than state so a
+  // reload doesn't hand it back.
+  const [showLangHint, setShowLangHint] = useState(false);
+  const langHintSeenRef = useRef(true);
   useEffect(() => {
     setRecent(readStoredRecent());
+    langHintSeenRef.current = hasSeenReadLangHint();
   }, []);
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -403,12 +421,17 @@ export function ChatShell(): JSX.Element {
 
   useEffect(() => cleanupRecording, [cleanupRecording]);
 
-  // Pick the language I write in. Optimistic: the row moves under the thumb
-  // and rolls back if the write fails, because the alternative is a pill that
-  // does nothing for a round trip and gets tapped again.
+  // Pick the language I READ. Optimistic: the row moves under the thumb and
+  // rolls back if the write fails, because the alternative is a pill that does
+  // nothing for a round trip and gets tapped again.
   const selectMyLanguage = useCallback(
     (code: LanguageCode) => {
       setSheetOpen(false);
+      if (!langHintSeenRef.current) {
+        langHintSeenRef.current = true;
+        rememberReadLangHint();
+        setShowLangHint(true);
+      }
       setRecent((current) => {
         const updated = rememberLanguage(current, code);
         writeStoredRecent(updated);
@@ -433,14 +456,16 @@ export function ChatShell(): JSX.Element {
     [thread, savingLang]
   );
 
-  // The pair for the row's purposes: what I write in, and what my partner
-  // reads. Both always have a pill — a row that could not show the language
+  // The two languages the row has to show: the one I read (solid — mine to
+  // change) and the one my partner reads (outlined — theirs, set on their
+  // phone). Both always have a pill; a row that could not show the language
   // this thread is actually translating into would be lying about it.
   const myLang: PairLangCode = isPairLangCode(thread?.myLang) ? thread.myLang : "en";
   const partnerLang: PairLangCode | null = isPairLangCode(thread?.partnerLang)
     ? thread.partnerLang
     : null;
   const pills = visiblePills([myLang, partnerLang ?? myLang], recent);
+  const outgoing = outgoingLine(partnerLang);
 
   if (!ready) {
     return (
@@ -470,26 +495,39 @@ export function ChatShell(): JSX.Element {
           Private chat · Chat privado
         </div>
 
-        {/* The language I write in. The solid pill is the one a tap sets —
-            mine — and the outlined one is my partner's, which their phone
-            owns. Everything I send is translated into theirs on the way out
-            (app/api/chat/send). */}
+        {/* Whose language is whose, said twice on purpose. The solid pill is
+            the language I READ and the only one a tap here can move; the line
+            under it is the language THEY read, which their phone owns. The
+            contrast is the point — it is what stops a tap on PL from meaning
+            "send Polish" (Tom, 8/19). What I send is translated into theirs on
+            the way out (app/api/chat/send), and that promise lives down by the
+            composer where the typing happens. */}
         {thread ? (
           <>
             <LanguagePillRow
               pills={pills}
               selected={myLang}
               paired={partnerLang}
-              caption="You write in · Escribes en"
+              pairedTitle={CHAT_PARTNER_PILL_TITLE}
+              caption={CHAT_READ_CAPTION}
               sheetOpen={sheetOpen}
               onSelect={selectMyLanguage}
               onOpenSheet={() => setSheetOpen(true)}
             />
-            <p className="-mt-1 text-xs text-amber-100/50">
-              {partnerLang
-                ? `${languageNative(myLang)} → ${languageNative(partnerLang)}`
-                : `${languageNative(myLang)} — waiting for someone to join`}
-            </p>
+            <p className="-mt-1 text-xs text-amber-100/50">{theyReadLine(partnerLang)}</p>
+            {showLangHint ? (
+              <div className="flex items-start gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/80">
+                <p className="flex-1">{CHAT_READ_HINT}</p>
+                <button
+                  type="button"
+                  onClick={() => setShowLangHint(false)}
+                  aria-label="Dismiss · Descartar"
+                  className="shrink-0 rounded-full px-1 text-amber-100/60"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
           </>
         ) : null}
 
@@ -650,40 +688,47 @@ export function ChatShell(): JSX.Element {
             </button>
           </div>
         ) : (
-          <div className="flex items-end gap-2">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              placeholder={thread?.myLang === "es" ? "Escribe un mensaje…" : "Type a message…"}
-              rows={1}
-              className="max-h-32 min-h-[2.75rem] flex-1 resize-none rounded-2xl border border-white/10 bg-stone-950/60 px-4 py-2.5 text-[15px] text-amber-50 placeholder:text-amber-100/30"
-            />
-            {draft.trim() ? (
-              <button
-                type="button"
-                onClick={() => void send()}
-                disabled={!thread}
-                className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-sm font-semibold text-stone-950 transition disabled:opacity-40"
-              >
-                Send
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void startRecording()}
-                disabled={!thread}
-                aria-label="Record a voice message"
-                className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-lg leading-none text-stone-950 transition disabled:opacity-40"
-              >
-                🎤
-              </button>
-            )}
+          <div className="flex flex-col gap-1">
+            {/* What happens to whatever I type, where I type it. The left side
+                is deliberately not a language: nothing detects the language of
+                a draft, so naming one here is the exact claim that misled Tom.
+                The right side IS knowable and is the promise that matters. */}
+            {outgoing ? <p className="px-1 text-[11px] text-amber-100/40">{outgoing}</p> : null}
+            <div className="flex items-end gap-2">
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                placeholder={thread?.myLang === "es" ? "Escribe un mensaje…" : "Type a message…"}
+                rows={1}
+                className="max-h-32 min-h-[2.75rem] flex-1 resize-none rounded-2xl border border-white/10 bg-stone-950/60 px-4 py-2.5 text-[15px] text-amber-50 placeholder:text-amber-100/30"
+              />
+              {draft.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={!thread}
+                  className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-sm font-semibold text-stone-950 transition disabled:opacity-40"
+                >
+                  Send
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void startRecording()}
+                  disabled={!thread}
+                  aria-label="Record a voice message"
+                  className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-lg leading-none text-stone-950 transition disabled:opacity-40"
+                >
+                  🎤
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -692,8 +737,8 @@ export function ChatShell(): JSX.Element {
         open={sheetOpen}
         selected={myLang}
         paired={partnerLang}
-        pairedLabel="Theirs"
-        caption="You write in · Escribes en"
+        pairedLabel={CHAT_PARTNER_LABEL}
+        caption={CHAT_READ_CAPTION}
         onSelect={selectMyLanguage}
         onClose={() => setSheetOpen(false)}
       />

@@ -49,6 +49,12 @@ interface PickerCommon {
   paired?: LanguageCode | null;
   /** Badge for `paired` in the sheet. "Yours" on the pair screens. */
   pairedLabel?: string;
+  /**
+   * What tapping `paired` does, for its tooltip and screen-reader name. The
+   * pair screens flip; /chat's outlined pill is the PARTNER's language and a
+   * tap moves your own side onto it, so "tap to flip" would be a lie there.
+   */
+  pairedTitle?: string;
   onSelect: (code: LanguageCode) => void;
 }
 
@@ -62,19 +68,21 @@ export function LanguagePill({
   code,
   selected,
   paired,
+  pairedTitle = "tap to flip",
   onSelect
 }: PickerCommon & { code: LanguageCode }): JSX.Element {
   const isSelected = code === selected;
   const isPaired = code === paired;
   const textOnly = !canSpeak(code);
   const name = languageNative(code);
+  const pairedNote = isPaired ? ` — ${pairedTitle}` : "";
   return (
     <button
       type="button"
       onClick={() => onSelect(code)}
       aria-pressed={isSelected}
-      title={`${name}${isPaired ? " — tap to flip" : ""}${textOnly ? ` · ${TEXT_ONLY_TITLE}` : ""}`}
-      aria-label={textOnly ? `${name} — ${TEXT_ONLY_TITLE}` : name}
+      title={`${name}${pairedNote}${textOnly ? ` · ${TEXT_ONLY_TITLE}` : ""}`}
+      aria-label={`${name}${pairedNote}${textOnly ? ` — ${TEXT_ONLY_TITLE}` : ""}`}
       className={`${PILL_CLASS} ${
         isSelected ? PILL_SELECTED_CLASS : isPaired ? PILL_MINE_CLASS : PILL_IDLE_CLASS
       }`}
@@ -222,6 +230,7 @@ export function LanguagePillRow({
   pills,
   selected,
   paired,
+  pairedTitle,
   caption,
   sheetOpen,
   onSelect,
@@ -245,6 +254,7 @@ export function LanguagePillRow({
             code={code}
             selected={selected}
             paired={paired}
+            pairedTitle={pairedTitle}
             onSelect={onSelect}
           />
         ))}
