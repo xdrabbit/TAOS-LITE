@@ -7,8 +7,15 @@ import {
   listHistory,
   type HistoryRow
 } from "@/lib/supabase";
+import { languageNative } from "@/lib/languages/catalog";
 
-const LANG_LABEL: Record<string, string> = { en: "English", es: "Español" };
+// The row header used to read out of a private
+// `{ en: "English", es: "Español" }` with a fall-through to the raw code, so
+// every turn that was not one of those two showed up as "bs → en" (8/19). It
+// is the same two-language table the chat routes and the typing surface each
+// kept privately; the catalog has held the answer for a hundred languages
+// since 8/17. languageNative() is the one used in the picker rows, so a
+// language reads the same here as it does on the pill that produced it.
 
 function fmtTime(iso: string): string {
   try {
@@ -125,8 +132,8 @@ export function HistoryDrawer({
               >
                 <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-amber-100/40">
                   <span>
-                    {LANG_LABEL[row.source_lang] ?? row.source_lang} →{" "}
-                    {LANG_LABEL[row.target_lang] ?? row.target_lang} · {row.tone}
+                    {languageNative(row.source_lang)} →{" "}
+                    {languageNative(row.target_lang)} · {row.tone}
                   </span>
                   <span>{fmtTime(row.created_at)}</span>
                 </div>
