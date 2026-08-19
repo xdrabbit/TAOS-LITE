@@ -34,6 +34,29 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   all three /api/tutor routes 404 so a disabled feature cannot bill OpenAI
   realtime or Azure. Nothing was deleted; set the var to 1 and redeploy to
   bring it back.
+- /live "On-device" mode: find out why it never works, or delete it — Tom
+  (8/18): it has never once worked for him. Gated off for RC1 behind
+  NEXT_PUBLIC_ENABLE_ONDEVICE_STT (lib/release.ts), so /live now has one
+  engine and no toggle; Ambient AI was already the default and does the same
+  job over WebRTC. Nothing was removed — the recognizer, its watchdog,
+  lib/languages/recognition.ts and /api/live-translate are all still there,
+  and `NEXT_PUBLIC_ENABLE_ONDEVICE_STT=1` brings the toggle back for testing.
+  Post-RC, in this order:
+  1. **Availability detection.** The screen decides support by looking for
+     `window.SpeechRecognition ?? window.webkitSpeechRecognition`. Safari
+     defines `webkitSpeechRecognition` and then fails at `start()` or returns
+     nothing, so the constructor's presence is not an answer — find out what
+     is (a permissions query? a timed first-result probe?).
+  2. **PWA standalone.** Test from the home-screen icon, not just the
+     browser: installed standalone is where Tom actually uses the app, and
+     several WebKit bugs make recognition behave differently there.
+  3. **Silent-failure UX.** Today a dead recognizer looks exactly like a
+     working app that hears nothing — tap START, no error, no feed. Whatever
+     the verdict on (1) and (2), the mode must say out loud when it isn't
+     hearing anything, and offer the Ambient AI switch itself.
+  If the answer is "iOS will never do this reliably", that is a fine answer —
+  take the mode out properly rather than leaving a flag off forever.
+  (added 2026-08-18)
 - ⚠️ The pricing page still sells tutor minutes — BLOCKS charging anyone.
   Landing.tsx and Paywall.tsx advertise "15 / 45 / 200 tutor minutes /
   month" on every plan, lib/stripe.ts sells add-on minute packs, and

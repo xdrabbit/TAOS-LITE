@@ -47,6 +47,30 @@ export function tutorEnabled(): boolean {
   return flag === "1" || flag === "true";
 }
 
+// /live's second engine — "On-device", the Web Speech API path — is off for
+// RC1 (Tom, 8/18: it has never once worked for him). It is not a half-built
+// feature like tutor; it is a finished feature standing on a browser API that
+// silently isn't there. Chrome on desktop/Android has it, Safari and every
+// iOS browser do not, and a PWA in standalone mode is its own coin toss —
+// which means the mode's failure looks exactly like the app being broken:
+// tap START, nothing happens, no error worth reading.
+//
+// Ambient AI does the same job over WebRTC on every browser we ship to, so
+// RC1 has one engine and no toggle to get lost in. The on-device code path,
+// its recognizer watchdog, and lib/languages/recognition.ts all stay — this
+// hides the door, it does not board up the room.
+//
+//     NEXT_PUBLIC_ENABLE_ONDEVICE_STT=1
+//
+// brings the toggle back (NEXT_PUBLIC_ for the same client-bundle reason as
+// tutor above). Nothing persists the engine choice — /live mounts on
+// "ambient" every time — so turning this off cannot strand anyone mid-mode.
+// See the post-RC investigation note in ENHANCEMENTS.md before re-enabling.
+export function onDeviceSttEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
 // Founders keep using everything. Tom and Liz are hardcoded; add anyone else
 // via NEXT_PUBLIC_FOUNDER_EMAILS in Vercel — comma-separated, no code change
 // needed, just an env edit + redeploy.

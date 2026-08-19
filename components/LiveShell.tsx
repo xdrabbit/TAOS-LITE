@@ -13,6 +13,7 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { recognitionTag } from "@/lib/languages/recognition";
 import { languageNative } from "@/lib/languages/catalog";
 import { pairDirection, type PairDirection, type PairLangCode, type PairSide } from "@/lib/translate/pair";
+import { onDeviceSttEnabled } from "@/lib/release";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -21,14 +22,20 @@ import { pairDirection, type PairDirection, type PairLangCode, type PairSide } f
 // into an earpiece. Freshness beats completeness: anything stale gets dropped,
 // never queued.
 //
-// Two engines:
-//  • "Ambient AI" (default) — continuous WebRTC stream to a GA Realtime
-//    session (lib/live/ambient.ts). Hears any language and multiple voices,
-//    speaks its summaries natively (no TTS round-trip). This is the mode for
-//    dinners, TV, and movies.
+// Two engines — but only one of them ships in RC1:
+//  • "Ambient AI" (default, and the only one on) — continuous WebRTC stream to
+//    a GA Realtime session (lib/live/ambient.ts). Hears any language and
+//    multiple voices, speaks its summaries natively (no TTS round-trip). This
+//    is the mode for dinners, TV, and movies.
 //  • "On-device" — the original free path: Web Speech API transcription →
 //    POST /api/live-translate per chunk → optional /api/tts readout. One
-//    recognition language at a time; best for a single nearby speaker.
+//    recognition language at a time; best for a single nearby speaker. Gated
+//    off behind NEXT_PUBLIC_ENABLE_ONDEVICE_STT (onDeviceSttEnabled() in
+//    lib/release.ts): the browser API it stands on isn't there on iOS or in
+//    much of PWA standalone, and it has never worked for Tom. Everything
+//    below that reads `engine === "device"` is live code kept warm for the
+//    post-RC investigation — with the flag off, `engine` never leaves
+//    "ambient", so those branches simply don't run.
 
 type Engine = "ambient" | "device";
 
@@ -102,6 +109,13 @@ function normWords(text: string): string[] {
 }
 
 export function LiveShell(): JSX.Element {
+  // RC1: one engine, no toggle (lib/release.ts). Read once at render — the
+  // flag is inlined at build time, so this is a constant for the session.
+  const onDeviceAllowed = onDeviceSttEnabled();
+  // Always "ambient" at mount, flag or no flag: nothing persists the choice,
+  // which is what makes turning the flag off safe. If a future change ever
+  // does persist it, restore through this initializer so a stored "device"
+  // can't outlive the flag.
   const [engine, setEngine] = useState<Engine>("ambient");
   // On-device only: whose speech the recognizer is listening for. Ambient AI
   // hears the room and needs no such toggle.
@@ -629,6 +643,11 @@ export function LiveShell(): JSX.Element {
 
   const changeEngine = useCallback(
     (next: Engine) => {
+      // The toggle is unrendered when the flag is off, so nothing should be
+      // calling this with "device" — but the guard is here rather than only in
+      // the JSX so that the mode stays unreachable if some other code path
+      // (a deep link, a restored preference, a later refactor) tries.
+      if (next === "device" && !onDeviceAllowed) return;
       if (next === engineRef.current) return;
       // Switching engines stops everything; the user re-taps START.
       stopListening();
@@ -636,7 +655,7 @@ export function LiveShell(): JSX.Element {
       setEngine(next);
       setError(null);
     },
-    [stopAmbient, stopListening]
+    [onDeviceAllowed, stopAmbient, stopListening]
   );
 
   const changeSide = useCallback(
@@ -756,26 +775,30 @@ export function LiveShell(): JSX.Element {
           </p>
         </div>
 
-        {/* Engine toggle */}
-        <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-          {(
-            [
-              ["ambient", "✨ Ambient AI"],
-              ["device", "On-device"]
-            ] as [Engine, string][]
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => changeEngine(key)}
-              className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                engine === key ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* Engine toggle. Off for RC1 (lib/release.ts) — a two-button row with
+            one button is worse than no row: it asks a question the screen has
+            already answered. Ambient AI is simply what /live is. */}
+        {onDeviceAllowed ? (
+          <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
+            {(
+              [
+                ["ambient", "✨ Ambient AI"],
+                ["device", "On-device"]
+              ] as [Engine, string][]
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => changeEngine(key)}
+                className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                  engine === key ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {/* The languages. Same row and same sheet as /translate, pointed the
             other way round: here the solid pill is what you are LISTENING to
