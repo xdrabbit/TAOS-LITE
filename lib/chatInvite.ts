@@ -158,18 +158,17 @@ export const CHAT_JOIN_FULL =
   "That chat already has two people in it. · " +
   "Ese chat ya tiene dos personas.";
 
-/**
- * One chat per account, for now.
- *
- * lib/chat.ts takes the FIRST thread an account belongs to and draws it; there
- * is no thread list and no switcher. So joining a second one would look like
- * the link doing nothing, which is a worse dead end than the one being fixed
- * here. Said plainly instead, and logged in ENHANCEMENTS.md as the next thing
- * this screen wants.
- */
-export const CHAT_JOIN_ALREADY_IN_ANOTHER =
-  "You're already in a chat, and TAOS holds one at a time. · " +
-  "Ya estás en un chat, y TAOS mantiene uno a la vez.";
+// There used to be a refusal here for "you are already in a DIFFERENT chat":
+//
+//     "You're already in a chat, and TAOS holds one at a time."
+//
+// It was true when it was written — lib/chat.ts took the FIRST thread an
+// account belonged to and drew it, with no list and no switcher, so a second
+// membership would have looked like the link doing nothing. Tom read that
+// sentence on his own app during the two-phone walkthrough and called it: an
+// account holds as many chats as it likes, with history. The list is
+// lib/chatThreads.ts and the sentence is gone, not reworded — there is no
+// longer anything it could truthfully say.
 
 /** Not an error: they opened their own link, or opened the same one twice. */
 export const CHAT_JOIN_ALREADY_MEMBER =

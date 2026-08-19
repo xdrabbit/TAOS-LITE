@@ -198,14 +198,22 @@ export interface ChatInvite {
   created: boolean;
 }
 
-export async function createChatInvite(): Promise<ChatInvite> {
+/**
+ * Mint a link.
+ *
+ * With a `threadId` this is "invite somebody into THIS chat" — the button on a
+ * thread that is still one person. Without one it is "start a chat", which
+ * always makes a NEW thread: Start is a button on the list now, and a list is
+ * a thing you add to.
+ */
+export async function createChatInvite(threadId?: string): Promise<ChatInvite> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error("Please sign in again.");
   const res = await fetch("/api/chat/invite", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ lang: myPhoneLanguage() })
+    body: JSON.stringify({ lang: myPhoneLanguage(), ...(threadId ? { threadId } : {}) })
   });
   const payload = (await res.json().catch(() => ({}))) as Partial<ChatInvite> & { error?: string };
   if (!res.ok || !payload.url || !payload.threadId || !payload.expiresAt) {

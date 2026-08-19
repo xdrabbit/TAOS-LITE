@@ -23,7 +23,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import {
   CHAT_INVITE_LABEL,
-  CHAT_JOIN_ALREADY_IN_ANOTHER,
   CHAT_JOIN_ALREADY_MEMBER,
   CHAT_JOIN_BAD_LINK,
   CHAT_JOIN_EXPIRED,
@@ -309,22 +308,67 @@ describe("starting a chat", () => {
     expect(store.taos_lite_chat_members[0].lang).toBe("en");
   });
 
-  it("re-uses the thread I am already in rather than making a second one", async () => {
+  it("starts a SECOND chat for somebody who already has one", async () => {
+    // The cap, from the other end. This route used to find the FIRST thread
+    // the caller belonged to and re-use it forever, which is how an account
+    // came to hold exactly one chat. Start is a button on a LIST now.
     seedThread("thread-a", [{ user_id: "user-b", lang: "en" }]);
-    const res = await invitePost(post("/api/chat/invite", {}));
+    const res = await invitePost(post("/api/chat/invite", { lang: "en" }));
+    const body = (await res.json()) as { threadId: string; created: boolean };
+    expect(body.created).toBe(true);
+    expect(body.threadId).not.toBe("thread-a");
+    expect(store.taos_lite_chat_threads).toHaveLength(2);
+    // Both memberships are real and the first one is untouched.
+    expect(store.taos_lite_chat_members).toHaveLength(2);
+    expect(store.taos_lite_chat_members[0]).toEqual({
+      thread_id: "thread-a",
+      user_id: "user-b",
+      lang: "en"
+    });
+  });
+
+  it("mints for the thread it was told to, not for the first one it finds", async () => {
+    // "Invite someone" is pressed inside a particular chat. With two threads
+    // on the account, the only thing that can say which is the body.
+    seedThread("thread-a", [{ user_id: "user-b", lang: "en" }]);
+    seedThread("thread-b", [{ user_id: "user-b", lang: "es" }]);
+    const res = await invitePost(post("/api/chat/invite", { threadId: "thread-b" }));
     const body = (await res.json()) as { threadId: string; created: boolean };
     expect(body.created).toBe(false);
-    expect(body.threadId).toBe("thread-a");
+    expect(body.threadId).toBe("thread-b");
+    expect(store.taos_lite_chat_threads).toHaveLength(2);
+    expect(store.taos_lite_chat_invites[0]).toMatchObject({ thread_id: "thread-b" });
+  });
+
+  it("will not mint a link for a chat that is not mine", async () => {
+    // A threadId is a body field, and a body field is never a permission.
+    seedThread("thread-a", [{ user_id: "user-a", lang: "en" }]);
+    const res = await invitePost(post("/api/chat/invite", { threadId: "thread-a" }));
+    expect(res.status).toBe(403);
+    expect(store.taos_lite_chat_invites).toHaveLength(0);
+    // And it did not quietly start a chat instead.
     expect(store.taos_lite_chat_threads).toHaveLength(1);
   });
 
   it("retires the previous unused link, so only the one on screen works", async () => {
     seedThread("thread-a", [{ user_id: "user-b", lang: "en" }]);
     seedInvite("oldoldoldoldoldoldoldold");
-    await invitePost(post("/api/chat/invite", {}));
+    await invitePost(post("/api/chat/invite", { threadId: "thread-a" }));
     const live = store.taos_lite_chat_invites.map((i) => i.token);
     expect(live).toHaveLength(1);
     expect(live[0]).not.toBe("oldoldoldoldoldoldoldold");
+  });
+
+  it("retires only the named thread's link, never another chat's", async () => {
+    // With more than one chat on the account, "tap invite again and the old
+    // link stops working" has to mean the old link FOR THIS CHAT.
+    seedThread("thread-a", [{ user_id: "user-b", lang: "en" }]);
+    seedThread("thread-b", [{ user_id: "user-b", lang: "en" }]);
+    seedInvite("aaaaaaaaaaaaaaaaaaaaaaaa", { thread_id: "thread-a" });
+    await invitePost(post("/api/chat/invite", { threadId: "thread-b" }));
+    expect(store.taos_lite_chat_invites.map((i) => i.token)).toContain(
+      "aaaaaaaaaaaaaaaaaaaaaaaa"
+    );
   });
 
   it("will not mint a link for a chat that already has two people", async () => {
@@ -332,7 +376,7 @@ describe("starting a chat", () => {
       { user_id: "user-b", lang: "en" },
       { user_id: "user-a", lang: "es" }
     ]);
-    const res = await invitePost(post("/api/chat/invite", {}));
+    const res = await invitePost(post("/api/chat/invite", { threadId: "thread-a" }));
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(CHAT_JOIN_FULL);
     expect(store.taos_lite_chat_invites).toHaveLength(0);
@@ -453,16 +497,41 @@ describe("joining with a link", () => {
     expect(store.taos_lite_chat_members).toHaveLength(1);
   });
 
-  it("says so plainly when the joiner already has a different chat", async () => {
-    // lib/chat.ts draws the FIRST thread and has no switcher, so a second
-    // membership would look like the link doing nothing at all.
+  it("lets somebody who already has a chat join another one", async () => {
+    // The refusal this replaces read "You're already in a chat, and TAOS holds
+    // one at a time" — the sentence Tom hit on his own app during the
+    // two-phone walkthrough. It was honest about a screen with no switcher.
+    // /chat has a list now (lib/chatThreads.ts), so a second membership is a
+    // second row rather than a link that appears to do nothing.
     seedThread("thread-a", [{ user_id: "user-a", lang: "en" }]);
     seedThread("thread-mine", [{ user_id: "user-b", lang: "en" }]);
     seedInvite(TOKEN);
+    const res = await joinPost(post("/api/chat/join", { token: TOKEN, lang: "es" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ threadId: "thread-a", joined: true });
+    // Both memberships, and the one that was already there is untouched —
+    // its language included, because lang is per-thread.
+    expect(store.taos_lite_chat_members).toEqual([
+      { thread_id: "thread-a", user_id: "user-a", lang: "en" },
+      { thread_id: "thread-mine", user_id: "user-b", lang: "en" },
+      { thread_id: "thread-a", user_id: "user-b", lang: "es" }
+    ]);
+  });
+
+  it("still refuses a third person, however many chats they are in", async () => {
+    // Multiples is about how many threads a PERSON holds. How many people a
+    // THREAD holds is unchanged and is not negotiable: the send route
+    // translates into exactly one partner language.
+    seedThread("thread-full", [
+      { user_id: "user-a", lang: "en" },
+      { user_id: "user-d", lang: "es" }
+    ]);
+    seedThread("thread-mine", [{ user_id: "user-b", lang: "en" }]);
+    seedInvite(TOKEN, { thread_id: "thread-full" });
     const res = await joinPost(post("/api/chat/join", { token: TOKEN }));
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe(CHAT_JOIN_ALREADY_IN_ANOTHER);
-    expect(store.taos_lite_chat_invites[0].accepted_at).toBe(null);
+    expect((await res.json()).error).toBe(CHAT_JOIN_FULL);
+    expect(store.taos_lite_chat_members).toHaveLength(3);
   });
 
   it("refuses a caller with no session", async () => {
@@ -501,7 +570,6 @@ describe("what the screens say", () => {
       CHAT_JOIN_USED,
       CHAT_JOIN_EXPIRED,
       CHAT_JOIN_FULL,
-      CHAT_JOIN_ALREADY_IN_ANOTHER,
       CHAT_JOIN_ALREADY_MEMBER
     ];
     for (const line of inAppCopy) {
@@ -528,7 +596,6 @@ describe("what the screens say", () => {
       CHAT_JOIN_USED,
       CHAT_JOIN_EXPIRED,
       CHAT_JOIN_FULL,
-      CHAT_JOIN_ALREADY_IN_ANOTHER,
       CHAT_JOIN_ALREADY_MEMBER
     ]) {
       expect(line, line).toContain(" · ");
@@ -577,6 +644,21 @@ describe("the schema", () => {
     }
     expect(shape.test("../../etc/passwd")).toBe(false);
     expect(shape.test("")).toBe(false);
+  });
+
+  it("does not cap an ACCOUNT at one chat", () => {
+    // The cap Tom hit was never in the schema. taos_lite_chat_members is keyed
+    // (thread_id, user_id) — one row per person per thread — and nothing has
+    // ever constrained user_id on its own, which was confirmed against
+    // pg_constraint and pg_indexes on the live project before this PR touched
+    // a line of the routes. The base tables predate this migrations folder
+    // (they were applied 20260718161757, before the repo kept SQL), so the
+    // only thing this file CAN assert is that nothing here reintroduces one.
+    expect(sql).not.toMatch(/unique[^;]*\(\s*user_id\s*\)/i);
+    // The query the list asks on every /chat load, indexed.
+    expect(sql).toMatch(
+      /create index if not exists taos_lite_chat_members_user_idx[\s\S]*?\(user_id\)/i
+    );
   });
 
   it("caps a thread at two people in the database too", () => {

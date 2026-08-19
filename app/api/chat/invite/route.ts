@@ -12,8 +12,8 @@ import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
-// Mints the link that lets a second person into a /chat thread — and, for
-// somebody who has no thread at all, creates the thread on the way past.
+// Mints the link that lets a second person into a /chat thread — and, when no
+// thread is named, creates the thread on the way past.
 //
 // This is the route that did not exist. /chat's threads and memberships have
 // SELECT policies and nothing else, and nothing anywhere in the app ever
@@ -25,6 +25,19 @@ export const maxDuration = 15;
 // the other person" are the same act from the user's side — a chat that is
 // one person is not a chat yet — and splitting them would put a thread with
 // nobody in it on screen between two taps.
+//
+// ── Which chat ─────────────────────────────────────────────────────────────
+// `threadId` in the body is the difference, and it is the whole of the
+// difference: naming one means "invite somebody into THIS chat", and omitting
+// it means "start a new one". It used to be neither — the route found the
+// FIRST thread the caller belonged to and re-used it forever, which is how an
+// account ended up able to hold exactly one chat. Now that /chat has a list
+// (lib/chatThreads.ts), Start is a button on that list and has to be able to
+// make a second, third, fourth chat.
+//
+// So "start" always creates, even for somebody who already has a one-person
+// thread waiting on a link. Folding a new Start back into that empty thread
+// would look tidy and would retire a QR code somebody is still holding.
 //
 // The token is minted here and returned once. Nothing reads it back out:
 // there is no GET, no list, and no RLS policy on the invites table, so the
@@ -42,7 +55,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const payload = (await req.json().catch(() => ({}))) as { lang?: string };
+  const payload = (await req.json().catch(() => ({}))) as { lang?: string; threadId?: string };
   // The creator's reading language, handed over from the phone's own pair so a
   // Spanish speaker's first thread is not silently in English. Validated the
   // same way /api/chat/language validates it — an unrecognized code would
@@ -52,22 +65,44 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       ? payload.lang
       : "en";
 
-  // Which thread am I in? Same "first membership wins" rule lib/chat.ts draws
-  // by, so the link is always for the thread on screen.
-  const { data: mine, error: mineErr } = await supabaseAdmin
-    .from("taos_lite_chat_members")
-    .select("thread_id, created_at")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1);
-  if (mineErr) {
-    return NextResponse.json({ error: "Could not open your chat." }, { status: 502 });
-  }
-
-  let threadId = mine?.[0]?.thread_id as string | undefined;
+  const wanted = typeof payload.threadId === "string" ? payload.threadId.trim() : "";
+  let threadId: string;
   let created = false;
 
-  if (!threadId) {
+  if (wanted) {
+    // Inviting into a chat I am already in. MY MEMBERSHIP is the permission —
+    // read my own row rather than the thread's, so a threadId copied off
+    // somebody else's screen mints nothing.
+    const { data: mine, error: mineErr } = await supabaseAdmin
+      .from("taos_lite_chat_members")
+      .select("thread_id")
+      .eq("user_id", user.id)
+      .eq("thread_id", wanted)
+      .maybeSingle();
+    if (mineErr) {
+      return NextResponse.json({ error: "Could not open your chat." }, { status: 502 });
+    }
+    if (!mine) {
+      // Same answer /api/chat/send and /api/chat/language give, for the same
+      // reason: not a member is not a 404, it is a refusal.
+      return NextResponse.json({ error: "You are not part of this chat." }, { status: 403 });
+    }
+    threadId = wanted;
+
+    // A thread that is already two people has nowhere to put a third (the send
+    // route translates into exactly one partner language). Say so instead of
+    // minting a link that could only ever fail on the other person's phone.
+    const { count, error: countErr } = await supabaseAdmin
+      .from("taos_lite_chat_members")
+      .select("user_id", { count: "exact", head: true })
+      .eq("thread_id", threadId);
+    if (countErr) {
+      return NextResponse.json({ error: "Could not open your chat." }, { status: 502 });
+    }
+    if ((count ?? 0) >= 2) {
+      return NextResponse.json({ error: CHAT_JOIN_FULL, threadId }, { status: 409 });
+    }
+  } else {
     const { data: thread, error: threadErr } = await supabaseAdmin
       .from("taos_lite_chat_threads")
       .insert({})
@@ -84,25 +119,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .insert({ thread_id: threadId, user_id: user.id, lang });
     if (memberErr) {
       // A thread nobody belongs to is invisible to RLS and would sit there
-      // forever, so take it back out rather than leaving a stray row that the
-      // next invite would then find and reuse.
+      // forever — a row in the database that no list can ever show and no
+      // invite can ever reach. Take it back out.
       await supabaseAdmin.from("taos_lite_chat_threads").delete().eq("id", threadId);
       return NextResponse.json({ error: "Could not start the chat." }, { status: 502 });
-    }
-  } else {
-    // An existing thread that is already two people has nowhere to put a third
-    // (lib/chat.ts reads exactly one partner; the send route translates into
-    // exactly one language). Say so instead of minting a link that could only
-    // ever fail on the other person's phone.
-    const { count, error: countErr } = await supabaseAdmin
-      .from("taos_lite_chat_members")
-      .select("user_id", { count: "exact", head: true })
-      .eq("thread_id", threadId);
-    if (countErr) {
-      return NextResponse.json({ error: "Could not open your chat." }, { status: 502 });
-    }
-    if ((count ?? 0) >= 2) {
-      return NextResponse.json({ error: CHAT_JOIN_FULL, threadId }, { status: 409 });
     }
   }
 

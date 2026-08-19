@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
 import {
-  CHAT_JOIN_ALREADY_IN_ANOTHER,
   CHAT_JOIN_ALREADY_MEMBER,
   CHAT_JOIN_BAD_LINK,
   CHAT_JOIN_EXPIRED,
@@ -86,12 +85,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       message: CHAT_JOIN_ALREADY_MEMBER
     });
   }
-  // One chat per account for now — lib/chat.ts draws the first thread and has
-  // no switcher, so a second membership would look like the link doing
-  // nothing. See CHAT_JOIN_ALREADY_IN_ANOTHER for the whole reasoning.
-  if (existing?.length) {
-    return NextResponse.json({ error: CHAT_JOIN_ALREADY_IN_ANOTHER }, { status: 409 });
-  }
+  // Being in a DIFFERENT chat used to end the road here, with "You're already
+  // in a chat, and TAOS holds one at a time" — the sentence Tom hit on his own
+  // app during the two-phone walkthrough. It was true of a screen that drew
+  // the first thread and had no switcher; it stopped being true when /chat
+  // grew a list (lib/chatThreads.ts), so the refusal is gone rather than
+  // reworded. The one just above stays: joining the SAME thread twice is
+  // still nothing to do.
 
   if (invite.accepted_at) {
     return NextResponse.json({ error: CHAT_JOIN_USED }, { status: 410 });
