@@ -99,14 +99,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
-- More than one chat per account — joining a second invite is refused today
-  ("You're already in a chat, and TAOS holds one at a time") because
-  lib/chat.ts draws the FIRST thread an account belongs to and there is no
-  switcher. Fine for two people on a trip; the first person who wants a chat
-  with a guide AND one with their partner will want a list. The invite
-  machinery already supports it — it is `getChatThread` and the header that
-  assume one. (added 2026-08-19)
-
 - /chat should translate on what you WROTE, not on what you read — the send
   and voice routes take the sender's own member language as the source
   (`sourceLang = me.lang`) and feed it to the prompt as "the sender usually
@@ -271,6 +263,59 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **More than one chat per account** — Tom, 8/19, on the second half of the
+  two-phone walkthrough: he opened a second invite on his own app and was
+  refused by his own copy, *"You're already in a chat, and TAOS holds one at a
+  time."* Verdict: multiples, with history preserved. (PR #24, shipped
+  2026-08-19)
+
+  The sentence was honest. `lib/chat.ts` drew the FIRST membership it found,
+  `/api/chat/invite` re-used that same first thread forever, and
+  `/api/chat/join` 409'd on a second one — so a second membership would have
+  looked like the link doing nothing. **The cap was never in the database.**
+  `taos_lite_chat_members` is keyed `(thread_id, user_id)` and nothing has ever
+  constrained `user_id` alone (checked against `pg_constraint` and `pg_indexes`
+  before a line was written — the lesson from the stale `en|es` CHECK, which
+  was a ceiling no source read could see). Nothing was dropped and no row was
+  touched; the migration is one additive index for the query /chat now asks on
+  every load.
+
+  - **A list.** More than one chat opens on it: one row per chat, labelled with
+    the other member's **own display name** (their Google name, else their
+    email's local part — user identity, never a name this app decided), the
+    last message, and a timestamp. One chat still opens straight into itself,
+    with a small **"← Chats"** in the header — the account with exactly one
+    chat is exactly the one that needs a second.
+  - **Every preview is in the language the VIEWER reads in THAT thread.**
+    Reading language is per-membership, so two rows of one list can be two
+    different languages, and my own message previews as I typed it while
+    theirs previews as it was translated for me — the bubbles' rule, one
+    screen out. Opening a thread swaps the pill row, "They read", the composer
+    promise and the confirmation with it; a language tap writes to that
+    thread's row only.
+  - **"Start a chat" is always one tap away**, on the list, and always creates
+    a NEW thread. Folding it back into an existing empty one would look tidy
+    and would retire a QR code somebody is still holding. `threadId` in the
+    invite body is what tells "invite into this chat" from "start another",
+    and membership is the permission — a threadId off somebody else's screen
+    mints nothing.
+  - **`GET /api/chat/threads`** backs the list. The rest of /chat reads through
+    RLS; this goes through a route because a row needs the other person's name,
+    and that lives in `auth.users` where no browser key may look and should
+    not — an app that lets one account enumerate another's email is a
+    directory, and /chat is the argument against having one. Every query is
+    rooted in the caller's own memberships.
+  - **`?t=` names the chat.** /chat/join lands on the thread it just let
+    somebody into rather than whichever one sorts first, and a reload comes
+    back to the conversation that was on screen.
+  - **Still two people per thread**, in the route and in the `before insert`
+    trigger. Many chats per person; two people per chat. The boat chat is a
+    different piece of work — `docs/group-chat-plan.md`.
+  - The existing thread is untouched: same rows, same 34 messages, same
+    languages. `tests/chat-threads.test.ts` pins the list, the per-thread
+    language resolution and the shell wiring; `tests/chat-invite.test.ts`
+    pins the removed cap and the two-per-thread one that stayed.
 
 - **/chat had no way in, so a second person could never arrive** — Tom, 8/19,
   two-phone walkthrough: signed in on the second device with a different
