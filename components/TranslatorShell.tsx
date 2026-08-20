@@ -11,60 +11,89 @@ import {
   type Profile
 } from "@/lib/supabase";
 import { HistoryDrawer } from "./HistoryDrawer";
+import { InstallPrompt } from "./InstallPrompt";
 import { Paywall } from "./Paywall";
+import { QrShareModal } from "./QrShareModal";
+import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
+import { TextOnlyNote } from "./TextOnly";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { requestSpeech } from "@/lib/tts/speech";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
-import { isFounder } from "@/lib/release";
+import { type PairLangCode } from "@/lib/translate/pair";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { canSpeak, languageNative } from "@/lib/languages/catalog";
+import { callEnabled, isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { BUILD_LABEL } from "@/lib/version";
 
-type LangCode = "en" | "es" | "zh" | "yue";
+// The pair's languages, its storage, and the tap rule all live in
+// lib/translate/pair.ts — /vision reads the same saved pair to decide what
+// language a photo comes back in.
+type LangCode = PairLangCode;
 type Engine = "elevenlabs" | "openai";
 type Status = "idle" | "recording" | "processing" | "done" | "error";
 
 interface Speaker {
   code: LangCode;
-  who: string;
   label: string; // language name in its own language
 }
 
-const SPEAKERS: Record<LangCode, Speaker> = {
-  es: { code: "es", who: "Liz", label: "Español" },
-  en: { code: "en", who: "Tom", label: "English" },
-  // Mandarin/Cantonese speakers are guests, not named members of the household.
-  zh: { code: "zh", who: "Guest", label: "中文" },
-  yue: { code: "yue", who: "Guest", label: "廣東話" }
-};
+// A speaker is identified by their LANGUAGE, never by name. There used to be a
+// household table here (the app began as a two-person app) that put a first
+// name in front of the language for subscribers. The app is handed to
+// strangers now — a QR code at a table — and a stranger who subscribes should
+// never read someone else's name on their own phone. The language's name in
+// its OWN language is what the person across the table recognizes anyway,
+// which is what the beta tier has shown all along.
+//
+// This was a hand-written table of six, and it is the reason a seventh
+// language was never a one-line change: a code without a row here crashed the
+// shell. The label comes from the catalog now, for all hundred of them.
+function speakerFor(code: LangCode): Speaker {
+  return { code, label: languageNative(code) };
+}
 
-// ── Conversation language pairs ─────────────────────────────────────────────
-// Phase 1 of multi-language: /translate operates on a language PAIR. The
-// picker stacks pairs most-recently-used first (persisted) so the daily pair
-// stays one tap away. To add a pair: add its languages to SPEAKERS + STRINGS,
-// then list it here — the server already supports 12 languages.
-const PAIRS: ReadonlyArray<readonly [LangCode, LangCode]> = [
-  ["en", "es"],
-  ["en", "zh"],
-  ["es", "zh"],
-  // 7/25 Yellowstone promise: the Cantonese/Mandarin guests' own pair, plus
-  // English for talking with them.
-  ["zh", "yue"],
-  ["en", "yue"]
-];
-const pairKey = (p: readonly [LangCode, LangCode]): string => `${p[0]}-${p[1]}`;
-// Tom's 8/15 call: the picker is TWO buttons — EN⇄ES (the daily pair) and
-// "Other · Otros" holding every remaining pair. EN⇄ES never hides behind the
-// menu, and the guest pairs stop crowding the top of the screen.
-const HOME_PAIR = PAIRS[0];
-const PAIR_ORDER_STORAGE_KEY = "taos.translate.pairOrder";
+// ── Conversation languages ─────────────────────────────────────────────────
+// The picker is a row of LANGUAGE pills (Tom, 8/17, for the Bosnia + Italy
+// trip). A tap answers one question — "what should come out?" — instead of
+// asking someone to find the right A⇄B pair. The old picker listed one button
+// per pair, which is why it had already been folded into EN⇄ES + "Other"
+// (8/15): pairs grow as the square of the languages, pills grow one per
+// language.
+//
+// Underneath, a turn is still scoped to a PAIR, and that is deliberate:
+// /api/translate's auto-detect decides between exactly TWO languages because
+// detecting among all fourteen gets flaky, while between two it stays sharp.
+// So the pills express the pair as [yours, theirs]:
+//   - tap a new language  -> it becomes THEIRS (the output); your side stays
+//   - tap your own side   -> the two flip (you become the one being translated
+//                            INTO, e.g. so Liz can run ES⇄IT where Tom runs
+//                            EN⇄IT)
+// Only these taps change the pair. Auto-detect still decides, per turn, which
+// of the two languages was actually spoken (that is `source`), so the pill row
+// never shifts under a live conversation.
+//
+// WHICH languages get a pill is no longer written here. It was two hard-coded
+// rows — the trip four, plus zh/yue behind an "Other · Otros" disclosure — and
+// the app knows a hundred languages as of 8/17, which that shape cannot hold
+// at any width. lib/translate/pinned.ts answers it instead: the pair, plus
+// what this phone has reached for lately, capped at five. The rest live in the
+// search sheet, one tap deep, which is where the old disclosure's job went.
 
-// Unobtrusive build marker so we can tell which deploy is live. Vercel injects
-// the commit SHA at build time; falls back to "local" during dev.
-const APP_VERSION = "0.4";
-const BUILD_SHA = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7);
-const BUILD_LABEL = `v${APP_VERSION}${BUILD_SHA ? ` · ${BUILD_SHA}` : " · local"}`;
+// The build marker moved to lib/version.ts when /about started showing it too.
 
 // Speaker-facing copy flips to whoever is talking (Tom = en, Liz = es) so each
 // person reads the controls they act on in their own language.
+//
+// These six are the languages TAOS's own CHROME has been written in — they are
+// not the languages it translates, which is now the whole catalog. A language
+// with no entry here falls back to English (copyFor below) rather than being
+// held out of the app: a Thai speaker gets English buttons and a faithful Thai
+// translation, and the translation is what they came for. Adding a seventh is
+// a kindness to a language people keep using; it is not a prerequisite for
+// using it.
 const STRINGS: Record<
-  LangCode,
+  string,
   {
     speak: string;
     stop: string;
@@ -126,6 +155,50 @@ const STRINGS: Record<
     noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
     tooShort: "Muy corto — toca, di una idea completa y toca otra vez."
   },
+  bs: {
+    speak: "Govori",
+    stop: "Zaustavi i prevedi",
+    working: "Obrada…",
+    speakingNow: "Sada govori",
+    swap: "Zamijeni",
+    listening: "Slušam…",
+    translating: "Prevodim…",
+    idle: "Dodirni mikrofon, izgovori cijelu misao, pa dodirni ponovo.",
+    heard: "Čulo se",
+    translationLabel: "Prijevod",
+    wrapUp: "Završavam — automatsko zaustavljanje i prijevod za nekoliko sekundi…",
+    micUnavailable:
+      "Mikrofon nije dostupan. Otvori ovu stranicu preko HTTPS-a u Safariju i dozvoli pristup mikrofonu.",
+    micDenied:
+      "Pristup mikrofonu je odbijen. Uključi ga u postavkama Safarija i pokušaj ponovo.",
+    ttsFailed: "Reprodukcija glasa nije uspjela.",
+    translateFailed: "Prijevod nije uspio.",
+    connectionLost: "Problem s vezom — provjeri signal i pokušaj ponovo.",
+    noAudio: "Zvuk nije snimljen. Provjeri mikrofon i pokušaj ponovo.",
+    tooShort: "Prekratko — dodirni, izgovori cijelu misao, pa dodirni ponovo."
+  },
+  it: {
+    speak: "Parla",
+    stop: "Ferma e traduci",
+    working: "Elaborazione…",
+    speakingNow: "Sta parlando",
+    swap: "Cambia",
+    listening: "In ascolto…",
+    translating: "Traduzione…",
+    idle: "Tocca il microfono, di' un pensiero completo, tocca di nuovo.",
+    heard: "Sentito",
+    translationLabel: "Traduzione",
+    wrapUp: "Sto per finire — si ferma e traduce tra pochi secondi…",
+    micUnavailable:
+      "Microfono non disponibile. Apri questa pagina in HTTPS su Safari e consenti l'accesso al microfono.",
+    micDenied:
+      "Permesso del microfono negato. Attivalo nelle impostazioni di Safari e riprova.",
+    ttsFailed: "Riproduzione vocale non riuscita.",
+    translateFailed: "Traduzione non riuscita.",
+    connectionLost: "Problema di connessione — controlla il segnale e riprova.",
+    noAudio: "Nessun audio registrato. Controlla il microfono e riprova.",
+    tooShort: "Troppo breve — tocca, di' un pensiero completo, poi tocca di nuovo."
+  },
   zh: {
     speak: "说话",
     stop: "停止并翻译",
@@ -167,6 +240,21 @@ const STRINGS: Record<
     tooShort: "太短喇 — 撳一下，講完一句嘢，再撳一下。"
   }
 };
+
+function copyFor(code: LangCode): (typeof STRINGS)[string] {
+  return STRINGS[code] ?? STRINGS.en;
+}
+
+// In auto-detect the record button greets BOTH sides at once ("Speak ·
+// Hablar") so neither person has to wait their turn to read it. That only
+// works while the two have different copy — and since 8/17 a pair can hold two
+// languages that both fall back to English, which would render "Speak ·
+// Speak". A repeat collapses to one.
+function speakPrompt(pair: readonly [LangCode, LangCode]): string {
+  const mine = copyFor(pair[0]).speak;
+  const theirs = copyFor(pair[1]).speak;
+  return mine === theirs ? mine : `${mine} · ${theirs}`;
+}
 
 // Liz's call (8/9, in her words): the Casual/Detallado toggle kept getting
 // forgotten before long turns and casual summarized too much — so /translate
@@ -235,9 +323,6 @@ export function TranslatorShell({
   const trialBlocked = !subscriber && transLeft <= 0;
 
   const [source, setSource] = useState<LangCode>("es"); // who is speaking right now
-  const [pair, setPair] = useState<readonly [LangCode, LangCode]>(PAIRS[0]);
-  const [pairOrder, setPairOrder] = useState<string[]>(() => PAIRS.map(pairKey));
-  const [otherOpen, setOtherOpen] = useState(false);
   // Beta (7/27): ElevenLabs cloned voices are for subscribers (Tom, Liz);
   // free-tier beta testers get OpenAI only — ElevenLabs is priced per
   // character and a fleet of testers would run up real cost. Default is
@@ -261,6 +346,9 @@ export function TranslatorShell({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [togetherMenuOpen, setTogetherMenuOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [personalVoiceOpen, setPersonalVoiceOpen] = useState(false);
+  const personalVoiceTap = useSecretTaps(() => setPersonalVoiceOpen(true));
 
   // Avatar initial derived from the signed-in email (the only identity the
   // component receives — Profile has no name field). Falls back to a generic
@@ -290,54 +378,36 @@ export function TranslatorShell({
   // (lib/release.ts — the pages themselves are wrapped in FounderGate too).
   const founder = isFounder(email);
 
-  const target: LangCode = source === pair[0] ? pair[1] : pair[0];
-  const speaker = SPEAKERS[source];
-  const listener = SPEAKERS[target];
-  const s = STRINGS[source]; // speaker-facing copy (active speaker's language)
-  const orderedPairs = pairOrder
-    .map((k) => PAIRS.find((p) => pairKey(p) === k))
-    .filter((p): p is (typeof PAIRS)[number] => Boolean(p));
-
-  // Restore the most-recently-used pair order (and start on the top pair).
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(PAIR_ORDER_STORAGE_KEY);
-      if (!saved) return;
-      const stored = (JSON.parse(saved) as string[]).filter((k) =>
-        PAIRS.some((p) => pairKey(p) === k)
-      );
-      if (!stored.length) return;
-      const rest = PAIRS.map(pairKey).filter((k) => !stored.includes(k));
-      setPairOrder([...stored, ...rest]);
-      const top = PAIRS.find((p) => pairKey(p) === stored[0]);
-      if (top) {
-        setPair(top);
-        setSource((prev) => (prev === top[0] || prev === top[1] ? prev : top[0]));
+  // The pair, the pill row and the sheet, shared with /live and /tabletop
+  // (lib/translate/useLanguagePair.ts). pair[0] is YOUR side, pair[1] is
+  // theirs — the solid pill, and what /translate translates INTO. Only the
+  // picker moves the pair; `source` moves within it turn by turn.
+  //
+  // A pair change tears the current turn down: the translation on screen is
+  // in a language that is no longer selected, and leaving it up would invite
+  // someone to tap Play on it. The hook never fires this for a tap that
+  // changed nothing, so re-tapping the selected language leaves a turn alone.
+  const { pair, mine, theirs: output, pills, sheetOpen, setSheetOpen, selectLanguage } =
+    useLanguagePair({
+      onPairChange: (next) => {
+        // pair[0] is the side that speaks next by default; after a flip that
+        // is the language that was just the output.
+        setSource(next[0]);
+        setOriginal("");
+        setTranslation("");
+        setError(null);
+        if (status !== "recording") setStatus("idle");
       }
-    } catch {
-      /* corrupt storage — keep defaults */
-    }
-  }, []);
-
-  function selectPair(p: readonly [LangCode, LangCode]) {
-    setPair(p);
-    setOtherOpen(false);
-    setSource((prev) => (prev === p[0] || prev === p[1] ? prev : p[0]));
-    setOriginal("");
-    setTranslation("");
-    setError(null);
-    if (status !== "recording") setStatus("idle");
-    setPairOrder((prev) => {
-      const k = pairKey(p);
-      const next = [k, ...prev.filter((x) => x !== k)];
-      try {
-        window.localStorage.setItem(PAIR_ORDER_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        /* private mode — MRU just won't persist */
-      }
-      return next;
     });
-  }
+
+  const target: LangCode = source === pair[0] ? pair[1] : pair[0];
+  const speaker = speakerFor(source);
+  const listener = speakerFor(target);
+  const s = copyFor(source); // speaker-facing copy (active speaker's language)
+  // Tier 2 (lib/languages/catalog.ts): translated, never spoken. The screen has
+  // to say so up front — an audio control that silently does nothing reads as a
+  // bug, and this is a known limit of the language, not of the app.
+  const textOnlyTarget = !canSpeak(target);
 
   useEffect(() => {
     return () => {
@@ -516,24 +586,30 @@ export function TranslatorShell({
 
   async function speak(text: string, src: LangCode = source, tgt: LangCode = target) {
     if (!text) return;
+    // Tier 2 (lib/languages/catalog.ts): nothing in the pipeline can say this
+    // language out loud, so don't ask /api/tts and — importantly — don't raise
+    // anything. The translated text on screen IS the whole answer here; an
+    // error under it would be the app apologizing for working as designed.
+    // The screen already says "text only" next to the language, so this is a
+    // limit the person met before the turn, not a surprise after it.
+    if (!canSpeak(tgt)) return;
     const a = ensureAudioEl();
     if (!a) return;
     try {
       setIsSpeaking(true);
-      const res = await fetchWithRetry(
-        "/api/tts",
+      const blob = await requestSpeech(
+        { text, engine, sourceLanguage: src, targetLanguage: tgt },
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, engine, sourceLanguage: src, targetLanguage: tgt })
-        },
-        { retries: 2, timeoutMs: 60000 }
+          fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+          failureMessage: s.ttsFailed
+        }
       );
-      if (!res.ok) {
-        const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
-        throw new Error(p.details || p.error || s.ttsFailed);
+      // null = text only. The guard above already caught the languages the
+      // catalog knows about; this is the same answer arriving from the server.
+      if (!blob) {
+        setIsSpeaking(false);
+        return;
       }
-      const blob = await res.blob();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
       const url = URL.createObjectURL(blob);
       objectUrlRef.current = url;
@@ -788,7 +864,14 @@ export function TranslatorShell({
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
         <header className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
+          {/* Five taps on the title open the personal-voice sheet. Looks and
+              behaves like plain text to everyone who isn't looking for it. */}
+          <h1
+            onClick={personalVoiceTap}
+            className="cursor-default select-none text-lg font-semibold tracking-tight text-amber-200"
+          >
+            TAOS·LITE
+          </h1>
           <div className="flex items-center gap-2">
             <a
               href="/live"
@@ -797,26 +880,37 @@ export function TranslatorShell({
               Live
             </a>
             {/* Call / Chat / Table stacked under one pill — six pills overflowed
-                a phone width and made the whole page slide sideways. In v1,
-                Call and Table are founders-only (lib/release.ts), so customers
-                get a plain Chat pill instead of a one-item menu. */}
-            {founder ? (
-              <div ref={togetherMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setTogetherMenuOpen((o) => !o)}
-                  aria-haspopup="menu"
-                  aria-expanded={togetherMenuOpen}
-                  className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+                a phone width and made the whole page slide sideways, and four
+                would too: Live · Chat · Table · Translate, plus the title and
+                two icons, does not fit a 360px Droid.
+
+                This menu used to be founders-only, with customers getting a
+                plain Chat pill beside it — which is how /tabletop ended up
+                with no nav entry at all for anyone who isn't Tom or Liz.
+                Table is customer-facing now (lib/release.ts), so there is one
+                menu for everyone. Call is still dark for RC1, so today it
+                opens to Chat + Table. */}
+            <div ref={togetherMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setTogetherMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={togetherMenuOpen}
+                className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              >
+                Together ▾
+              </button>
+              {togetherMenuOpen ? (
+                <div
+                  role="menu"
+                  aria-label="Together"
+                  className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
-                  Together ▾
-                </button>
-                {togetherMenuOpen ? (
-                  <div
-                    role="menu"
-                    aria-label="Together"
-                    className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
-                  >
+                  {/* Call is off for RC1 (lib/release.ts) — it never got
+                      wired to the language catalog. Chat leads the menu
+                      when it's gone, so it drops the top border the way a
+                      first item should. */}
+                  {callEnabled() ? (
                     <a
                       href="/call"
                       role="menuitem"
@@ -824,39 +918,61 @@ export function TranslatorShell({
                     >
                       Call · Llamada
                     </a>
-                    <a
-                      href="/chat"
-                      role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Chat · Chat
-                    </a>
-                    <a
-                      href="/tabletop"
-                      role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Table · Mesa
-                    </a>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <a
-                href="/chat"
-                className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-              >
-                Chat
-              </a>
-            )}
+                  ) : null}
+                  <a
+                    href="/chat"
+                    role="menuitem"
+                    className={`block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10 ${
+                      callEnabled() ? "border-t border-white/10" : ""
+                    }`}
+                  >
+                    Chat · Chat
+                  </a>
+                  <a
+                    href="/tabletop"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Table · Mesa
+                  </a>
+                </div>
+              ) : null}
+            </div>
             <a
               href="/translate"
               className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
               Translate
             </a>
+            {/* Share: one icon-only button, no label — the point is to hand
+                the app to someone you just met without the translator screen
+                growing another pill. */}
+            <button
+              type="button"
+              onClick={() => setShareOpen(true)}
+              aria-label="Share TAOS / Compartir TAOS"
+              title="Share TAOS · Compartir"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-4 w-4"
+              >
+                <circle cx="18" cy="5" r="3" />
+                <circle cx="6" cy="12" r="3" />
+                <circle cx="18" cy="19" r="3" />
+                <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
+              </svg>
+            </button>
             {/* Tutor lives in the avatar menu (with History) — Tom, 7/27:
-                one fewer pill keeps the header from crowding phone widths. */}
+                one fewer pill keeps the header from crowding phone widths.
+                Hidden entirely for RC1 (lib/release.ts). */}
             <div ref={accountMenuRef} className="relative">
               <button
                 type="button"
@@ -887,13 +1003,15 @@ export function TranslatorShell({
                   aria-label="Account"
                   className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
-                  <a
-                    href="/tutor"
-                    role="menuitem"
-                    className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Tutor
-                  </a>
+                  {tutorEnabled() ? (
+                    <a
+                      href="/tutor"
+                      role="menuitem"
+                      className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Tutor
+                    </a>
+                  ) : null}
                   {/* Video joins Tutor here rather than as a header pill —
                       same phone-width rationale (Tom, 7/27). Founders-only
                       in v1 (lib/release.ts). */}
@@ -901,7 +1019,7 @@ export function TranslatorShell({
                     <a
                       href="/video"
                       role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition first:border-t-0 hover:bg-amber-400/10"
                     >
                       Video captions · Subtítulos
                     </a>
@@ -909,7 +1027,7 @@ export function TranslatorShell({
                   <a
                     href="/vision"
                     role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition first:border-t-0 hover:bg-amber-400/10"
                   >
                     Photo translator · Fotos
                   </a>
@@ -924,6 +1042,17 @@ export function TranslatorShell({
                   >
                     History · Historial
                   </button>
+                  {/* /about is the product page a stranger reads after
+                      scanning the QR — Landing.tsx links it, but Landing is
+                      only ever shown to logged-OUT visitors, so signing in
+                      used to be a one-way door away from it. */}
+                  <a
+                    href="/about"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    About TAOS · Acerca de TAOS
+                  </a>
                   <button
                     type="button"
                     role="menuitem"
@@ -940,6 +1069,11 @@ export function TranslatorShell({
             </div>
           </div>
         </header>
+
+        {/* One-time "add to home screen" nudge (hides itself once installed
+            or dismissed). Inline, above the trial banner — never floating over
+            the record button. */}
+        <InstallPrompt />
 
         {/* Free-trial allowance banner (hidden for subscribers) */}
         {!subscriber && Number.isFinite(transLeft) ? (
@@ -965,62 +1099,24 @@ export function TranslatorShell({
           </div>
         ) : null}
 
-        {/* Language pair picker — EN⇄ES plus one "Other" button (Tom, 8/15).
-            When a guest pair is active, the Other button wears its label so
-            the current pair is always visible. The expanded list keeps
-            most-recently-used order. */}
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => selectPair(HOME_PAIR)}
-              className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                pairKey(pair) === pairKey(HOME_PAIR)
-                  ? "border-amber-300 bg-amber-400 text-stone-950"
-                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-              }`}
-            >
-              {HOME_PAIR[0].toUpperCase()} ⇄ {HOME_PAIR[1].toUpperCase()}
-            </button>
-            <button
-              type="button"
-              onClick={() => setOtherOpen((o) => !o)}
-              className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                pairKey(pair) !== pairKey(HOME_PAIR)
-                  ? "border-amber-300 bg-amber-400 text-stone-950"
-                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-              }`}
-            >
-              {pairKey(pair) !== pairKey(HOME_PAIR)
-                ? `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`
-                : "Other · Otros"}{" "}
-              {otherOpen ? "▴" : "▾"}
-            </button>
-          </div>
-          {otherOpen ? (
-            <div className="flex flex-wrap gap-2">
-              {orderedPairs
-                .filter((p) => pairKey(p) !== pairKey(HOME_PAIR))
-                .map((p) => {
-                  const active = pairKey(p) === pairKey(pair);
-                  return (
-                    <button
-                      key={pairKey(p)}
-                      type="button"
-                      onClick={() => selectPair(p)}
-                      className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95 ${
-                        active
-                          ? "border-amber-300 bg-amber-400 text-stone-950"
-                          : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-                      }`}
-                    >
-                      {p[0].toUpperCase()} ⇄ {p[1].toUpperCase()}
-                    </button>
-                  );
-                })}
-            </div>
-          ) : null}
-        </div>
+        {/* Language pills — the OUTPUT language is the solid one; your own
+            side wears an outline. Tap another language to translate into it,
+            or tap your own side to flip the direction. The row holds the pair
+            plus recents (max five, lib/translate/pinned.ts); "+" opens the
+            search sheet for every other language TAOS knows. The row keeps its
+            width no matter how big the catalog gets — which was Tom's
+            constraint on 8/15 and is the only reason the catalog could grow.
+            Drawn by components/LanguagePicker.tsx, the same row /live,
+            /tabletop and /chat put on screen. */}
+        <LanguagePillRow
+          pills={pills}
+          selected={output}
+          paired={mine}
+          caption="Translate into · Traducir a"
+          sheetOpen={sheetOpen}
+          onSelect={selectLanguage}
+          onOpenSheet={() => setSheetOpen(true)}
+        />
 
         {/* Who is speaking — manual swap card, or an Auto-detect indicator */}
         {autoDetect ? (
@@ -1030,12 +1126,9 @@ export function TranslatorShell({
                 Auto-detect · Detección automática
               </div>
               <div className="text-2xl font-semibold text-white">
-                {/* Names are the household's UX; beta testers see just the
-                    language (they are not Tom or Liz). */}
+                {/* The language, never a name — see speakerFor above. */}
                 {status === "done"
-                  ? subscriber
-                    ? `${speaker.who} · ${speaker.label}`
-                    : speaker.label
+                  ? speaker.label
                   : `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`}
               </div>
             </div>
@@ -1051,9 +1144,7 @@ export function TranslatorShell({
               <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
                 {s.speakingNow}
               </div>
-              <div className="text-2xl font-semibold text-white">
-                {subscriber ? `${speaker.who} · ${speaker.label}` : speaker.label}
-              </div>
+              <div className="text-2xl font-semibold text-white">{speaker.label}</div>
             </div>
             <div className="flex flex-col items-center gap-1 text-amber-300">
               <span className="text-2xl">⇄</span>
@@ -1067,10 +1158,9 @@ export function TranslatorShell({
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
             <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
               <span>
-                {/* Neutral for the beta: "Translation · English", not "For Tom"
-                    — testers aren't Tom or Liz (7/27). Written in the
-                    LISTENER's language like before. */}
-                {STRINGS[target].translationLabel} · {listener.label}
+                {/* Neutral: "Translation · English", never "For <name>".
+                    Written in the LISTENER's language like before. */}
+                {copyFor(target).translationLabel} · {listener.label}
               </span>
               {translation ? (
                 <div className="flex items-center gap-2">
@@ -1087,20 +1177,26 @@ export function TranslatorShell({
                       <span className="text-[11px]">Flip · Voltear</span>
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      blessAudio();
-                      void speak(translation);
-                    }}
-                    className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
-                      isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
-                    }`}
-                    aria-label="Play translation / Reproducir traducción"
-                  >
-                    <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
-                    <span className="text-[11px]">Play · Oír</span>
-                  </button>
+                  {textOnlyTarget ? (
+                    // No Play button rather than a dead one: a control that
+                    // does nothing when tapped is worse than no control.
+                    <TextOnlyNote />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        blessAudio();
+                        void speak(translation);
+                      }}
+                      className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
+                        isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
+                      }`}
+                      aria-label="Play translation / Reproducir traducción"
+                    >
+                      <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
+                      <span className="text-[11px]">Play · Oír</span>
+                    </button>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -1149,7 +1245,7 @@ export function TranslatorShell({
               : processing
                 ? s.working
                 : autoDetect
-                  ? `${STRINGS[pair[0]].speak} · ${STRINGS[pair[1]].speak}`
+                  ? speakPrompt(pair)
                   : `${s.speak} ${speaker.label}`}
           </button>
 
@@ -1214,6 +1310,19 @@ export function TranslatorShell({
       </div>
 
       <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <LanguageSheet
+        open={sheetOpen}
+        selected={output}
+        paired={mine}
+        onSelect={selectLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
+
+      <QrShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
+      <PersonalVoiceModal
+        open={personalVoiceOpen}
+        onClose={() => setPersonalVoiceOpen(false)}
+      />
     </main>
   );
 }

@@ -59,6 +59,22 @@ describe("cloned voice rule: the voice follows the SPEAKER (Tom, 7/24)", () => {
       expect(elevenLabsVoiceId("zh", "es")).toBe(DEFAULT_ELEVENLABS_VOICE);
     });
 
+    it("the trip languages follow the same rule (8/17: Bosnian, Italian)", () => {
+      delete process.env.ELEVENLABS_VOICE_ID;
+      // Tom orders dinner in Italy: his English plays to the waiter in HIS
+      // voice speaking Italian (the multilingual model renders the clone).
+      expect(elevenLabsVoiceId("en", "it")).toBe(ELEVENLABS_TOM_VOICE);
+      expect(elevenLabsVoiceId("en", "bs")).toBe(ELEVENLABS_TOM_VOICE);
+      // Liz's Spanish does the same through her clone.
+      expect(elevenLabsVoiceId("es", "it")).toBe(ELEVENLABS_LIZ_VOICE);
+      expect(elevenLabsVoiceId("es", "bs")).toBe(ELEVENLABS_LIZ_VOICE);
+      // The waiter has no clone — their reply reads in the stock multilingual
+      // voice. Do NOT add per-language voice IDs here: the rule is that the
+      // voice follows the SPEAKER, not the output language (see the header).
+      expect(elevenLabsVoiceId("it", "en")).toBe(DEFAULT_ELEVENLABS_VOICE);
+      expect(elevenLabsVoiceId("bs", "es")).toBe(DEFAULT_ELEVENLABS_VOICE);
+    });
+
     it("Cantonese behaves the same: Tom's English -> yue in his clone; a yue guest gets default", () => {
       delete process.env.ELEVENLABS_VOICE_ID;
       expect(elevenLabsVoiceId("en", "yue")).toBe(ELEVENLABS_TOM_VOICE);

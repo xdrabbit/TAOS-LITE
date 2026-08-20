@@ -58,26 +58,63 @@ curl -s http://localhost:3017/api/live-translate \
 A **proper** translation for typed exchanges (when it is too loud for voice).
 Natural, conversational register — not stiff or textbook-literal.
 
+Takes a language **pair**, out of `lib/languages/catalog.ts`, like every other
+language surface in the app. It spoke `"en-es" | "es-en"` until 8/19 and that
+string is still accepted (see *Legacy* below), but it is no longer how the app
+calls it.
+
 ### Request body
 
-| Field       | Type                            | Required | Default  | Notes                                            |
-| ----------- | ------------------------------- | -------- | -------- | ------------------------------------------------ |
-| `text`      | `string`                        | yes      | —        | Text to translate. Empty/whitespace → `400`.     |
-| `direction` | `"es-en" \| "en-es" \| "auto"`  | no       | `"auto"` | `"auto"` detects the source and flips to the other. |
+| Field            | Type                           | Required | Default  | Notes                                                        |
+| ---------------- | ------------------------------ | -------- | -------- | ------------------------------------------------------------ |
+| `text`           | `string`                       | yes      | —        | Text to translate. Empty/whitespace → `400`.                 |
+| `sourceLanguage` | catalog code                   | no       | —        | The language the text is written in.                          |
+| `targetLanguage` | catalog code                   | no       | —        | The language to translate into.                               |
+| `direction`      | `"es-en" \| "en-es" \| "auto"` | no       | `"auto"` | Legacy. `"auto"` detects the source and flips to the other.   |
+
+Send `sourceLanguage` **and** `targetLanguage` together — one alone is not a
+pair and falls back as if neither was sent. They must be two *different*
+languages; a repeated one is a `400`.
+
+`"auto"` combines with an explicit pair: send both codes plus
+`direction: "auto"` when you know the two languages but not which of them
+typed. Detection then chooses between those two, not between English and
+Spanish.
 
 ### Response `200`
 
 ```json
-{ "translation": "Hi, how are you? I miss you a lot.", "detectedSource": "es", "direction": "es-en" }
+{
+  "translation": "Zdravo, kako si? Puno mi nedostaješ.",
+  "detectedSource": "en",
+  "sourceLanguage": "en",
+  "targetLanguage": "bs",
+  "direction": "en-bs"
+}
 ```
 
 - `translation` — the natural-register translation.
-- `detectedSource` — `"es"` or `"en"`. In `auto` mode this is what the model detected; otherwise it is implied by `direction`.
-- `direction` — the resolved concrete direction (`auto` is reported as `es-en` or `en-es`).
+- `sourceLanguage` / `targetLanguage` — the resolved pair, as catalog codes.
+- `detectedSource` — same as `sourceLanguage`. In `auto` mode it is what the
+  model detected; otherwise it is what was asked for. Kept for old clients.
+- `direction` — the resolved pair as `"<source>-<target>"`. Now any pair of
+  codes, not one of two strings.
+
+### Tiers
+
+Every catalog language is translatable as **text**, including tier-2 languages
+that have no voice (`tts: false`). Nothing on this route consults the tier —
+speech is decided at synthesis time by `requestSpeech` (`lib/tts/speech.ts`).
+
+### Legacy
+
+`direction: "es-en" | "en-es"` still resolves to that pair. Explicit language
+codes win when both are sent. A body of `{ text }` alone still auto-detects
+between English and Spanish, exactly as before.
 
 ### Errors
 
-- `400` — empty `text` or non-JSON body.
+- `400` — empty `text`, non-JSON body, or `sourceLanguage` equal to `targetLanguage`.
 - `500` — `OPENAI_API_KEY` not configured.
 - `502` — provider error (`{ "error": string, "details": string }`).
 
@@ -86,5 +123,6 @@ Natural, conversational register — not stiff or textbook-literal.
 ```bash
 curl -s http://localhost:3017/api/text-translate \
   -H 'Content-Type: application/json' \
-  -d '{ "text": "Hola, ¿cómo estás? Te extraño mucho.", "direction": "auto" }'
+  -d '{ "text": "I miss you a lot.", "sourceLanguage": "en", "targetLanguage": "bs" }'
+```
 ```

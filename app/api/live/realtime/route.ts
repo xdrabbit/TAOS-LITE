@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildInterpreterInstructions } from "@/lib/live/instructions";
+import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -17,30 +19,6 @@ const CLIENT_SECRETS_URL =
 const CALLS_URL =
   process.env.OPENAI_REALTIME_CALLS_URL ?? "https://api.openai.com/v1/realtime/calls";
 
-type TargetLang = "en" | "es";
-
-function buildInterpreterInstructions(target: TargetLang): string {
-  const targetName = target === "en" ? "English" : "Spanish";
-  const otherName = target === "en" ? "Spanish" : "English";
-  // gpt-realtime-mini drifts into the source language when the output-language
-  // rule is buried mid-prompt — so it comes first, in caps, and is repeated at
-  // the end.
-  return [
-    `OUTPUT LANGUAGE: ${targetName}. Every word you speak and write must be ${targetName}, with no exceptions besides proper names. You hear ${otherName} (or mixed speech) but you NEVER output ${otherName}.`,
-    `You are a silent simultaneous interpreter speaking into the earpiece of someone who cannot follow the conversation happening around them (a dinner table, a phone call, a TV show, a movie).`,
-    `You hear ambient speech — possibly several speakers, possibly fragmentary, in any language.`,
-    `Each time you respond, produce ONE ultra-short ${targetName} micro-summary of what was said since your previous response: the core concept only, 3 to 14 words.`,
-    `If several utterances happened since your last response, still produce ONE combined summary weighted toward the newest content — never a list, never a recap of everything.`,
-    `When the meaning is clear, use a tight natural mini-sentence. When speech is fragmentary, output only the minimal key words that convey it.`,
-    `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer or ask questions, never add opinions or commentary, never mention being an AI or an interpreter.`,
-    `If the speech is already in ${targetName}, still compress it into a shorter ${targetName} summary.`,
-    `If you have fallen behind, do NOT try to catch up — old content is worthless. Summarize only the most recent 10-15 seconds and skip the rest.`,
-    `NEVER invent content. Summarize ONLY what was actually said. If you heard only noise, music, silence, or unintelligible sound, output nothing at all — no filler, no guesses, no pleasantries. An empty response is always better than an invented one.`,
-    `Delivery: fast, flat, neutral — like a UN interpreter, not a narrator.`,
-    `REMINDER: your output language is ${targetName} and ONLY ${targetName}.`
-  ].join(" ");
-}
-
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -50,8 +28,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const body = (await req.json().catch(() => ({}))) as { target?: string };
-  const target: TargetLang = body.target === "es" ? "es" : "en";
+  // Unknown codes fall back to the pair this app started life on rather than
+  // reaching the prompt raw: an interpreter told its output language is "xx"
+  // answers in whatever it likes, which is worse than answering in English.
+  const body = (await req.json().catch(() => ({}))) as { target?: string; source?: string };
+  const target =
+    typeof body.target === "string" && isSupportedLanguageCode(body.target) ? body.target : "en";
+  const rawSource =
+    typeof body.source === "string" && isSupportedLanguageCode(body.source) ? body.source : "es";
+  // A pair of one repeated language would ask the model to interpret a
+  // language into itself; keep the two sides distinct the way the pair rule
+  // does (lib/translate/pair.ts).
+  const source = rawSource === target ? (target === "en" ? "es" : "en") : rawSource;
 
   // Full gpt-realtime: the mini tier drifted off-topic and hallucinated into
   // silence at the 7/8 field test. Costs roughly 3x mini (~$1-2/hr of dense
@@ -63,7 +51,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const instructions = buildInterpreterInstructions(target);
+  const instructions = buildInterpreterInstructions(target, source);
 
   const session: Record<string, unknown> = {
     type: "realtime",
@@ -136,7 +124,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       callUrl: `${CALLS_URL}?model=${encodeURIComponent(model)}`,
       model,
       voice,
-      target
+      target,
+      source
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error.";

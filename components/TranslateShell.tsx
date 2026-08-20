@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { predict } from "@/lib/predict/engine";
 import type { PredictModel } from "@/lib/predict/model.mjs";
+import { languageNative } from "@/lib/languages/catalog";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { pairDirection, type PairSide } from "@/lib/translate/pair";
 
 // ── /translate: manual typing surface with personalized predictive autocomplete
 // A companion to /live's voice follow-along. You TYPE; a prediction model trained
@@ -12,13 +16,22 @@ import type { PredictModel } from "@/lib/predict/model.mjs";
 // the text to the existing POST /api/text-translate for the actual translation.
 // Every keystroke prediction runs in-memory on a model loaded once per direction —
 // no network call per keystroke.
-
-type Direction = "en-es" | "es-en";
-
-const DIRECTIONS: Record<Direction, { label: string; placeholder: string }> = {
-  "en-es": { label: "You (EN → ES)", placeholder: "Type in English…" },
-  "es-en": { label: "Liz (ES → EN)", placeholder: "Escribe en español…" }
-};
+//
+// ── It follows the pills now (8/19) ─────────────────────────────────────────
+// This screen kept a private `Direction = "en-es" | "es-en"` with a table of
+// labels and placeholders hanging off it, and it was the LAST one to: /live,
+// /tabletop and /chat were wired to the catalog on 8/18 and this one was
+// missed, so a phone set to Bosnian on the home screen still typed into
+// Spanish here. Nothing about typing was ever EN⇄ES — only this table was.
+//
+// The pair comes from the shared state now (lib/translate/useLanguagePair.ts),
+// which is the same pair /translate's home screen, /live and /tabletop read,
+// off the same key on disk. The toggle below keeps its own job: the PAIR says
+// which two languages, the toggle says which of the two is doing the typing
+// (lib/translate/pair.ts, pairDirection).
+//
+// The suggestions are the one thing that genuinely stays EN⇄ES — see the note
+// on the model fetch below.
 
 function formatBuilt(iso: string | null): string {
   if (!iso) return "not built yet";
@@ -31,10 +44,12 @@ function formatBuilt(iso: string | null): string {
 }
 
 export function TranslateShell(): JSX.Element {
-  const [direction, setDirection] = useState<Direction>("en-es");
   const [input, setInput] = useState("");
   const [model, setModel] = useState<PredictModel | null>(null);
   const [builtAt, setBuiltAt] = useState<string | null>(null);
+  // false = no model was ever BUILT for this pair, so there is nothing to
+  // suggest and the screen says so instead of going mysteriously quiet.
+  const [trained, setTrained] = useState(true);
 
   const [translation, setTranslation] = useState("");
   const [translating, setTranslating] = useState(false);
@@ -45,17 +60,46 @@ export function TranslateShell(): JSX.Element {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Which of the two is typing. The PAIR is not this screen's to invent — it
+  // is the phone's answer to "what languages am I working between right now?"
+  // and it arrives from the shared hook. This only says which side of it is at
+  // the keyboard, which is the one thing the old toggle was really for.
+  const [speaking, setSpeaking] = useState<PairSide>("mine");
+
+  // A pair change tears the current turn down: the translation on screen is in
+  // a language that is no longer selected. The hook does not fire this for a
+  // tap that changed nothing, so re-tapping the selected language leaves a
+  // translation someone is still reading alone.
+  const { pair, mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair({
+    onPairChange: () => {
+      setTranslation("");
+      setError(null);
+    }
+  });
+
+  const { sourceLanguage, targetLanguage } = pairDirection(pair, speaking);
+  const direction = `${sourceLanguage}-${targetLanguage}`;
+
   // Load the direction's model once (and on direction switch). All keystroke
   // prediction then runs in-memory against this — never per keystroke.
+  //
+  // The key is still a direction string, and deliberately: the model is not a
+  // language feature, it is Tom & Liz's own history n-grammed, and their
+  // history is in English and Spanish. Every other pair asks for a direction
+  // that was never built, and /api/predict/model answers `model: null` for it
+  // rather than handing back the English one (which is what it used to do).
+  // predict(null, …) is already a no-op, so typing stays exactly as fast and
+  // only the ghost text goes quiet.
   useEffect(() => {
     let cancelled = false;
     setModel(null);
     fetch(`/api/predict/model?direction=${direction}`)
       .then((r) => r.json())
-      .then((data: { model?: PredictModel; builtAt?: string | null }) => {
+      .then((data: { model?: PredictModel | null; builtAt?: string | null; trained?: boolean }) => {
         if (cancelled) return;
         setModel(data.model ?? null);
         setBuiltAt(data.builtAt ?? null);
+        setTrained(data.trained !== false);
       })
       .catch(() => {
         // Prediction silently no-ops if the model can't load; typing still works.
@@ -89,7 +133,7 @@ export function TranslateShell(): JSX.Element {
       const res = await fetch("/api/text-translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, direction })
+        body: JSON.stringify({ text, sourceLanguage, targetLanguage })
       });
       const payload = (await res.json().catch(() => ({}))) as {
         translation?: string;
@@ -103,7 +147,7 @@ export function TranslateShell(): JSX.Element {
     } finally {
       setTranslating(false);
     }
-  }, [input, direction, translating]);
+  }, [input, sourceLanguage, targetLanguage, translating]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -144,9 +188,14 @@ export function TranslateShell(): JSX.Element {
       if (!res.ok) throw new Error(payload.error || "Rebuild failed.");
       // Reload the freshly-built model for the current direction.
       const mres = await fetch(`/api/predict/model?direction=${direction}`);
-      const mdata = (await mres.json()) as { model?: PredictModel; builtAt?: string | null };
+      const mdata = (await mres.json()) as {
+        model?: PredictModel | null;
+        builtAt?: string | null;
+        trained?: boolean;
+      };
       setModel(mdata.model ?? null);
       setBuiltAt(mdata.builtAt ?? payload.builtAt ?? null);
+      setTrained(mdata.trained !== false);
       setRebuildNote("Suggestions rebuilt.");
     } catch (e) {
       setRebuildNote(e instanceof Error ? e.message : "Rebuild failed.");
@@ -177,25 +226,54 @@ export function TranslateShell(): JSX.Element {
           </p>
         </div>
 
-        {/* Direction toggle — mirrors /live */}
+        {/* The pills — drawn by components/LanguagePicker.tsx, the same row
+            /translate's home screen, /live, /tabletop and /chat put on screen,
+            over the same pair on disk. The solid pill is THEIRS; tapping your
+            own outlined pill flips the pair. A text-only language marks itself
+            with a muted speaker here, which is all this screen needs to say
+            about tier 2: there is no audio control on it to disappoint. */}
+        <LanguagePillRow
+          pills={pills}
+          selected={theirs}
+          paired={mine}
+          caption="Translate into · Traducir a"
+          sheetOpen={sheetOpen}
+          onSelect={selectLanguage}
+          onOpenSheet={() => setSheetOpen(true)}
+        />
+
+        {/* Who is TYPING — the pair says which two languages, this says which
+            of them is at the keyboard (lib/translate/pair.ts, pairDirection). */}
         <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-          {(Object.keys(DIRECTIONS) as Direction[]).map((dir) => (
+          {(
+            [
+              ["mine", `You (${mine.toUpperCase()} → ${theirs.toUpperCase()})`],
+              ["theirs", `Them · Ellos (${theirs.toUpperCase()} → ${mine.toUpperCase()})`]
+            ] as [PairSide, string][]
+          ).map(([side, label]) => (
             <button
-              key={dir}
+              key={side}
               type="button"
               onClick={() => {
-                setDirection(dir);
+                if (side === speaking) return;
+                setSpeaking(side);
                 setTranslation("");
                 setError(null);
               }}
               className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                direction === dir ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+                speaking === side ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
               }`}
             >
-              {DIRECTIONS[dir].label}
+              {label}
             </button>
           ))}
         </div>
+
+        {/* Spell the direction out in both languages' own names, so nobody has
+            to infer it from which pill is filled in. */}
+        <p className="-mt-2 text-xs text-amber-100/50">
+          {languageNative(sourceLanguage)} → {languageNative(targetLanguage)}
+        </p>
 
         {/* Typing surface with inline ghost text */}
         <section className="flex flex-col gap-2">
@@ -215,7 +293,10 @@ export function TranslateShell(): JSX.Element {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={DIRECTIONS[direction].placeholder}
+              // "Type in English…" verbatim for EN; the language's OWN name
+              // for the other ninety-nine, because localising the verb a
+              // hundred times is the table this screen just got rid of.
+              placeholder={`Type in ${languageNative(sourceLanguage)}…`}
               autoCapitalize="sentences"
               autoCorrect="on"
               spellCheck
@@ -240,7 +321,11 @@ export function TranslateShell(): JSX.Element {
 
           {/* Model status + manual rebuild */}
           <div className="flex items-center justify-between gap-2 text-[11px] text-amber-100/40">
-            <span>model last built: {formatBuilt(builtAt)}</span>
+            <span>
+              {trained
+                ? `model last built: ${formatBuilt(builtAt)}`
+                : "no suggestions for this pair — typing works as usual"}
+            </span>
             <button
               type="button"
               onClick={rebuild}
@@ -289,6 +374,14 @@ export function TranslateShell(): JSX.Element {
           )}
         </section>
       </div>
+
+      <LanguageSheet
+        open={sheetOpen}
+        selected={theirs}
+        paired={mine}
+        onSelect={selectLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
     </main>
   );
 }

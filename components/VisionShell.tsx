@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { LANGUAGE_OPTIONS } from "@/lib/realtime/languages";
+import { readStoredPair } from "@/lib/translate/pair";
+import { PHOTO_TARGET_AUTO, photoTargetLanguage } from "@/lib/vision/target";
 import { supabase } from "@/lib/supabase";
 import { SignIn } from "./SignIn";
 
@@ -12,6 +14,14 @@ import { SignIn } from "./SignIn";
 // before upload (a raw phone photo would blow through the serverless
 // request-body limit), /api/vision reads it with a vision model, and the
 // original + translation come back as text. Nothing is stored.
+//
+// Languages: nothing to pick. The SOURCE is whatever the photo turns out to
+// be — the model reads it off the image, which is the only thing that works
+// when the menu in front of you could be Bosnian, Croatian, or Serbian. The
+// TARGET is the language you already chose on /translate's pills (see
+// lib/vision/target.ts). The "Read it in" control below starts on that answer
+// and is a per-photo override; it deliberately does NOT write the pair back,
+// so reading one Italian label can't change who Liz is talking to.
 
 type Phase = "idle" | "translating" | "done";
 
@@ -67,7 +77,7 @@ export function VisionShell(): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [image, setImage] = useState<string | null>(null);
-  const [target, setTarget] = useState<string>("auto");
+  const [target, setTarget] = useState<string>(PHOTO_TARGET_AUTO);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<VisionResponse | null>(null);
@@ -93,6 +103,12 @@ export function VisionShell(): JSX.Element {
       active = false;
       sub.subscription.unsubscribe();
     };
+  }, []);
+
+  // Start on the language the pills last saved on this phone. Runs once, and
+  // only sets the initial value — a per-photo override picked below stays put.
+  useEffect(() => {
+    setTarget(photoTargetLanguage(readStoredPair()));
   }, []);
 
   const pickImage = useCallback(async (file: File | null) => {
@@ -210,7 +226,8 @@ export function VisionShell(): JSX.Element {
           </div>
           <p className="mt-1 text-sm text-amber-50/70">
             Point the camera at a sign, menu, or label — or pick a photo — and read it in your
-            language. English becomes Spanish, Spanish becomes English, or choose below.
+            language. Whatever it&rsquo;s written in, it comes back in the language you picked on
+            the translate screen — change it for one photo below.
           </p>
         </div>
 
@@ -278,7 +295,7 @@ export function VisionShell(): JSX.Element {
                   disabled={busy}
                   className="min-w-0 rounded-xl border border-white/10 bg-stone-900 px-3 py-1.5 text-sm text-amber-100"
                 >
-                  <option value="auto">Auto · EN ↔ ES</option>
+                  <option value={PHOTO_TARGET_AUTO}>Auto · EN ↔ ES</option>
                   {LANGUAGE_OPTIONS.map((lang) => (
                     <option key={lang.code} value={lang.code}>
                       {lang.label}

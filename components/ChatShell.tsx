@@ -3,21 +3,58 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
+import { ChatInviteRow, ChatInviteSheet, ChatStartCard } from "./ChatInvite";
+import { ChatThreadList } from "./ChatThreadList";
+import { TextOnlyNote } from "./TextOnly";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { type LanguageCode } from "@/lib/languages/catalog";
 import {
-  getChatThread,
+  CHAT_PARTNER_LABEL,
+  CHAT_READ_CAPTION,
+  CHAT_READ_HINT,
+  CHAT_THEY_SEE_PREFIX,
+  hasSeenReadLangHint,
+  outgoingLine,
+  partnerChip,
+  readConfirmation,
+  rememberReadLangHint,
+  theyReadLine
+} from "@/lib/chatLabels";
+import { isPairLangCode, type PairLangCode } from "@/lib/translate/pair";
+import {
+  readStoredRecent,
+  rememberLanguage,
+  visiblePills,
+  writeStoredRecent
+} from "@/lib/translate/pinned";
+import {
+  createChatInvite,
   getVoiceUrl,
+  listChatThreads,
   listMessages,
   markThreadRead,
   sendMessage,
   sendVoiceMessage,
+  setMyChatLanguage,
   subscribeMessages,
-  type ChatMessageRow,
-  type ChatThreadInfo
+  type ChatInvite,
+  type ChatMessageRow
 } from "@/lib/chat";
+import {
+  CHAT_LIST_BACK,
+  initialThreadId,
+  type ChatThreadSummary
+} from "@/lib/chatThreads";
 
 // ── /chat: private translated messages ──────────────────────────────────────
-// Tier 1+ of the private message app: one thread between Tom and Liz. Text
+// Tier 1+ of the private message app: as many 1:1 threads as an account wants,
+// two people in each. It held ONE until 8/19, and said so when a second invite
+// was opened — "You're already in a chat, and TAOS holds one at a time" — which
+// Tom read on his own app during the two-phone walkthrough. The switcher that
+// refusal was apologising for is components/ChatThreadList.tsx; this file is
+// what a row opens into, and everything below the header is per-THREAD. Text
 // messages are stored as typed AND auto-translated into the partner's
 // language. Voice messages (🎤) upload the audio, transcribe it, translate the
 // transcript, and can be replayed either as the real recording or as the
@@ -71,11 +108,33 @@ function pickRecordingMime(): string {
   return "";
 }
 
-export function ChatShell(): JSX.Element {
+/**
+ * `openThreadId` is the ?t= on the URL — where /chat/join sends somebody it
+ * has just let into a thread, and the only way an incoming link can name which
+ * of several chats it means. Ignored when it is not one of mine.
+ */
+export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
-  const [thread, setThread] = useState<ChatThreadInfo | null>(null);
-  const [threadMissing, setThreadMissing] = useState(false);
+  // Every chat this account is in, and which one is on screen. `null` threads
+  // means "not loaded yet", which is a different state from "no chats" — the
+  // second one gets ChatStartCard and the first one gets nothing.
+  const [threads, setThreads] = useState<ChatThreadSummary[] | null>(null);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(openThreadId ?? null);
+  // Asking for the list OUT LOUD, which is not the same as having no thread
+  // open: an account with exactly one chat auto-opens it, so without this flag
+  // its "Chats" link would bounce straight back into the thread it just left.
+  const [listOpen, setListOpen] = useState(false);
+  // ── Getting a second person in ──────────────────────────────────────────
+  // The thread used to be a fact of the database: seeded by hand for two
+  // accounts, unreachable for everyone else. `reloadKey` is what makes it a
+  // thing this screen can CREATE — starting a chat writes a thread and a
+  // membership, and the loader below has to go and find them.
+  const [invite, setInvite] = useState<ChatInvite | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [messages, setMessages] = useState<ChatMessageRow[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -84,6 +143,47 @@ export function ChatShell(): JSX.Element {
   const [recording, setRecording] = useState(false);
   const [recordSec, setRecordSec] = useState(0);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
+
+  // ── The language picker ───────────────────────────────────────────────────
+  // Same row and same sheet as the other three screens
+  // (components/LanguagePicker.tsx), wired to a different kind of state.
+  //
+  // /chat's languages are NOT the phone's pair. They live one per member on
+  // the thread (taos_lite_chat_members.lang), because they are what the send
+  // and voice routes translate between and the person they matter most to is
+  // on the other phone. So a tap here writes to the database, not to
+  // localStorage, and it can only ever move MY side: the partner's language
+  // is theirs to pick, on their device.
+  //
+  // What IS shared is the ROW — the recency list from lib/translate/pinned.ts.
+  // Reaching for Italian on /translate should leave Italian a tap away here,
+  // even though the two screens keep their languages in different places.
+  const [recent, setRecent] = useState<readonly PairLangCode[]>([]);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [savingLang, setSavingLang] = useState(false);
+  // The first-tap note (lib/chatLabels.ts). Shown ONCE per phone, on the first
+  // language tap in a chat, because that tap is the moment the misreading
+  // happens: Tom picked Polish and his message went out Spanish, which is
+  // right and looks broken. Read from localStorage rather than state so a
+  // reload doesn't hand it back.
+  const [showLangHint, setShowLangHint] = useState(false);
+  const langHintSeenRef = useRef(true);
+  // The confirmation (lib/chatLabels.ts): the language of the LAST tap, held
+  // so the thread can show a system line in it. Set before the network call,
+  // not after — the whole job of this line is to land while the thumb is
+  // still on the pill — and cleared again if the save turns out to have
+  // failed, because a confirmation of something that did not happen is worse
+  // than the silence it replaced.
+  const [confirmedLang, setConfirmedLang] = useState<LanguageCode | null>(null);
+  useEffect(() => {
+    setRecent(readStoredRecent());
+    langHintSeenRef.current = hasSeenReadLangHint();
+  }, []);
+
+  // The chat on screen, derived rather than stored: one source of truth for a
+  // thread's languages, so a pill tap that updates the list updates the header
+  // in the same render and the two can never disagree.
+  const thread = threads?.find((t) => t.threadId === activeId) ?? null;
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const nextTempIdRef = useRef(1);
@@ -115,37 +215,67 @@ export function ChatShell(): JSX.Element {
     };
   }, []);
 
-  // Load the thread + history, subscribe to live inserts.
+  // ── Which chats ───────────────────────────────────────────────────────────
+  // The list, and the decision about what to draw. Reloaded when a chat is
+  // started or joined (reloadKey) and whenever the list is asked for, so a
+  // preview is never older than the last time somebody looked at it.
   useEffect(() => {
     if (!session) {
-      setThread(null);
+      setThreads(null);
+      setMyUserId(null);
+      setMessages([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const list = await listChatThreads();
+        if (!active) return;
+        setMyUserId(list.myUserId);
+        setThreads(list.threads);
+        // One chat opens straight into itself, exactly as this screen behaved
+        // before there was a list; more than one shows the list. A ?t= on the
+        // URL beats both, and is ignored if it is not one of mine.
+        setActiveId((current) => initialThreadId(list.threads, current));
+      } catch (e: unknown) {
+        if (!active) return;
+        setThreads([]);
+        setError(e instanceof Error ? e.message : "Could not open your chats.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [session, reloadKey]);
+
+  // ── The open thread ───────────────────────────────────────────────────────
+  // History and the live INSERT stream, per thread. Keyed on activeId, so
+  // switching chats tears the old subscription down and takes its messages
+  // with it — a bubble from thread A appearing in thread B would be the worst
+  // bug this screen could have.
+  useEffect(() => {
+    if (!session || !activeId || !myUserId) {
       setMessages([]);
       return;
     }
     let active = true;
     let unsubscribe: (() => void) | null = null;
+    setMessages([]);
+    setPending([]);
 
     void (async () => {
-      const t = await getChatThread();
-      if (!active) return;
-      if (!t) {
-        setThreadMissing(true);
-        return;
-      }
-      setThread(t);
-      setThreadMissing(false);
       try {
-        const rows = await listMessages(t.threadId);
+        const rows = await listMessages(activeId);
         if (!active) return;
         setMessages(rows);
       } catch {
         if (active) setError("Could not load messages.");
       }
-      void markThreadRead(t.threadId);
+      void markThreadRead(activeId);
 
-      unsubscribe = subscribeMessages(t.threadId, (row) => {
+      unsubscribe = subscribeMessages(activeId, (row) => {
         setMessages((prev) => (prev.some((m) => m.id === row.id) ? prev : [...prev, row]));
-        if (row.sender_id !== t.myUserId) void markThreadRead(t.threadId);
+        if (row.sender_id !== myUserId) void markThreadRead(activeId);
       });
     })();
 
@@ -153,13 +283,37 @@ export function ChatShell(): JSX.Element {
       active = false;
       unsubscribe?.();
     };
-  }, [session]);
+  }, [session, activeId, myUserId]);
 
-  // Keep the newest message in view.
+  // The confirmation line is the answer to a tap in ONE thread. Carrying it
+  // across a switch would put "you now read in Hindi" at the foot of a chat
+  // whose language was never touched.
+  useEffect(() => {
+    setConfirmedLang(null);
+    setError(null);
+  }, [activeId]);
+
+  // Keep the URL pointing at the chat on screen, so a reload (or the phone
+  // waking the PWA up) comes back to the same conversation. replaceState
+  // rather than the router: this is a bookmark, not a navigation, and a
+  // re-render here would tear down the message subscription.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (activeId && !listOpen) url.searchParams.set("t", activeId);
+    else url.searchParams.delete("t");
+    if (url.toString() !== window.location.href) {
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [activeId, listOpen]);
+
+  // Keep the newest message in view — and the confirmation line too, which is
+  // drawn at the foot of the same list and would otherwise land below the fold
+  // in a thread long enough to scroll.
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, pending]);
+  }, [messages, pending, confirmedLang]);
 
   // ── Audio playback (voice notes + cloned-voice TTS) ───────────────────────
 
@@ -170,7 +324,9 @@ export function ChatShell(): JSX.Element {
   }, []);
 
   const playUrl = useCallback(
-    async (key: string, getUrl: () => Promise<string>) => {
+    // getUrl may answer null — "there is no audio here and that is fine",
+    // which is what a text-only translation looks like from down here.
+    async (key: string, getUrl: () => Promise<string | null>) => {
       if (playingKey === key) {
         stopPlayback();
         return;
@@ -179,6 +335,10 @@ export function ChatShell(): JSX.Element {
       setPlayingKey(key);
       try {
         const url = await getUrl();
+        if (!url) {
+          setPlayingKey(null);
+          return;
+        }
         const el = new Audio(url);
         playerRef.current = el;
         el.onended = () => {
@@ -214,17 +374,18 @@ export function ChatShell(): JSX.Element {
       playUrl(`${m.id}:clone`, async () => {
         const cached = ttsUrlCacheRef.current.get(m.id);
         if (cached) return cached;
-        const res = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: m.body_translated,
-            sourceLanguage: m.source_lang,
-            targetLanguage: m.target_lang
-          })
+        // A thread's languages come out of the database, so either end of it
+        // can be tier 2 (lib/languages/catalog.ts) — the message still
+        // translated, it just has no voice. requestSpeech answers null for
+        // that, before the call and again if the server says so, and the
+        // bubble simply keeps its text.
+        const blob = await requestSpeech({
+          text: m.body_translated ?? "",
+          sourceLanguage: m.source_lang,
+          targetLanguage: m.target_lang
         });
-        if (!res.ok) throw new Error("tts failed");
-        const url = URL.createObjectURL(await res.blob());
+        if (!blob) return null;
+        const url = URL.createObjectURL(blob);
         ttsUrlCacheRef.current.set(m.id, url);
         return url;
       }),
@@ -363,6 +524,127 @@ export function ChatShell(): JSX.Element {
 
   useEffect(() => cleanupRecording, [cleanupRecording]);
 
+  // Start a chat, or invite the second person into one I am already in. One
+  // call for both (app/api/chat/invite): from the user's side they are the
+  // same act, and a thread with nobody in it is not a state worth showing.
+  //
+  // `threadId` is what tells them apart now. Passing one means "invite into
+  // THIS chat"; leaving it out always makes a new one, which is what Start on
+  // the list has to do — it was the absence of that distinction that let an
+  // account hold exactly one chat.
+  const startOrInvite = useCallback(
+    (threadId?: string) => {
+      if (inviteBusy) return;
+      setInviteBusy(true);
+      setError(null);
+      createChatInvite(threadId)
+        .then((made) => {
+          setInvite(made);
+          setInviteOpen(true);
+          // A thread that did not exist a moment ago has to be loaded before
+          // the pill row and the composer mean anything — and it is the one
+          // the user is now looking at.
+          if (made.created) {
+            setActiveId(made.threadId);
+            setListOpen(false);
+            setReloadKey((n) => n + 1);
+          }
+        })
+        .catch((e: unknown) => {
+          setError(e instanceof Error ? e.message : "Could not create the invite link.");
+        })
+        .finally(() => setInviteBusy(false));
+    },
+    [inviteBusy]
+  );
+
+  /** Open a chat from the list. */
+  const openThread = useCallback((threadId: string) => {
+    setActiveId(threadId);
+    setListOpen(false);
+  }, []);
+
+  /** Back to the list, and refresh it — the previews are a moment out of date
+   *  the instant a message is sent. */
+  const openList = useCallback(() => {
+    setListOpen(true);
+    setReloadKey((n) => n + 1);
+  }, []);
+
+  // Pick the language I READ. Optimistic: the row moves under the thumb and
+  // rolls back if the write fails, because the alternative is a pill that does
+  // nothing for a round trip and gets tapped again.
+  const selectMyLanguage = useCallback(
+    (code: LanguageCode) => {
+      setSheetOpen(false);
+      setConfirmedLang(code);
+      if (!langHintSeenRef.current) {
+        langHintSeenRef.current = true;
+        rememberReadLangHint();
+        setShowLangHint(true);
+      }
+      setRecent((current) => {
+        const updated = rememberLanguage(current, code);
+        writeStoredRecent(updated);
+        return updated;
+      });
+      const t = thread;
+      if (!t || t.myLang === code || savingLang) return;
+      const previous = t.myLang;
+      // The language is a property of THIS membership, so the optimistic write
+      // is scoped to this row of the list. The other chats keep theirs — that
+      // is the whole of "per-thread reading language", and getting it wrong
+      // would silently re-language a conversation nobody was looking at.
+      const setLangHere = (lang: string) =>
+        setThreads((current) =>
+          current?.map((row) => (row.threadId === t.threadId ? { ...row, myLang: lang } : row)) ??
+          current
+        );
+      setLangHere(code);
+      setSavingLang(true);
+      setMyChatLanguage(t.threadId, code)
+        .then((saved) => {
+          setLangHere(saved);
+          setError(null);
+        })
+        .catch((e: unknown) => {
+          setLangHere(previous);
+          setConfirmedLang(null);
+          setError(e instanceof Error ? e.message : "Could not save the language.");
+        })
+        .finally(() => setSavingLang(false));
+    },
+    [thread, savingLang]
+  );
+
+  // The two languages the row has to show: the one I read (solid — mine to
+  // change) and the one my partner reads (outlined — theirs, set on their
+  // phone). Both always have a pill; a row that could not show the language
+  // this thread is actually translating into would be lying about it.
+  const myLang: PairLangCode = isPairLangCode(thread?.myLang) ? thread.myLang : "en";
+  const partnerLang: PairLangCode | null = isPairLangCode(thread?.partnerLang)
+    ? thread.partnerLang
+    : null;
+  const pills = visiblePills([myLang, partnerLang ?? myLang], recent);
+  const outgoing = outgoingLine(partnerLang);
+  // Messages FROM THEM. The count that decides which confirmation to show is
+  // not messages.length: Tom's thread was full of his own bubbles and empty of
+  // anything his reading language could have changed.
+  const incomingCount = messages.filter((m) => m.sender_id !== myUserId).length;
+  const confirmation = confirmedLang ? readConfirmation(confirmedLang, { incomingCount }) : null;
+
+  // ── What the screen is ────────────────────────────────────────────────────
+  // Three states, and the middle one is new. No chats at all is still the
+  // start card. One chat still opens straight into itself. More than one — or
+  // an explicit tap on "Chats" — is the list.
+  const loaded = threads !== null;
+  const noChats = loaded && threads.length === 0;
+  const showList = loaded && threads.length > 0 && (listOpen || !thread);
+  // The door to the list, from inside a thread. Shown even to somebody with a
+  // single chat, because the list is also where "Start a chat" lives and a
+  // one-chat account is exactly who needs a second one.
+  const canReachList = loaded && threads.length > 0 && !showList;
+
   if (!ready) {
     return (
       <main className="flex min-h-screen items-center justify-center text-amber-100/60">
@@ -379,26 +661,123 @@ export function ChatShell(): JSX.Element {
       <div className="mx-auto flex h-[calc(100dvh-1.5rem)] max-w-md flex-col gap-3">
         <header className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
+          <div className="flex items-center gap-2">
+            {canReachList ? (
+              <button
+                type="button"
+                onClick={openList}
+                className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
+              >
+                {CHAT_LIST_BACK}
+              </button>
+            ) : null}
+            <a
+              href="/"
+              className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
+            >
+              ← Home
+            </a>
+          </div>
         </header>
 
-        <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
-          Private chat · Chat privado
+        {showList ? (
+          <>
+            <ChatThreadList
+              threads={threads}
+              busy={inviteBusy}
+              onOpen={openThread}
+              onStart={() => startOrInvite()}
+            />
+            {error ? (
+              <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-3 py-2 text-xs text-red-200">
+                {error}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+        {/* Which conversation this is. It was the screen's name, which is the
+            only thing it could be when there was one chat; with a list behind
+            it, the useful line is who you are talking to — and it is their own
+            display name, off their own account. */}
+        <div className="truncate text-xs uppercase tracking-[0.2em] text-amber-100/50">
+          {thread?.partnerName ?? "Private chat · Chat privado"}
         </div>
 
-        {threadMissing ? (
-          <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-4 text-sm text-amber-100/80">
-            This account isn&apos;t part of a chat yet. Sign in with your own Google account (not
-            the shared passcode account).
-          </div>
+        {/* Whose language is whose, said twice on purpose. The solid pill is
+            the language I READ and the only one a tap here can move; the line
+            under it is the language THEY read, which their phone owns. The
+            contrast is the point — it is what stops a tap on PL from meaning
+            "send Polish" (Tom, 8/19). What I send is translated into theirs on
+            the way out (app/api/chat/send), and that promise lives down by the
+            composer where the typing happens. */}
+        {thread ? (
+          <>
+            {/* No `paired` here on purpose — see partnerChip in
+                lib/chatLabels.ts. The row is MINE and holds exactly one marked
+                pill; the partner's language still has a plain pill in it (it
+                is in `pills`), it just no longer wears the outline that made
+                it look like a second thing I had chosen. */}
+            <LanguagePillRow
+              pills={pills}
+              selected={myLang}
+              caption={CHAT_READ_CAPTION}
+              sheetOpen={sheetOpen}
+              onSelect={selectMyLanguage}
+              onOpenSheet={() => setSheetOpen(true)}
+            />
+            <div className="-mt-1 flex items-center gap-2 text-xs text-amber-100/50">
+              <p>{theyReadLine(partnerLang)}</p>
+              {partnerLang ? (
+                <span
+                  title={CHAT_PARTNER_LABEL}
+                  className="shrink-0 rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                >
+                  {partnerChip(partnerLang)}
+                </span>
+              ) : null}
+            </div>
+            {/* "No one else in this chat yet" is a sentence that has to come
+                with a door. This is the same call the empty state makes — the
+                link is minted fresh each tap and the old one stops working,
+                so somebody who closed the sheet has nothing to hunt for. */}
+            {partnerLang ? null : (
+              <ChatInviteRow busy={inviteBusy} onInvite={() => startOrInvite(thread.threadId)} />
+            )}
+            {showLangHint ? (
+              <div className="flex items-start gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/80">
+                <p className="flex-1">{CHAT_READ_HINT}</p>
+                <button
+                  type="button"
+                  onClick={() => setShowLangHint(false)}
+                  aria-label="Dismiss · Descartar"
+                  className="shrink-0 rounded-full px-1 text-amber-100/60"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : null}
 
-        {/* Messages */}
+        {/* The way in.
+            This was a banner reading "This account isn't part of a chat yet.
+            Sign in with your own Google account (not the shared passcode
+            account)" — shown to people who WERE signed in, under a composer
+            that could not send, on a screen with no way to start anything. It
+            told the truth about the database and a lie about the reader, and
+            there was nothing behind it: no route in the app had ever created a
+            thread. Now the state that has no chat is the state that offers
+            one. See lib/chatInvite.ts. */}
+        {noChats ? (
+          <ChatStartCard busy={inviteBusy} error={error} onStart={() => startOrInvite()} />
+        ) : null}
+
+        {/* Messages. Only once there is a thread: an account with none used to
+            get this list, its empty state, and a live composer whose Send
+            button was disabled with nothing on screen saying why. */}
+        {thread ? (
+          <>
         <div
           ref={listRef}
           className="flex-1 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-3"
@@ -409,11 +788,15 @@ export function ChatShell(): JSX.Element {
             </div>
           ) : null}
           {messages.map((m, i) => {
-            const mine = m.sender_id === thread?.myUserId;
+            const mine = m.sender_id === myUserId;
             const primary = mine ? m.body : m.body_translated ?? m.body;
             const secondary = mine ? m.body_translated : m.body_translated ? m.body : null;
             const newDay = i === 0 || dayKey(messages[i - 1].created_at) !== dayKey(m.created_at);
-            const canClone = Boolean(m.body_translated && m.source_lang && m.target_lang);
+            const translated = Boolean(m.body_translated && m.source_lang && m.target_lang);
+            // Translated, but in a language nothing here can pronounce: show
+            // why rather than a Play button that would do nothing.
+            const textOnly = translated && isTextOnlyLanguage(m.target_lang);
+            const canClone = translated && !textOnly;
             return (
               <div key={m.id}>
                 {newDay ? (
@@ -451,6 +834,17 @@ export function ChatShell(): JSX.Element {
                             : "border-white/10 text-amber-100/50"
                         }`}
                       >
+                        {/* On MY bubble this grey line is the recipient
+                            preview — what LIZ reads, not what I asked for.
+                            Uncaptioned it is Spanish sitting under a message I
+                            typed in English with Hindi selected, which reads
+                            as the app ignoring me. Every bubble, not once per
+                            thread: the caption has to be where the eye lands. */}
+                        {mine ? (
+                          <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-stone-950/45">
+                            {CHAT_THEY_SEE_PREFIX}
+                          </span>
+                        ) : null}
                         {secondary}
                       </div>
                     ) : null}
@@ -470,6 +864,12 @@ export function ChatShell(): JSX.Element {
                         >
                           {playingKey === `${m.id}:clone` ? "⏸" : "🗣️"} clone
                         </button>
+                      ) : textOnly ? (
+                        <TextOnlyNote
+                          className={`px-2 py-0.5 ${
+                            mine ? "bg-stone-950/15 text-stone-950/60" : "bg-white/10 text-amber-100/50"
+                          }`}
+                        />
                       ) : null}
                       <span>
                         {formatTime(m.created_at)}
@@ -505,6 +905,26 @@ export function ChatShell(): JSX.Element {
               </div>
             </div>
           ))}
+          {/* The confirmation, as a system line IN the thread rather than a
+              toast: it has to survive a glance away, and the thread is where
+              the tap's consequence lives. Three lines — the proof, its frame,
+              and what it means for the messages (or that there are none from
+              them yet, which is the whole reason a solo tester sees nothing
+              change). `dir="auto"` because seven of the hundred read the
+              other way, and the sentence's own first letter knows which. */}
+          {confirmation ? (
+            <div className="pt-2">
+              <div className="mx-auto max-w-[92%] rounded-2xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-center">
+                <p dir="auto" className="text-[15px] leading-snug text-amber-100">
+                  ✓ {confirmation.native}
+                </p>
+                <p className="mt-1 text-xs text-amber-100/70">{confirmation.frame}</p>
+                <p className="mt-1 text-[11px] leading-snug text-amber-100/45">
+                  {confirmation.detail}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {error ? (
@@ -538,43 +958,70 @@ export function ChatShell(): JSX.Element {
             </button>
           </div>
         ) : (
-          <div className="flex items-end gap-2">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              placeholder={thread?.myLang === "es" ? "Escribe un mensaje…" : "Type a message…"}
-              rows={1}
-              className="max-h-32 min-h-[2.75rem] flex-1 resize-none rounded-2xl border border-white/10 bg-stone-950/60 px-4 py-2.5 text-[15px] text-amber-50 placeholder:text-amber-100/30"
-            />
-            {draft.trim() ? (
-              <button
-                type="button"
-                onClick={() => void send()}
-                disabled={!thread}
-                className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-sm font-semibold text-stone-950 transition disabled:opacity-40"
-              >
-                Send
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void startRecording()}
-                disabled={!thread}
-                aria-label="Record a voice message"
-                className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-lg leading-none text-stone-950 transition disabled:opacity-40"
-              >
-                🎤
-              </button>
-            )}
+          <div className="flex flex-col gap-1">
+            {/* What happens to whatever I type, where I type it. The left side
+                is deliberately not a language: nothing detects the language of
+                a draft, so naming one here is the exact claim that misled Tom.
+                The right side IS knowable and is the promise that matters. */}
+            {outgoing ? <p className="px-1 text-[11px] text-amber-100/40">{outgoing}</p> : null}
+            <div className="flex items-end gap-2">
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                placeholder={thread?.myLang === "es" ? "Escribe un mensaje…" : "Type a message…"}
+                rows={1}
+                className="max-h-32 min-h-[2.75rem] flex-1 resize-none rounded-2xl border border-white/10 bg-stone-950/60 px-4 py-2.5 text-[15px] text-amber-50 placeholder:text-amber-100/30"
+              />
+              {draft.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={!thread}
+                  className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-sm font-semibold text-stone-950 transition disabled:opacity-40"
+                >
+                  Send
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void startRecording()}
+                  disabled={!thread}
+                  aria-label="Record a voice message"
+                  className="rounded-2xl bg-emerald-400 px-4 py-2.5 text-lg leading-none text-stone-950 transition disabled:opacity-40"
+                >
+                  🎤
+                </button>
+              )}
+            </div>
           </div>
         )}
+          </>
+        ) : null}
+          </>
+        )}
       </div>
+
+      <ChatInviteSheet
+        open={inviteOpen}
+        url={invite?.url ?? null}
+        onClose={() => setInviteOpen(false)}
+      />
+
+      <LanguageSheet
+        open={sheetOpen}
+        selected={myLang}
+        paired={partnerLang}
+        pairedLabel={CHAT_PARTNER_LABEL}
+        caption={CHAT_READ_CAPTION}
+        onSelect={selectMyLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
     </main>
   );
 }

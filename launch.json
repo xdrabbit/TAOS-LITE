@@ -1,0 +1,42 @@
+{
+  "name": "TAOS-LITE",
+  "displayName": "TAOS-LITE",
+  "path": "/home/tom/blackbird_dev/TAOS-LITE",
+  "type": "node-next",
+  "category": "web-app",
+  "description": "Next.js application with standard and funnel dev modes for controlled testing.",
+  "launchProfiles": [
+    {
+      "id": "dev",
+      "label": "Dev Server (port 3017)",
+      "description": "Next.js development with hot reload",
+      "type": "node",
+      "cwd": "/home/tom/blackbird_dev/TAOS-LITE",
+      "command": "npm run dev",
+      "shellCommand": "cd /home/tom/blackbird_dev/TAOS-LITE && npm run dev",
+      "ports": [3017]
+    },
+    {
+      "id": "start",
+      "label": "Production Start (port 3017)",
+      "description": "Serve built app",
+      "type": "node",
+      "cwd": "/home/tom/blackbird_dev/TAOS-LITE",
+      "command": "npm run start",
+      "shellCommand": "cd /home/tom/blackbird_dev/TAOS-LITE && npm run start",
+      "ports": [3017]
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "command": "npm run build",
+      "shellCommand": "cd /home/tom/blackbird_dev/TAOS-LITE && npm run build"
+    },
+    {
+      "id": "typecheck",
+      "label": "Type Check",
+      "command": "npm run typecheck",
+      "shellCommand": "cd /home/tom/blackbird_dev/TAOS-LITE && npm run typecheck"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+-- More than one chat per account.
+--
+-- Tom, on the two-phone walkthrough, hit his own app's refusal:
+--
+--     "You're already in a chat, and TAOS holds one at a time."
+--
+-- Verdict: multiples, with history preserved. The first thing this migration
+-- has to say is what it does NOT do, because the answer surprised the search:
+--
+-- ── The cap was never in the schema ────────────────────────────────────────
+-- taos_lite_chat_members is keyed PRIMARY KEY (thread_id, user_id) — one row
+-- per person per thread — and there has never been a unique constraint or a
+-- unique index on user_id alone. The database has been able to hold an account
+-- in twenty chats since the day chat tier 1 landed. The cap lived entirely in
+-- the application: lib/chat.ts drew the FIRST membership it found,
+-- /api/chat/invite re-used that same first thread forever, and /api/chat/join
+-- returned a 409 for a second one. All three are gone in this PR, and nothing
+-- had to be dropped here to allow it. (Checked against pg_constraint and
+-- pg_indexes on duqkmuaceklnfgvoufrz before writing a line of it — the
+-- lesson from the lang CHECK in 20260819_chat_members_lang_catalog.sql, which
+-- was a ceiling in the database that no amount of reading TypeScript found.)
+--
+-- What the two-member cap DOES do is unchanged and is not negotiable: the
+-- trigger in 20260819_chat_invites.sql still refuses a third member of one
+-- thread, because /api/chat/send translates into exactly one partner language
+-- and a third person would make a third of the messages invisible to somebody.
+-- Many chats per person; still two people per chat.
+--
+-- ── So why a migration at all ──────────────────────────────────────────────
+-- One index. "Which threads am I in" was a question asked once per account and
+-- answered by the first row it found; it is now asked on every /chat load, by
+-- GET /api/chat/threads, and it fans out from there into the member and
+-- message reads for every thread in the list. There are two threads in this
+-- database today and a sequential scan is free, which is exactly when to add
+-- the index — before the query that needs it is the one people are waiting on.
+--
+-- Additive and nothing else: no data is written, moved, or deleted, and the
+-- existing threads (including the hand-seeded July one, 34 messages) are not
+-- touched by this file.
+create index if not exists taos_lite_chat_members_user_idx
+  on public.taos_lite_chat_members (user_id);

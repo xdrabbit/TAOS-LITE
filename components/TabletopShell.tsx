@@ -5,11 +5,22 @@ import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live"
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { TextOnlyNote } from "./TextOnly";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { languageNative } from "@/lib/languages/catalog";
+// Two people, two languages: what one says is always spoken to the other,
+// so a turn's target is the OTHER side of the pair — which is also the code
+// the tier check reads before asking /api/tts for a voice.
+import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
 // reads right-side-up for the person across the table; the BOTTOM half faces
-// the phone's owner. One end is English, the other Spanish (swappable).
+// the phone's owner. Each end is one side of the shared language pair, and
+// either end can be any of the hundred (swappable, and re-pickable from the
+// pill row in the middle bar).
 // Turn-taking is explicit, chess-style: TAP to start talking, TAP again when
 // done. Two engines:
 //  • "live" (default) — a persistent GA Realtime session translates the turn
@@ -19,13 +30,19 @@ import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 //  • "classic" — the proven batch path: record the turn, then one
 //    /api/translate round-trip. Fallback for flaky rooms.
 
-type Lang = "en" | "es";
+// The table's two ends are the shared pair (lib/translate/pair.ts): `mine` is
+// the phone's owner, at the bottom, and `theirs` is whoever is across the
+// table, at the rotated top. Before 8/18 this was a two-value union and the
+// far end could only ever be a Spanish speaker — on the one screen whose
+// whole purpose is handing your phone to a stranger.
+type Lang = PairLangCode;
 type Engine = "live" | "classic";
 type TurnState =
   | { kind: "idle" }
   | { kind: "connecting"; side: Lang }
   | { kind: "recording"; side: Lang }
   | { kind: "processing"; side: Lang };
+
 
 interface Exchange {
   /** Language the speaker used. */
@@ -38,10 +55,15 @@ interface Exchange {
 const MAX_TURN_SEC_CLASSIC = 60;
 const MAX_TURN_SEC_LIVE = 120;
 
+// Button and status copy for the panes. Two entries, not a hundred: a
+// language without one gets English chrome and a faithful translation in its
+// own language, which is the same trade /translate makes (see the note in
+// ENHANCEMENTS.md) and the only reason the catalog could grow past six. The
+// pane's HEADING is not in here — that is the language's own name, from the
+// catalog, for all hundred of them.
 const L: Record<
-  Lang,
+  string,
   {
-    label: string;
     tapToTalk: string;
     tapDone: string;
     listening: string;
@@ -53,7 +75,6 @@ const L: Record<
   }
 > = {
   en: {
-    label: "English",
     tapToTalk: "TAP TO TALK",
     tapDone: "TAP WHEN DONE",
     listening: "Listening to the other side…",
@@ -64,7 +85,6 @@ const L: Record<
     idleHint: "Lay the phone flat between you"
   },
   es: {
-    label: "Español",
     tapToTalk: "TOCA PARA HABLAR",
     tapDone: "TOCA AL TERMINAR",
     listening: "Escuchando al otro lado…",
@@ -76,6 +96,10 @@ const L: Record<
   }
 };
 
+function copyFor(code: Lang): (typeof L)[string] {
+  return L[code] ?? L.en;
+}
+
 function pickRecordingMime(): string {
   if (typeof MediaRecorder === "undefined") return "";
   for (const m of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]) {
@@ -85,8 +109,31 @@ function pickRecordingMime(): string {
 }
 
 export function TabletopShell(): JSX.Element {
-  // Which language faces the TOP (rotated) end; the bottom end is the other.
-  const [topLang, setTopLang] = useState<Lang>("es");
+  // The pair IS the table (lib/translate/useLanguagePair.ts): `theirs` faces
+  // the rotated TOP end, `mine` faces the phone's owner at the bottom. It is
+  // the same pair /translate and /live hold, so a phone already set to
+  // EN⇄Italian is a working tabletop the moment it is laid down.
+  const {
+    pair,
+    mine,
+    theirs,
+    pills,
+    sheetOpen,
+    setSheetOpen,
+    selectLanguage: selectTableLanguage
+  } = useLanguagePair({
+    // Whatever was streaming was in a language that just left the table —
+    // clear it. The realtime SESSION is kept: beginTurn sends the direction
+    // through session.update on every single turn anyway, so the connection
+    // is still good and dropping it would cost the next tapper a reconnect
+    // in the middle of a party.
+    onPairChange: () => {
+      setLiveHeard("");
+      setLiveTranslation("");
+    }
+  });
+  const topLang = theirs;
+  const bottomLang = mine;
   const [engine, setEngine] = useState<Engine>("live");
   const [turn, setTurn] = useState<TurnState>({ kind: "idle" });
   const [voiceOn, setVoiceOn] = useState(true);
@@ -135,6 +182,17 @@ export function TabletopShell(): JSX.Element {
     };
   }, []);
 
+  // Same guard the "swap ends" button carries: the pair decides what the
+  // open turn is being translated INTO, so moving it mid-turn would land the
+  // words on the wrong end of the table. Between turns it is free.
+  const selectLanguage = useCallback(
+    (code: PairLangCode) => {
+      if (turnRef.current.kind !== "idle") return;
+      selectTableLanguage(code);
+    },
+    [selectTableLanguage]
+  );
+
   const startTimer = useCallback((capSec: number) => {
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
     setRecordSec(0);
@@ -166,27 +224,26 @@ export function TabletopShell(): JSX.Element {
     };
   }, [cleanupRecording]);
 
-  const speak = useCallback(async (ex: Exchange) => {
+  const speak = useCallback(async (ex: Exchange, pairNow: readonly [Lang, Lang]) => {
     if (!voiceOnRef.current || !ex.translation) return;
     try {
-      const res = await fetchWithRetry(
-        "/api/tts",
+      // requestSpeech asks the catalog first: a tier-2 target never reaches
+      // /api/tts, and a null here (either tier gate) means the translation on
+      // the table is the whole answer. The turn is already on screen and the
+      // streaming path above is untouched — only the readout stops.
+      const blob = await requestSpeech(
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: ex.translation,
-            sourceLanguage: ex.from,
-            targetLanguage: ex.from === "en" ? "es" : "en"
-            // No voice override: the shared /api/tts voice-follows-speaker rule
-            // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
-            // Spanish in Tom's clone) — identical on every screen.
-          })
+          text: ex.translation,
+          sourceLanguage: ex.from,
+          targetLanguage: otherInPair(pairNow, ex.from)
+          // No voice override: the shared /api/tts voice-follows-speaker rule
+          // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
+          // Spanish in Tom's clone) — identical on every screen.
         },
-        { retries: 1, timeoutMs: 30000 }
+        { fetch: (input, init) => fetchWithRetry(input, init, { retries: 1, timeoutMs: 30000 }) }
       );
-      if (!res.ok) return;
-      const url = URL.createObjectURL(await res.blob());
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
       playerRef.current?.pause();
       const el = new Audio(url);
       playerRef.current = el;
@@ -200,10 +257,13 @@ export function TabletopShell(): JSX.Element {
     }
   }, []);
 
+  // The pair the turn was TAKEN in travels with it: the readout must be
+  // spoken in the language the table was set to when the words were said,
+  // even if someone taps a pill while the audio is being fetched.
   const pushExchange = useCallback(
-    (ex: Exchange) => {
+    (ex: Exchange, pairNow: readonly [Lang, Lang]) => {
       setExchanges((prev) => [...prev.slice(-19), ex]);
-      void speak(ex);
+      void speak(ex, pairNow);
     },
     [speak]
   );
@@ -217,20 +277,26 @@ export function TabletopShell(): JSX.Element {
       playerRef.current = null;
       setLiveHeard("");
       setLiveTranslation("");
-      const direction: TabletopDirection = side === "en" ? "en-es" : "es-en";
+      // Whoever tapped is the source; the other end of the table is the
+      // target. Both are catalog codes — the direction string that used to
+      // live here could only spell two of them.
+      const direction: TabletopDirection = { source: side, target: otherInPair(pair, side) };
       try {
         if (!liveRef.current) {
           setTurn({ kind: "connecting", side });
-          liveRef.current = await startTabletopLive({
-            onError: (msg) => setError(msg),
-            onState: (s) => {
-              // The session auto-disconnects after long idle; reflect nothing
-              // in the UI unless a turn is active (next tap reconnects).
-              if (s === "idle") liveRef.current = null;
+          liveRef.current = await startTabletopLive(
+            {
+              onError: (msg) => setError(msg),
+              onState: (s) => {
+                // The session auto-disconnects after long idle; reflect nothing
+                // in the UI unless a turn is active (next tap reconnects).
+                if (s === "idle") liveRef.current = null;
+              },
+              onHeard: (text) => setLiveHeard(text),
+              onTranslationDelta: (d) => setLiveTranslation((t) => t + d)
             },
-            onHeard: (text) => setLiveHeard(text),
-            onTranslationDelta: (d) => setLiveTranslation((t) => t + d)
-          });
+            direction
+          );
         }
         if (!liveRef.current.beginTurn(direction)) {
           // Session went stale (e.g. idle disconnect raced us) — drop it so
@@ -249,7 +315,7 @@ export function TabletopShell(): JSX.Element {
         setError((prev) => prev ?? "Live mode failed — try classic mode.");
       }
     },
-    [startTimer, stopTimer]
+    [pair, startTimer, stopTimer]
   );
 
   const endLiveTurn = useCallback(
@@ -264,12 +330,15 @@ export function TabletopShell(): JSX.Element {
       try {
         const result = await session.endTurn();
         if (result.translation || result.heard) {
-          pushExchange({
-            from: side,
-            original: result.heard,
-            translation: result.translation,
-            at: Date.now()
-          });
+          pushExchange(
+            {
+              from: side,
+              original: result.heard,
+              translation: result.translation,
+              at: Date.now()
+            },
+            pair
+          );
         }
       } finally {
         setLiveHeard("");
@@ -277,7 +346,7 @@ export function TabletopShell(): JSX.Element {
         setTurn({ kind: "idle" });
       }
     },
-    [stopTimer, pushExchange]
+    [pair, stopTimer, pushExchange]
   );
 
   // ── Classic engine (batch /api/translate) ─────────────────────────────────
@@ -289,7 +358,7 @@ export function TabletopShell(): JSX.Element {
         const form = new FormData();
         form.append("audio", new File([blob], "turn", { type: blob.type || "audio/webm" }));
         form.append("sourceLanguage", side);
-        form.append("targetLanguage", side === "en" ? "es" : "en");
+        form.append("targetLanguage", otherInPair(pair, side));
         form.append("tone", "casual");
         const res = await fetch("/api/translate", { method: "POST", body: form });
         const payload = (await res.json().catch(() => ({}))) as {
@@ -301,19 +370,22 @@ export function TabletopShell(): JSX.Element {
           throw new Error(payload.error || "Translation failed. Try again.");
         }
         setError(null);
-        pushExchange({
-          from: side,
-          original: payload.original ?? "",
-          translation: payload.translation,
-          at: Date.now()
-        });
+        pushExchange(
+          {
+            from: side,
+            original: payload.original ?? "",
+            translation: payload.translation,
+            at: Date.now()
+          },
+          pair
+        );
       } catch (e) {
         setError(e instanceof Error ? e.message : "Translation failed. Try again.");
       } finally {
         setTurn({ kind: "idle" });
       }
     },
-    [pushExchange]
+    [pair, pushExchange]
   );
 
   const startClassicTurn = useCallback(
@@ -433,7 +505,12 @@ export function TabletopShell(): JSX.Element {
   );
 
   const renderPane = (lang: Lang, rotated: boolean): JSX.Element => {
-    const t = L[lang];
+    const t = copyFor(lang);
+    // This pane READS the other end's turns, so it is this pane's own
+    // language that /api/tts would be asked for. Tier 2 (catalog) means the
+    // words still cross the table — they just arrive silently, and the pane
+    // says so instead of leaving someone waiting on audio.
+    const paneTextOnly = isTextOnlyLanguage(lang);
     const { theirs, mine } = paneLines(lang);
     const isConnecting = turn.kind === "connecting" && turn.side === lang;
     const isRecording = turn.kind === "recording" && turn.side === lang;
@@ -448,8 +525,13 @@ export function TabletopShell(): JSX.Element {
       <section
         className={`flex flex-1 flex-col gap-2 overflow-hidden p-4 ${rotated ? "rotate-180" : ""}`}
       >
-        <div className="flex items-center justify-between">
-          <span className="text-xs uppercase tracking-[0.25em] text-amber-100/50">{t.label}</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-xs uppercase tracking-[0.25em] text-amber-100/50">
+            {languageNative(lang)}
+          </span>
+          {paneTextOnly && !isRecording ? (
+            <TextOnlyNote className="border border-white/10 bg-white/5 px-2 py-0.5 text-amber-100/60" />
+          ) : null}
           {isRecording ? (
             <span className="flex items-center gap-2 text-xs text-red-300">
               <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-400" />
@@ -529,21 +611,40 @@ export function TabletopShell(): JSX.Element {
     );
   };
 
-  const bottomLang: Lang = topLang === "en" ? "es" : "en";
+  // Neither end of the table can be read out — both are tier 2
+  // (lib/languages/catalog.ts). The turns still cross the table as text; the
+  // voice toggle just stops offering something there is no voice for. When
+  // only ONE end is tier 2 the toggle stays live and that pane carries its own
+  // "text only" mark, because half the table still gets a voice.
+  const tableTextOnly = isTextOnlyLanguage(topLang) && isTextOnlyLanguage(bottomLang);
 
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden">
       {renderPane(topLang, true)}
 
-      {/* Middle bar — readable from the bottom end (the phone owner). */}
-      <div className="flex items-center justify-center gap-2 border-y border-white/10 bg-white/5 px-3 py-1.5">
+      {/* Middle bar — readable from the bottom end (the phone owner), which
+          is also whose taps it takes. The pill row is the same one /translate
+          and /live draw (components/LanguagePicker.tsx): the solid pill is the
+          FAR end of the table, the outlined one is this end, and tapping your
+          own swaps which way round the two of you are sitting. */}
+      <div className="flex flex-col gap-1.5 border-y border-white/10 bg-white/5 px-3 py-1.5">
+        <LanguagePillRow
+          pills={pills}
+          selected={theirs}
+          paired={mine}
+          sheetOpen={sheetOpen}
+          onSelect={selectLanguage}
+          onOpenSheet={() => setSheetOpen(true)}
+        />
+        <div className="flex items-center justify-center gap-2">
         <a href="/" className="rounded-full px-2 py-1 text-xs text-amber-100/50">
           ← TAOS
         </a>
         <button
           type="button"
-          onClick={() => setTopLang((l) => (l === "en" ? "es" : "en"))}
+          onClick={() => selectLanguage(mine)}
           disabled={turn.kind !== "idle"}
+          title="Swap which end of the table is which"
           className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70 disabled:opacity-40"
         >
           ⇅ swap ends
@@ -559,14 +660,27 @@ export function TabletopShell(): JSX.Element {
         <button
           type="button"
           onClick={() => setVoiceOn((v) => !v)}
-          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70"
+          disabled={tableTextOnly}
+          title={tableTextOnly ? TEXT_ONLY_TITLE : undefined}
+          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70 disabled:opacity-40"
         >
-          {voiceOn ? "🔊 voice on" : "🔇 voice off"}
+          {tableTextOnly ? "🔇 text only" : voiceOn ? "🔊 voice on" : "🔇 voice off"}
         </button>
         {error ? <span className="max-w-[40%] truncate text-xs text-red-300">{error}</span> : null}
+        </div>
       </div>
 
       {renderPane(bottomLang, false)}
+
+      <LanguageSheet
+        open={sheetOpen}
+        selected={theirs}
+        paired={mine}
+        pairedLabel="Your end"
+        caption="The far end of the table · El otro lado"
+        onSelect={selectLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
     </main>
   );
 }

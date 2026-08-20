@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { tutorEnabled } from "@/lib/release";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -123,6 +124,14 @@ function buildTutorInstructions(opts: {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // RC1: tutor is off (lib/release.ts). The page redirects home, but the API
+  // is reachable on its own — and this one mints a paid OpenAI realtime
+  // session. A disabled feature should cost nothing, so answer as if the
+  // route did not exist.
+  if (!tutorEnabled()) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  elevenLabsVoiceId,
+  gatedElevenLabsVoiceId,
   type TtsLangCode as LangCode,
   type VoiceOverride
 } from "@/lib/tts/voice";
+import { PERSONAL_VOICE_HEADER, personalVoiceUnlocked } from "@/lib/tts/personalVoice";
+import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -32,10 +34,14 @@ function audioResponse(buffer: ArrayBuffer): NextResponse {
 }
 
 // Cloned-voice selection lives in lib/tts/voice.ts (voice follows the
-// SPEAKER — see the unit tests that pin the rule).
+// SPEAKER — see the unit tests that pin the rule), behind the personal-voice
+// gate in lib/tts/personalVoice.ts. The clone ids are resolved HERE, on the
+// server, from a speaker direction: a client never names a voice id, so a
+// phone without the code cannot reach one however it shapes the request.
 
 async function elevenLabs(
   text: string,
+  unlocked: boolean,
   sourceLanguage?: LangCode,
   targetLanguage?: LangCode,
   latency?: "flash",
@@ -45,7 +51,7 @@ async function elevenLabs(
   if (!apiKey) {
     return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
   }
-  const voiceId = elevenLabsVoiceId(sourceLanguage, targetLanguage, voice);
+  const voiceId = gatedElevenLabsVoiceId(unlocked, sourceLanguage, targetLanguage, voice);
   // /live sends latency:"flash" — trade a little clone fidelity for the
   // lowest-latency model so spoken concepts don't lag the conversation.
   // Cantonese output overrides both: turbo/flash don't speak Cantonese (they
@@ -131,11 +137,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
     }
 
+    // Tier 2 (lib/languages/catalog.ts): no engine wired up here can speak
+    // this language. Sending the text anyway gets either a 502 or — worse —
+    // confident audio in the wrong language's phonology, which a listener has
+    // no way to recognize as a failure. Say what is true instead.
+    //
+    // /translate never reaches this: it asks canSpeak() before it calls, and
+    // shows "text only" on the pill. This is the fence for everything that
+    // doesn't ask — and it is deliberately narrow, firing only for a language
+    // the catalog KNOWS it cannot speak. An unrecognized code keeps the old
+    // pass-through behavior (default voice, no opinion) rather than becoming a
+    // new way for an existing caller to start failing.
+    if (isLanguageCode(body.targetLanguage) && !canSpeak(body.targetLanguage)) {
+      return NextResponse.json(
+        { error: "This language is text only.", textOnly: true },
+        { status: 422 }
+      );
+    }
+
+    // Wrong or absent code -> locked -> default voice. Deliberately silent:
+    // a stranger gets working audio and no sign the clones exist.
+    const unlocked = personalVoiceUnlocked(
+      req.headers.get(PERSONAL_VOICE_HEADER),
+      process.env.TAOS_PERSONAL_VOICE_CODE
+    );
+
     // `await` (not a bare returned promise) so a thrown timeout lands in the
     // catch below rather than escaping the handler as a generic 500.
     return engine === "openai"
       ? await openai(text)
-      : await elevenLabs(text, body.sourceLanguage, body.targetLanguage, latency, voice);
+      : await elevenLabs(text, unlocked, body.sourceLanguage, body.targetLanguage, latency, voice);
   } catch (error) {
     if (isTimeout(error)) {
       return NextResponse.json(

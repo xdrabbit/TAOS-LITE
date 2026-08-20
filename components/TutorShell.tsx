@@ -22,8 +22,13 @@ import {
   type Level,
   type StopReason
 } from "@/lib/tutor/conversation";
+import { requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { Paywall } from "./Paywall";
+
+// Every drill is said in English — the learner's job is to produce it. Named
+// so the tier check in hear() reads a language instead of assuming one.
+const DRILL_LANGUAGE = "en";
 
 interface Drill {
   en: string;
@@ -220,13 +225,17 @@ function Drills({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JS
     try {
       a.play().catch(() => {});
       a.pause();
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: drill.en, engine: "openai" })
+      // The drills are English prompts, so this is tier 1 today — the target
+      // is named anyway so the check is real rather than assumed: if lessons
+      // ever arrive in a text-only language (lib/languages/catalog.ts),
+      // requestSpeech answers null and the drill card just stays a drill card.
+      const blob = await requestSpeech({
+        text: drill.en,
+        engine: "openai",
+        targetLanguage: DRILL_LANGUAGE
       });
-      if (!res.ok) return;
-      const url = URL.createObjectURL(await res.blob());
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
       a.src = url;
       await a.play();
     } catch {

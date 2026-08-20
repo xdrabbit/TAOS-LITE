@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { callEnabled } from "@/lib/release";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -43,6 +44,16 @@ function buildCallInterpreterInstructions(target: TargetLang): string {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // RC1: /call is off (lib/release.ts). The page redirects home, but this
+  // route is reachable on its own and it is unauthenticated by design — and
+  // it mints a paid realtime session with no server-side duration cap (the
+  // cap lives in the client, lib/call/interpreter.ts, which is exactly the
+  // wrong side of the wire for a screen nobody is supposed to be on). A
+  // disabled feature should cost nothing: answer as if the route didn't exist.
+  if (!callEnabled()) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(

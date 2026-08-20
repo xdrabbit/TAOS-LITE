@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
+import { languageLabel } from "@/lib/languages/catalog";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
 
@@ -13,13 +14,15 @@ export const maxDuration = 30;
 // provider hiccups, the message still sends untranslated rather than failing;
 // the recipient sees the original.
 
-const LANG_LABEL: Record<string, string> = { en: "English", es: "Spanish" };
 
 async function translateBody(body: string, source: string, target: string): Promise<string | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
-  const targetLabel = LANG_LABEL[target] ?? target;
-  const sourceLabel = LANG_LABEL[source] ?? source;
+  // The catalog's ENGLISH name, which is what the prompts interpolate. This
+  // was a two-entry table with a fall-through to the raw code, which meant a
+  // thread set to Italian asked the model to "translate into it".
+  const targetLabel = languageLabel(target);
+  const sourceLabel = languageLabel(source);
   try {
     const out = await chatCompletion(apiKey, {
       temperature: 0.2,

@@ -20,6 +20,30 @@ export const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // Rachel (multi
 export const ELEVENLABS_TOM_VOICE = "uOQZaXDzEW5WoyNfLPne"; // account name: "tom"
 export const ELEVENLABS_LIZ_VOICE = "tpOaz7u8rY4nup9rRUmh"; // account name: "lizma2"
 
+/** The stock multilingual voice: env override, else the built-in default. */
+export function defaultElevenLabsVoiceId(): string {
+  return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
+}
+
+/**
+ * The personal-voice GATE, which sits in front of the speaker rule below.
+ *
+ * `unlocked` devices (Tom's and Liz's phones, which sent the right
+ * TAOS_PERSONAL_VOICE_CODE — see lib/tts/personalVoice.ts) behave exactly as
+ * TAOS always has. Everyone else resolves to the default multilingual voice,
+ * silently: no error, no hint the clones exist. The explicit "tom"/"liz"
+ * override is gated too — it is a request for a clone like any other.
+ */
+export function gatedElevenLabsVoiceId(
+  unlocked: boolean,
+  sourceLanguage?: TtsLangCode,
+  targetLanguage?: TtsLangCode,
+  voice?: VoiceOverride
+): string {
+  if (!unlocked) return defaultElevenLabsVoiceId();
+  return elevenLabsVoiceId(sourceLanguage, targetLanguage, voice);
+}
+
 export function elevenLabsVoiceId(
   sourceLanguage?: TtsLangCode,
   targetLanguage?: TtsLangCode,
@@ -46,5 +70,5 @@ export function elevenLabsVoiceId(
   if (sourceLanguage === "es" && targetLanguage && targetLanguage !== "es") {
     return ELEVENLABS_LIZ_VOICE; // Liz speaking -> translation in Liz's voice
   }
-  return process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE;
+  return defaultElevenLabsVoiceId();
 }

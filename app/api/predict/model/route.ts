@@ -1,14 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin, hasServiceRoleKey } from "@/lib/supabaseAdmin";
-import { emptyModel } from "@/lib/predict/model.mjs";
+import { DIRECTIONS, emptyModel } from "@/lib/predict/model.mjs";
 import type { Direction } from "@/lib/predict/model.mjs";
 
 export const runtime = "nodejs";
 
 const MODEL_TABLE = "taos_lite_predict_models";
 
-function parseDirection(value: string | null): Direction {
-  return value === "es-en" ? "es-en" : "en-es";
+// ── Only two directions are TRAINED (8/19) ──────────────────────────────────
+// The prediction model is not a language feature — it is Tom & Liz's own
+// conversation history, n-grammed (lib/predict/model.mjs). There is history in
+// English and history in Spanish and there is none in Bosnian, so EN⇄ES is
+// what exists to serve, and widening the catalog did not change that.
+//
+// What DID need fixing is what this route said about it: an unrecognised
+// direction used to fall through to "en-es", which handed someone typing in
+// Bosnian a model that suggests ENGLISH words. Ghost text in the wrong
+// language is worse than no ghost text — so an untrained direction now gets a
+// null model, which lib/predict/engine.ts already reads as "predict nothing".
+// Typing, translating and the pills all keep working; only the suggestions go
+// quiet, which is the honest answer.
+function parseDirection(value: string | null): Direction | null {
+  return DIRECTIONS.includes(value as Direction) ? (value as Direction) : null;
 }
 
 // Serve the precomputed model for one direction. The client fetches this ONCE on
@@ -17,6 +30,15 @@ function parseDirection(value: string | null): Direction {
 // empty-but-valid model so the client silently no-ops rather than crashing.
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const direction = parseDirection(req.nextUrl.searchParams.get("direction"));
+
+  // No model was ever built for this pair, and none ever will be until there
+  // is history in it. `model: null` is the engine's own no-op signal.
+  if (direction === null) {
+    return NextResponse.json(
+      { model: null, builtAt: null, trained: false },
+      { headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=86400" } }
+    );
+  }
 
   // Reads bypass RLS via the service-role client (never exposed to the browser).
   // Without the key we still return an empty-but-valid model so the typing

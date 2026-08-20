@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
+import { languageLabel } from "@/lib/languages/catalog";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 import { STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
 import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
@@ -14,7 +15,6 @@ export const maxDuration = 60;
 // voice note still sends — audio is the payload, text is the bonus.
 
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024; // ~2 min of audio with headroom
-const LANG_LABEL: Record<string, string> = { en: "English", es: "Spanish" };
 
 function extensionFor(mime: string): string {
   if (mime.includes("mp4") || mime.includes("aac") || mime.includes("m4a")) return "m4a";
@@ -23,18 +23,27 @@ function extensionFor(mime: string): string {
   return "webm";
 }
 
-async function transcribeAudio(apiKey: string, file: File, sourceLabel: string): Promise<string> {
+async function transcribeAudio(
+  apiKey: string,
+  file: File,
+  sourceLabel: string,
+  otherLabel: string
+): Promise<string> {
   const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
   const form = new FormData();
   form.append("file", file, file.name || "voice.webm");
   form.append("model", model);
-  // Hint the sender's usual language but leave room for mixing — they're a
-  // bilingual couple, code-switching is the normal case, not the edge case.
+  // Hint the sender's usual language but leave room for mixing — people in a
+  // two-language thread code-switch, and that is the normal case rather than
+  // the edge case. The OTHER language named here is the thread's, not a
+  // hard-coded "English and Spanish": naming languages nobody in the thread
+  // speaks is an invitation to transcribe into one of them.
   // STT_NO_GUESS_RULE: dropouts become gaps, never invented words (Liz, 7/27 —
   // same rule as /api/translate).
+  const mixing = otherLabel === sourceLabel ? "" : `, possibly mixing in ${otherLabel}`;
   form.append(
     "prompt",
-    `Mostly spoken ${sourceLabel}, possibly mixing English and Spanish. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
+    `Mostly spoken ${sourceLabel}${mixing}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
   );
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -126,8 +135,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const partner = members.find((m) => m.user_id !== user.id);
   const sourceLang = me.lang;
   const targetLang = partner?.lang ?? me.lang;
-  const sourceLabel = LANG_LABEL[sourceLang] ?? sourceLang;
-  const targetLabel = LANG_LABEL[targetLang] ?? targetLang;
+  // Catalog names, not a table of two: a thread set to Italian used to ask
+  // the model to "translate into it".
+  const sourceLabel = languageLabel(sourceLang);
+  const targetLabel = languageLabel(targetLang);
 
   // Store the audio first — it is the message; text enrichment can fail.
   const mime = audio.type || "audio/webm";
@@ -142,7 +153,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let transcript = "";
   try {
-    transcript = await transcribeAudio(apiKey, audio, sourceLabel);
+    transcript = await transcribeAudio(apiKey, audio, sourceLabel, targetLabel);
   } catch {
     transcript = "";
   }

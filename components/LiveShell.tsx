@@ -4,10 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   startAmbientLive,
   type ActiveAmbientSession,
-  type AmbientState,
-  type AmbientTarget
+  type AmbientState
 } from "@/lib/live/ambient";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { recognitionTag } from "@/lib/languages/recognition";
+import { languageNative } from "@/lib/languages/catalog";
+import { pairDirection, type PairDirection, type PairLangCode, type PairSide } from "@/lib/translate/pair";
+import { onDeviceSttEnabled } from "@/lib/release";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -16,35 +22,30 @@ import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 // into an earpiece. Freshness beats completeness: anything stale gets dropped,
 // never queued.
 //
-// Two engines:
-//  • "Ambient AI" (default) — continuous WebRTC stream to a GA Realtime
-//    session (lib/live/ambient.ts). Hears any language and multiple voices,
-//    speaks its summaries natively (no TTS round-trip). This is the mode for
-//    dinners, TV, and movies.
+// Two engines — but only one of them ships in RC1:
+//  • "Ambient AI" (default, and the only one on) — continuous WebRTC stream to
+//    a GA Realtime session (lib/live/ambient.ts). Hears any language and
+//    multiple voices, speaks its summaries natively (no TTS round-trip). This
+//    is the mode for dinners, TV, and movies.
 //  • "On-device" — the original free path: Web Speech API transcription →
 //    POST /api/live-translate per chunk → optional /api/tts readout. One
-//    recognition language at a time; best for a single nearby speaker.
+//    recognition language at a time; best for a single nearby speaker. Gated
+//    off behind NEXT_PUBLIC_ENABLE_ONDEVICE_STT (onDeviceSttEnabled() in
+//    lib/release.ts): the browser API it stands on isn't there on iOS or in
+//    much of PWA standalone, and it has never worked for Tom. Everything
+//    below that reads `engine === "device"` is live code kept warm for the
+//    post-RC investigation — with the flag off, `engine` never leaves
+//    "ambient", so those branches simply don't run.
 
 type Engine = "ambient" | "device";
 
-// Endpoint direction values for the on-device engine (see
-// app/api/live-translate/route.ts).
-type Direction = "es-en" | "en-es";
+// Which side of the pair the on-device recognizer is pointed at. This used to
+// be an "es-en" | "en-es" string with its own table of labels and BCP-47 tags
+// beside it — the last hard-coded language pair in /live. What the toggle
+// actually asks has never changed: "who is talking, them or me?" The pair
+// (lib/translate/pair.ts) answers which languages that means.
+type Side = PairSide;
 
-interface DirectionMeta {
-  label: string;
-  recognitionLang: string;
-}
-
-const DIRECTIONS: Record<Direction, DirectionMeta> = {
-  "es-en": { label: "Liz (ES → EN)", recognitionLang: "es-ES" },
-  "en-es": { label: "Me (EN → ES)", recognitionLang: "en-US" }
-};
-
-const TARGETS: Record<AmbientTarget, string> = {
-  en: "→ English",
-  es: "→ Español"
-};
 
 // Rolling context sent to /api/live-translate so its guesses improve.
 const MAX_CONTEXT = 10;
@@ -59,12 +60,6 @@ const STALE_SPEECH_MS = 15_000;
 // the interim to the API anyway ("interim flush") so summaries keep flowing.
 const INTERIM_FLUSH_MS = 3_000;
 const INTERIM_FLUSH_MIN_WORDS = 3;
-
-// Voice readout language mapping for /api/tts (device engine).
-const TTS_LANGS: Record<Direction, { sourceLanguage: "es" | "en"; targetLanguage: "es" | "en" }> = {
-  "es-en": { sourceLanguage: "es", targetLanguage: "en" },
-  "en-es": { sourceLanguage: "en", targetLanguage: "es" }
-};
 
 // A backlog of spoken summaries is worse than a gap. Keep only the newest few.
 const MAX_SPEECH_QUEUE = 2;
@@ -114,9 +109,17 @@ function normWords(text: string): string[] {
 }
 
 export function LiveShell(): JSX.Element {
+  // RC1: one engine, no toggle (lib/release.ts). Read once at render — the
+  // flag is inlined at build time, so this is a constant for the session.
+  const onDeviceAllowed = onDeviceSttEnabled();
+  // Always "ambient" at mount, flag or no flag: nothing persists the choice,
+  // which is what makes turning the flag off safe. If a future change ever
+  // does persist it, restore through this initializer so a stored "device"
+  // can't outlive the flag.
   const [engine, setEngine] = useState<Engine>("ambient");
-  const [target, setTarget] = useState<AmbientTarget>("en");
-  const [direction, setDirection] = useState<Direction>("es-en");
+  // On-device only: whose speech the recognizer is listening for. Ambient AI
+  // hears the room and needs no such toggle.
+  const [side, setSide] = useState<Side>("theirs");
   const [supported, setSupported] = useState(true);
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
@@ -133,7 +136,6 @@ export function LiveShell(): JSX.Element {
   const [lastHeard, setLastHeard] = useState("");
 
   const engineRef = useRef<Engine>("ambient");
-  const targetRef = useRef<AmbientTarget>("en");
   const ambientRef = useRef<ActiveAmbientSession | null>(null);
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -142,7 +144,7 @@ export function LiveShell(): JSX.Element {
   // watchdog compares this with listeningRef to catch silent deaths.
   const recRunningRef = useRef(false);
   const watchdogRef = useRef<number | null>(null);
-  const directionRef = useRef<Direction>("es-en");
+  const sideRef = useRef<Side>("theirs");
   const contextRef = useRef<string[]>([]);
   const idRef = useRef(0);
   // Monotonic utterance sequence + newest rendered seq: a slow lookup that
@@ -164,15 +166,30 @@ export function LiveShell(): JSX.Element {
   const voiceOnRef = useRef(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
-  const speechQueueRef = useRef<{ text: string; direction: Direction; queuedAt: number }[]>([]);
+  const speechQueueRef = useRef<{ text: string; languages: PairDirection; queuedAt: number }[]>(
+    []
+  );
   const playingRef = useRef(false);
 
+  // The pair, the pill row and the sheet — the same ones /translate draws
+  // (components/LanguagePicker.tsx). [mine, theirs]: on /live YOU are the
+  // listener, so the summaries come out in `mine` and the room speaks
+  // `theirs`. That is the opposite direction from /translate and it is why
+  // the persisted pair is worth having here: a phone left on [en, it] after
+  // ordering dinner is already right for following that same table.
+  const { pair, mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
+
+  // Every streaming callback below reads the languages through refs, never
+  // through the render closure. That is deliberate: it keeps their identities
+  // stable, so changing a language never re-creates the recognizer's handlers
+  // or re-arms the flush/watchdog intervals mid-conversation.
+  const pairRef = useRef<readonly [PairLangCode, PairLangCode]>(pair);
   useEffect(() => {
-    directionRef.current = direction;
-  }, [direction]);
+    pairRef.current = pair;
+  }, [pair]);
   useEffect(() => {
-    targetRef.current = target;
-  }, [target]);
+    sideRef.current = side;
+  }, [side]);
   useEffect(() => {
     engineRef.current = engine;
   }, [engine]);
@@ -219,19 +236,12 @@ export function LiveShell(): JSX.Element {
     playingRef.current = true;
     setSpeakingConcept(true);
 
-    fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: next.text, latency: "flash", ...TTS_LANGS[next.direction] })
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const p = (await res.json().catch(() => ({}))) as { error?: string; details?: string };
-          throw new Error(p.details || p.error || "Voice playback failed.");
-        }
-        return res.blob();
-      })
+    requestSpeech({ text: next.text, latency: "flash", ...next.languages })
       .then((blob) => {
+        // null = text only (lib/tts/speech.ts). The feed already has the
+        // concept on screen, which on a tier-2 language IS the whole readout —
+        // so drop it and drain the next one without a word.
+        if (!blob) return;
         if (!voiceOnRef.current) return; // toggled off while the audio was in flight
         const a = ensureAudioEl();
         if (!a) return;
@@ -262,8 +272,18 @@ export function LiveShell(): JSX.Element {
   const enqueueSpeech = useCallback(
     (text: string) => {
       if (!voiceOnRef.current) return;
+      const languages = pairDirection(pairRef.current, sideRef.current);
+      // Tier 2 (lib/languages/catalog.ts): nothing can say this language, so
+      // it never enters the queue — no request, no wait, no error. The screen
+      // says "text only" on the voice button so this was never a surprise.
+      // The SUMMARY still reached the feed; only the readout stops, which is
+      // the whole tier-2 bargain on a streaming screen.
+      if (isTextOnlyLanguage(languages.targetLanguage)) return;
       const q = speechQueueRef.current;
-      q.push({ text, direction: directionRef.current, queuedAt: Date.now() });
+      // Snapshot the languages with the text: a queued readout must be spoken
+      // in the language it was summarized into, even if the pair moved while
+      // it waited its turn.
+      q.push({ text, languages, queuedAt: Date.now() });
       while (q.length > MAX_SPEECH_QUEUE) q.shift(); // drop stale, keep newest
       drainSpeechQueue();
     },
@@ -301,7 +321,7 @@ export function LiveShell(): JSX.Element {
     (chunk: string) => {
       const text = chunk.trim();
       if (!text) return;
-      const dir = directionRef.current;
+      const languages = pairDirection(pairRef.current, sideRef.current);
       const context = contextRef.current.slice(-MAX_CONTEXT);
       const seq = (utterSeqRef.current += 1);
       const startedAt = Date.now();
@@ -309,7 +329,7 @@ export function LiveShell(): JSX.Element {
       fetch("/api/live-translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, direction: dir, context })
+        body: JSON.stringify({ text, ...languages, context })
       })
         .then(async (res) => {
           const payload = (await res.json().catch(() => ({}))) as {
@@ -418,7 +438,9 @@ export function LiveShell(): JSX.Element {
     }
 
     const rec = new Ctor();
-    rec.lang = DIRECTIONS[directionRef.current].recognitionLang;
+    // The browser wants BCP-47, the app speaks Whisper's codes
+    // (lib/languages/recognition.ts bridges the two).
+    rec.lang = recognitionTag(pairDirection(pairRef.current, sideRef.current).sourceLanguage);
     rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 1;
@@ -543,7 +565,13 @@ export function LiveShell(): JSX.Element {
     setLastHeard("");
     try {
       const session = await startAmbientLive(
-        { target: targetRef.current, muted: !voiceOnRef.current },
+        // Read out of the ref, not the closure: startAmbient is a useCallback
+        // and this keeps it from being rebuilt on every language change.
+        {
+          target: pairRef.current[0],
+          source: pairRef.current[1],
+          muted: !voiceOnRef.current
+        },
         {
           onState: setAmbientState,
           onError: (msg) => setError({ message: msg, fatal: false }),
@@ -615,6 +643,11 @@ export function LiveShell(): JSX.Element {
 
   const changeEngine = useCallback(
     (next: Engine) => {
+      // The toggle is unrendered when the flag is off, so nothing should be
+      // calling this with "device" — but the guard is here rather than only in
+      // the JSX so that the mode stays unreachable if some other code path
+      // (a deep link, a restored preference, a later refactor) tries.
+      if (next === "device" && !onDeviceAllowed) return;
       if (next === engineRef.current) return;
       // Switching engines stops everything; the user re-taps START.
       stopListening();
@@ -622,27 +655,14 @@ export function LiveShell(): JSX.Element {
       setEngine(next);
       setError(null);
     },
-    [stopAmbient, stopListening]
+    [onDeviceAllowed, stopAmbient, stopListening]
   );
 
-  const changeTarget = useCallback(
-    (next: AmbientTarget) => {
-      if (next === targetRef.current) return;
-      targetRef.current = next;
-      setTarget(next);
-      // Instructions are baked into the session — bounce it for the new target.
-      if (ambientRef.current) {
-        void stopAmbient().then(() => startAmbient());
-      }
-    },
-    [startAmbient, stopAmbient]
-  );
-
-  const changeDirection = useCallback(
-    (next: Direction) => {
-      if (next === directionRef.current) return;
-      directionRef.current = next;
-      setDirection(next);
+  const changeSide = useCallback(
+    (next: Side) => {
+      if (next === sideRef.current) return;
+      sideRef.current = next;
+      setSide(next);
       if (listeningRef.current) {
         stopListening();
         window.setTimeout(() => startListening(), 60);
@@ -650,6 +670,25 @@ export function LiveShell(): JSX.Element {
     },
     [startListening, stopListening]
   );
+
+  // A language change means both engines are pointed at the wrong one: the
+  // ambient session bakes its instructions in at mint time, and the recognizer
+  // bakes its BCP-47 tag in at construction. Bounce whichever is running —
+  // the same bounce changing the target/direction has always done, now on one
+  // path instead of two. Nothing running (including the restore at mount) is
+  // a no-op: both branches check before they act.
+  const pairKey = `${pair[0]}:${pair[1]}`;
+  const lastPairKeyRef = useRef(pairKey);
+  useEffect(() => {
+    if (lastPairKeyRef.current === pairKey) return;
+    lastPairKeyRef.current = pairKey;
+    if (engineRef.current === "ambient") {
+      if (ambientRef.current) void stopAmbient().then(() => startAmbient());
+    } else if (listeningRef.current) {
+      stopListening();
+      window.setTimeout(() => startListening(), 60);
+    }
+  }, [pairKey, startAmbient, stopAmbient, startListening, stopListening]);
 
   const clearAll = useCallback(() => {
     setFeed([]);
@@ -702,6 +741,18 @@ export function LiveShell(): JSX.Element {
             ? "stopping…"
             : "";
 
+  // The device engine reads its summaries out through /api/tts, so a tier-2
+  // target (lib/languages/catalog.ts) has no voice to offer and the button
+  // should say that rather than sit there claiming "Voice on" over silence.
+  // Ambient AI speaks inside the realtime session and never asks /api/tts, so
+  // it is not subject to this.
+  const spoken = pairDirection(pair, side);
+  const readoutTextOnly = engine === "device" && isTextOnlyLanguage(spoken.targetLanguage);
+  // What the screen is doing right now, as a pair of language names. Ambient
+  // AI always runs room → you; the on-device engine follows the side toggle.
+  const heardLanguage = engine === "ambient" ? theirs : spoken.sourceLanguage;
+  const readLanguage = engine === "ambient" ? mine : spoken.targetLanguage;
+
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
@@ -724,59 +775,72 @@ export function LiveShell(): JSX.Element {
           </p>
         </div>
 
-        {/* Engine toggle */}
-        <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-          {(
-            [
-              ["ambient", "✨ Ambient AI"],
-              ["device", "On-device"]
-            ] as [Engine, string][]
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => changeEngine(key)}
-              className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                engine === key ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* Engine toggle. Off for RC1 (lib/release.ts) — a two-button row with
+            one button is worse than no row: it asks a question the screen has
+            already answered. Ambient AI is simply what /live is. */}
+        {onDeviceAllowed ? (
+          <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
+            {(
+              [
+                ["ambient", "✨ Ambient AI"],
+                ["device", "On-device"]
+              ] as [Engine, string][]
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => changeEngine(key)}
+                className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                  engine === key ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
-        {/* Ambient: target language · Device: direction */}
-        {engine === "ambient" ? (
+        {/* The languages. Same row and same sheet as /translate, pointed the
+            other way round: here the solid pill is what you are LISTENING to
+            and your own outlined pill is what you read. Tap your own to swap
+            sides. The line underneath spells the direction out so nobody has
+            to infer it from which pill is filled in. */}
+        <LanguagePillRow
+          pills={pills}
+          selected={theirs}
+          paired={mine}
+          caption="Around you · A tu alrededor"
+          sheetOpen={sheetOpen}
+          onSelect={selectLanguage}
+          onOpenSheet={() => setSheetOpen(true)}
+        />
+        <p className="-mt-2 text-xs text-amber-100/50">
+          {languageNative(heardLanguage)} → {languageNative(readLanguage)}
+          {readoutTextOnly ? " · text only · solo texto" : ""}
+        </p>
+
+        {/* On-device only: who is talking. Ambient AI hears the whole room. */}
+        {engine === "device" ? (
           <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-            {(Object.keys(TARGETS) as AmbientTarget[]).map((t) => (
+            {(
+              [
+                ["theirs", `Them · Ellos (${theirs.toUpperCase()} → ${mine.toUpperCase()})`],
+                ["mine", `Me · Yo (${mine.toUpperCase()} → ${theirs.toUpperCase()})`]
+              ] as [Side, string][]
+            ).map(([key, label]) => (
               <button
-                key={t}
+                key={key}
                 type="button"
-                onClick={() => changeTarget(t)}
+                onClick={() => changeSide(key)}
                 className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                  target === t ? "bg-emerald-400 text-stone-950" : "text-amber-100/70"
+                  side === key ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
                 }`}
               >
-                {TARGETS[t]}
+                {label}
               </button>
             ))}
           </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-            {(Object.keys(DIRECTIONS) as Direction[]).map((dir) => (
-              <button
-                key={dir}
-                type="button"
-                onClick={() => changeDirection(dir)}
-                className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                  direction === dir ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-                }`}
-              >
-                {DIRECTIONS[dir].label}
-              </button>
-            ))}
-          </div>
-        )}
+        ) : null}
 
         {/* Unsupported-browser notice (device engine only) */}
         {engine === "device" && !supported ? (
@@ -809,14 +873,22 @@ export function LiveShell(): JSX.Element {
               <button
                 type="button"
                 onClick={toggleVoice}
-                aria-pressed={voiceOn}
+                aria-pressed={voiceOn && !readoutTextOnly}
+                disabled={readoutTextOnly}
+                title={readoutTextOnly ? TEXT_ONLY_TITLE : undefined}
                 className={`rounded-full border px-3 py-1 text-[11px] normal-case tracking-normal transition ${
-                  voiceOn
+                  voiceOn && !readoutTextOnly
                     ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
                     : "border-white/10 bg-white/5 text-amber-100/70"
                 }`}
               >
-                {voiceOn ? (speakingConcept ? "🔊 Voice · speaking" : "🔊 Voice on") : "🔇 Voice off"}
+                {readoutTextOnly
+                  ? "🔇 Text only"
+                  : voiceOn
+                    ? speakingConcept
+                      ? "🔊 Voice · speaking"
+                      : "🔊 Voice on"
+                    : "🔇 Voice off"}
               </button>
               {feed.length > 0 ? (
                 <button
@@ -930,6 +1002,15 @@ export function LiveShell(): JSX.Element {
           ) : null}
         </section>
       </div>
+
+      <LanguageSheet
+        open={sheetOpen}
+        selected={theirs}
+        paired={mine}
+        caption="Around you · A tu alrededor"
+        onSelect={selectLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
     </main>
   );
 }
