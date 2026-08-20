@@ -1043,6 +1043,17 @@ export function TranslatorShell({
                   >
                     History · Historial
                   </button>
+                  {/* The quick start, for the person who installed TAOS at a
+                      table and now wants to know what the other pills do. The
+                      share sheet offers it to the person being handed the
+                      app; this offers it to the person doing the handing. */}
+                  <a
+                    href="/guide"
+                    role="menuitem"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    How to use TAOS · Cómo usar
+                  </a>
                   {/* /about is the product page a stranger reads after
                       scanning the QR — Landing.tsx links it, but Landing is
                       only ever shown to logged-OUT visitors, so signing in

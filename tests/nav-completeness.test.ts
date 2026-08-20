@@ -23,7 +23,9 @@ const SURFACES = {
   /** The signed-in home screen — header pills, Together menu, account menu. */
   app: "components/TranslatorShell.tsx",
   /** The logged-out storefront, which is what a QR code opens. */
-  landing: "components/Landing.tsx"
+  landing: "components/Landing.tsx",
+  /** The share sheet: the QR itself, and whatever travels alongside it. */
+  share: "components/QrShareModal.tsx"
 } as const;
 
 /**
@@ -38,6 +40,7 @@ const REACHABLE: Record<string, Array<keyof typeof SURFACES>> = {
   translate: ["app"],
   vision: ["app"],
   about: ["app", "landing"],
+  guide: ["app", "landing"],
   try: ["landing"]
 };
 
@@ -149,6 +152,17 @@ describe("reachable screens are actually linked, with the flags off", () => {
   it("offers Share from the app surface", () => {
     // Share is a button, not an href — it opens QrShareModal in place.
     expect(code(SURFACES.app)).toContain('aria-label="Share TAOS / Compartir TAOS"');
+  });
+
+  it("sends the quick start along with the QR code", () => {
+    // Asserted by constant rather than by href, for the same reason Share is
+    // asserted by aria-label: the sheet renders `href={guideHref}`, so there
+    // is no literal path in this file to grep for. What matters is that the
+    // sheet still carries the guide — handing someone the app and handing
+    // them the instructions is meant to be one gesture.
+    const sheet = code(SURFACES.share);
+    expect(sheet).toContain("GUIDE_PATH");
+    expect(sheet).toContain("GUIDE_TITLE");
   });
 });
 

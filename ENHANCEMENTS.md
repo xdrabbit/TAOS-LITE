@@ -276,6 +276,56 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **/guide — the quick start travels with the QR code** — a bilingual page
+  for the people the app gets handed to. (shipped 2026-08-20, PR #26)
+
+  TAOS goes out by QR code to strangers, and everything they needed to know
+  after scanning it was being explained out loud, once per person, or not at
+  all. /guide is that explanation as a page: install (3 steps), the four ways
+  to talk, photo translation, choosing languages, and what is free.
+
+  Linked from the three places the handoff actually happens — the QR share
+  sheet, so the instructions ride along with the code; the storefront footer,
+  above About, because someone who arrived from a QR code wants to know how to
+  USE it before they want to know what it is; and the account menu, for the
+  person doing the handing.
+
+  **Written against the shipped UI, not against the ask.** Every control it
+  names was read out of the component it lives in, and one of them was a trap:
+  the header pill labelled "Translate" is the TYPING screen, while the
+  microphone screen is the one the app opens on and has no pill at all. A
+  guide that conflates the two sends every reader to the wrong screen on step
+  one — so the first mode is named for its button ("Speak · Hablar") and the
+  typing pill is accounted for by its real name in the footnote. Same care for
+  the rest: photo translation is in the account menu as "Photo translator ·
+  Fotos", the row control is "+ More · Más", text-only languages are marked
+  "Text only · Solo texto", and Call and Video are dark for RC1 so they go
+  unmentioned.
+
+  Bilingual per SECTION rather than per line. The chrome convention is
+  "English · Español" on one line and that stays for headings and for labels
+  already bilingual on screen; paragraphs get /about's treatment instead,
+  because two full sentences joined by a middot is unreadable on a phone and
+  half the group reads the Spanish first.
+
+  tests/guide-page.test.ts fences the four things that rot: both halves
+  present and never identical; fifteen quoted labels asserted present in the
+  guide AND in the component they came from, so a rename fails here instead of
+  stranding a reader in a hotel lobby; the free allowance asserted equal to
+  QUOTAS.free.translations and the language count derived from the catalog;
+  and no personal names, same regex list as /about, applied to the source and
+  its comments too. nav-completeness gained the share sheet as a third nav
+  surface so the next refactor cannot orphan /guide the way /tabletop was.
+
+  Not behind SessionGate — step one of the page is "sign in", so gating it
+  would be a door that asks you to read the sign on the other side. No
+  screenshots: they go stale silently and this page is read over hotel wifi.
+
+  Still owed, and NOT introduced here: /guide deliberately prints no support
+  address. /about already promises support@taoslite.com and that mailbox is
+  still not routed; one unfulfilled promise is enough, so the guide links to
+  /about rather than repeating it.
+
 - **/api/tts was answering strangers** — every route that spends money now
   asks who is calling. (shipped 2026-08-19)
 
