@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { GUIDE_PATH, GUIDE_TITLE } from "@/lib/guide";
 
 // The QR sheet. Two things use it now, and they want the same object for
 // different reasons:
@@ -37,6 +38,8 @@ export interface QrShareModalProps {
   /** A "copy link" button, for a URL nobody could retype from a screen. */
   copyLabel?: string;
   copiedLabel?: string;
+  /** The quick-start link under the code. Pass null to leave it off. */
+  guideHref?: string | null;
 }
 
 export function QrShareModal({
@@ -49,7 +52,8 @@ export function QrShareModal({
   blurb,
   note,
   copyLabel,
-  copiedLabel = "Copied · Copiado"
+  copiedLabel = "Copied · Copiado",
+  guideHref = GUIDE_PATH
 }: QrShareModalProps): JSX.Element | null {
   const [copied, setCopied] = useState(false);
 
@@ -146,6 +150,23 @@ export function QrShareModal({
             >
               {copied ? copiedLabel : copyLabel}
             </button>
+          ) : null}
+
+          {/* The quick start rides along with the code. This sheet is the
+              moment TAOS is handed to someone who has never seen it — across
+              a table, or as a chat invite — and the instructions were being
+              given out loud, once per stranger, or not at all. Opened in a
+              new tab so a half-finished invite (the link above carries a
+              one-use token) is still on screen behind it. */}
+          {guideHref ? (
+            <a
+              href={guideHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 block text-xs text-amber-100/50 underline underline-offset-2"
+            >
+              {GUIDE_TITLE}
+            </a>
           ) : null}
         </div>
       </div>

@@ -269,6 +269,15 @@ export function Landing({ onSignIn }: { onSignIn: () => void }): JSX.Element {
               link is named for what it reaches. It used to reach a signed
               dedication and read "Why we built TAOS"; on 8/19 /about became a
               product page, and the dedication moved to docs/backstory.md. */}
+          {/* The quick start sits above About on purpose: a visitor who got
+              here from a QR code wants to know how to USE it before they want
+              to know what it is. */}
+          <a
+            href="/guide"
+            className="text-sm text-amber-100/70 underline-offset-2 hover:underline"
+          >
+            How to use TAOS · Cómo usar TAOS
+          </a>
           <a
             href="/about"
             className="text-sm text-amber-100/70 underline-offset-2 hover:underline"
