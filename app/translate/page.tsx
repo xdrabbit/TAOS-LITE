@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SessionGate } from "@/components/SessionGate";
 import { TranslateShell } from "@/components/TranslateShell";
 
 export const metadata: Metadata = {
@@ -8,5 +9,9 @@ export const metadata: Metadata = {
 };
 
 export default function TranslatePage(): JSX.Element {
-  return <TranslateShell />;
+  return (
+    <SessionGate>
+      <TranslateShell />
+    </SessionGate>
+  );
 }

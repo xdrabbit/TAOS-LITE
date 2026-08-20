@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { tutorEnabled } from "@/lib/release";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -61,6 +62,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!tutorEnabled()) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+
+  // Azure scoring plus an OpenAI coaching completion, both per request.
+  // POST /api/tutor/realtime has required a session since it was written;
+  // this one is the same feature and was not checking. Now it matches.
+  const guard = await guardSpend(req);
+  if (!guard.ok) return guard.response;
 
   const key = process.env.AZURE_SPEECH_KEY;
   const region = process.env.AZURE_SPEECH_REGION;

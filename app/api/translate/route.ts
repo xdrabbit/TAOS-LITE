@@ -13,6 +13,7 @@ import {
   STT_NO_GUESS_RULE,
   type Tone
 } from "@/lib/translate/prompts";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 // 300s is the max on Vercel Pro. The client per-turn cap (MAX_TURN_DURATION_MS
@@ -203,8 +204,25 @@ async function paraphraseAuto(
   return { detected, translation };
 }
 
+/**
+ * The longest recording an anonymous /try caller may upload.
+ *
+ * Transcription is billed per second of audio, so this is the same kind of
+ * fence as ANON_MAX_CHARS in /api/tts: not a quality limit, a bill limit.
+ * Comfortably above a real /try turn (a sentence or two) and far below the
+ * 5-minute cap a signed-in phone is allowed.
+ */
+const ANON_MAX_AUDIO_BYTES = 4 * 1024 * 1024;
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
+    // Before the key is read and long before OpenAI is called: this route
+    // spends on transcription AND a chat completion per turn, and until 8/19
+    // it asked nobody who they were. `allowAnonymous` is the /try funnel
+    // (components/AtomShell.tsx) — see lib/spendGuard.ts.
+    const guard = await guardSpend(req, { allowAnonymous: true });
+    if (!guard.ok) return guard.response;
+
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
@@ -221,6 +239,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     if (!(audio instanceof File) || audio.size === 0) {
       return NextResponse.json({ error: "An audio recording is required." }, { status: 400 });
+    }
+
+    if (guard.anonymous && audio.size > ANON_MAX_AUDIO_BYTES) {
+      return NextResponse.json(
+        { error: "That recording is too long for the free trial. Please sign in." },
+        { status: 413 }
+      );
     }
 
     // Auto-detect direction: transcribe with no language hint, then let the

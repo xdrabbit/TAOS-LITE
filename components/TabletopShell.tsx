@@ -14,6 +14,7 @@ import { languageNative } from "@/lib/languages/catalog";
 // so a turn's target is the OTHER side of the pair — which is also the code
 // the tier check reads before asking /api/tts for a voice.
 import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
+import { authHeaders } from "@/lib/authClient";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -360,7 +361,11 @@ export function TabletopShell(): JSX.Element {
         form.append("sourceLanguage", side);
         form.append("targetLanguage", otherInPair(pair, side));
         form.append("tone", "casual");
-        const res = await fetch("/api/translate", { method: "POST", body: form });
+        const res = await fetch("/api/translate", {
+          method: "POST",
+          headers: await authHeaders(),
+          body: form
+        });
         const payload = (await res.json().catch(() => ({}))) as {
           original?: string;
           translation?: string;

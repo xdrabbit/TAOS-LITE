@@ -6,6 +6,7 @@ import {
 } from "@/lib/tts/voice";
 import { PERSONAL_VOICE_HEADER, personalVoiceUnlocked } from "@/lib/tts/personalVoice";
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
+import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -117,8 +118,28 @@ async function openai(text: string): Promise<NextResponse> {
   return audioResponse(await res.arrayBuffer());
 }
 
+/**
+ * The most an anonymous /try caller may ask to have spoken in one request.
+ *
+ * A turn on /try is a sentence or two. This is not a quality limit, it is a
+ * bill limit: TTS is priced per character, so an unbounded `text` from an
+ * unauthenticated caller is an unbounded invoice.
+ */
+const ANON_MAX_CHARS = 1000;
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
+    // FIRST, before the body is even read and long before a provider is
+    // called. Until 8/19 this route answered anyone — a bare curl got 14KB of
+    // ElevenLabs audio off Tom's card (ship report cdf9f02a).
+    //
+    // `allowAnonymous` is the /try funnel (components/AtomShell.tsx), which is
+    // supposed to work without an account; lib/spendGuard.ts describes what
+    // that costs and what it does not buy. Everything expensive on this route
+    // stays behind a real session — see the engine check below.
+    const guard = await guardSpend(req, { allowAnonymous: true });
+    if (!guard.ok) return guard.response;
+
     const body = (await req.json().catch(() => ({}))) as {
       text?: string;
       engine?: string;
@@ -135,6 +156,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     if (!text) {
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
+    }
+
+    // What the /try funnel is allowed to buy: OpenAI's voice, a sentence at a
+    // time. ElevenLabs costs several times more per character and is the only
+    // engine that can reach the clones at all, so it takes an account — which
+    // is also what the free tier already promises on screen (a plain OpenAI
+    // voice; the paid app uses the cloned voices). Refused rather than
+    // silently downgraded: quietly answering in a different voice than the
+    // caller asked for is how a "why does it sound wrong?" report is born.
+    if (guard.anonymous) {
+      if (engine !== "openai") {
+        return NextResponse.json({ error: SIGN_IN_REQUIRED }, { status: 401 });
+      }
+      if (text.length > ANON_MAX_CHARS) {
+        return NextResponse.json(
+          { error: "That is too long for the free trial. Please sign in." },
+          { status: 413 }
+        );
+      }
     }
 
     // Tier 2 (lib/languages/catalog.ts): no engine wired up here can speak

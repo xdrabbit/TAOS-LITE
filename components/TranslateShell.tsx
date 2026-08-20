@@ -8,6 +8,7 @@ import { languageNative } from "@/lib/languages/catalog";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { pairDirection, type PairSide } from "@/lib/translate/pair";
+import { jsonAuthHeaders } from "@/lib/authClient";
 
 // ── /translate: manual typing surface with personalized predictive autocomplete
 // A companion to /live's voice follow-along. You TYPE; a prediction model trained
@@ -132,7 +133,7 @@ export function TranslateShell(): JSX.Element {
     try {
       const res = await fetch("/api/text-translate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await jsonAuthHeaders(),
         body: JSON.stringify({ text, sourceLanguage, targetLanguage })
       });
       const payload = (await res.json().catch(() => ({}))) as {

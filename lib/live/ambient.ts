@@ -1,6 +1,7 @@
 "use client";
 
 import type { LanguageCode } from "@/lib/languages/catalog";
+import { jsonAuthHeaders } from "@/lib/authClient";
 
 // WebRTC client for /live "Ambient AI" mode. Streams the mic continuously to a
 // GA Realtime session (minted by POST /api/live/realtime) whose only job is to
@@ -195,7 +196,7 @@ export async function startAmbientLive(
     setState("minting");
     const mintRes = await fetch("/api/live/realtime", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await jsonAuthHeaders(),
       body: JSON.stringify({ target: config.target, source: config.source })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;

@@ -14,6 +14,7 @@ import { recognitionTag } from "@/lib/languages/recognition";
 import { languageNative } from "@/lib/languages/catalog";
 import { pairDirection, type PairDirection, type PairLangCode, type PairSide } from "@/lib/translate/pair";
 import { onDeviceSttEnabled } from "@/lib/release";
+import { jsonAuthHeaders } from "@/lib/authClient";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -326,11 +327,14 @@ export function LiveShell(): JSX.Element {
       const seq = (utterSeqRef.current += 1);
       const startedAt = Date.now();
 
-      fetch("/api/live-translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, ...languages, context })
-      })
+      jsonAuthHeaders()
+        .then((headers) =>
+          fetch("/api/live-translate", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ text, ...languages, context })
+          })
+        )
         .then(async (res) => {
           const payload = (await res.json().catch(() => ({}))) as {
             concept?: string;

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SessionGate } from "@/components/SessionGate";
 import { TabletopShell } from "@/components/TabletopShell";
 
 export const metadata: Metadata = {
@@ -10,5 +11,9 @@ export const metadata: Metadata = {
 export default function TabletopPage(): JSX.Element {
   // Customer-facing since 8/19 — no longer behind <FounderGate>. See the
   // /tabletop note in lib/release.ts for why it came out of HELD_BACK_V1.
-  return <TabletopShell />;
+  return (
+    <SessionGate>
+      <TabletopShell />
+    </SessionGate>
+  );
 }

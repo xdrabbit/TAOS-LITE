@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SessionGate } from "@/components/SessionGate";
 import { LiveShell } from "@/components/LiveShell";
 
 export const metadata: Metadata = {
@@ -8,5 +9,9 @@ export const metadata: Metadata = {
 };
 
 export default function LivePage(): JSX.Element {
-  return <LiveShell />;
+  return (
+    <SessionGate>
+      <LiveShell />
+    </SessionGate>
+  );
 }
