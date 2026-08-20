@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildTurnInstructions, type TabletopDirection } from "@/lib/tabletop/instructions";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -12,6 +13,9 @@ export const maxDuration = 30;
 // cloned voices. The session outlives turns: the client swaps direction
 // per turn with session.update and detaches the mic track between turns so
 // idle table time doesn't stream (or bill) silence.
+//
+// SIGNED-IN ONLY since 8/19 (ship report cdf9f02a): a minted client secret is
+// a live, billing Realtime session, and every cap on it is client-side.
 
 const CLIENT_SECRETS_URL =
   process.env.OPENAI_REALTIME_CLIENT_SECRETS_URL ??
@@ -20,6 +24,9 @@ const CALLS_URL =
   process.env.OPENAI_REALTIME_CALLS_URL ?? "https://api.openai.com/v1/realtime/calls";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const guard = await guardSpend(req);
+  if (!guard.ok) return guard.response;
+
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(

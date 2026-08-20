@@ -25,6 +25,7 @@ import {
 import { requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { Paywall } from "./Paywall";
+import { authHeaders } from "@/lib/authClient";
 
 // Every drill is said in English — the learner's job is to produce it. Named
 // so the tier check in hear() reads a language instead of assuming one.
@@ -313,7 +314,11 @@ function Drills({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JS
       form.append("audio", wav, "attempt.wav");
       form.append("referenceText", drill.en);
       form.append("language", "en-US");
-      const res = await fetch("/api/tutor/assess", { method: "POST", body: form });
+      const res = await fetch("/api/tutor/assess", {
+        method: "POST",
+        headers: await authHeaders(),
+        body: form
+      });
       const payload = (await res.json().catch(() => ({}))) as AssessResult;
       if (!res.ok && !payload.configured) {
         throw new Error(payload.error || "Scoring failed.");

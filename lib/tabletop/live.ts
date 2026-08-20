@@ -1,6 +1,7 @@
 "use client";
 
 import { buildTurnInstructions, type TabletopDirection } from "./instructions";
+import { jsonAuthHeaders } from "@/lib/authClient";
 
 // WebRTC client for /tabletop "live" mode. One persistent GA Realtime session
 // (minted by POST /api/tabletop/realtime) translates push-to-talk turns as
@@ -148,7 +149,7 @@ export async function startTabletopLive(
     // table's real opening direction just saves the first turn one update.
     const mintRes = await fetch("/api/tabletop/realtime", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await jsonAuthHeaders(),
       body: JSON.stringify(openingDirection)
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;

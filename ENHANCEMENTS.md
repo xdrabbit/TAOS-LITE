@@ -98,6 +98,10 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   3. Land the cost guards above — the client-side duration cap in
      lib/call/interpreter.ts is on the wrong side of the wire for an
      unauthenticated minting route.
+     → The AUTH half is done (see Shipped, 8/19): POST /api/call/realtime
+       now requires a session on top of the 404. The DURATION cap is still
+       client-side and still owed — auth says who may start a call, not how
+       long it may bill.
   4. Two phones, two networks, one real conversation.
   Flag on restores the *previous* behavior exactly, founders gate included —
   it does not ship /call to customers. Nothing was deleted.
@@ -271,6 +275,52 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **/api/tts was answering strangers** — every route that spends money now
+  asks who is calling. (shipped 2026-08-19)
+
+  Found by a bare curl in the v1.0.0 ship report (cdf9f02a): POST /api/tts on
+  production returned 14KB of ElevenLabs audio to a request with no session,
+  no cookie and no header. A public URL on Tom's card. /api/translate
+  (transcription + a chat completion per turn) was the same, and so was every
+  realtime **minting** route — which is worse, because what those hand back is
+  a live OpenAI Realtime session that goes on billing long after the response.
+
+  Thirteen routes reach a paid provider. Eleven of them now require a Supabase
+  session and refuse without one **before** the provider is called — a 401
+  returned after paying ElevenLabs is the same bill with better manners, so
+  every test asserts the provider was never reached, not merely the status.
+  Six needed the guard added (`/api/tts`, `/api/translate`,
+  `/api/live-translate`, `/api/text-translate`, `/api/live/realtime`,
+  `/api/tabletop/realtime`, plus `/api/call/realtime` and `/api/tutor/assess`
+  behind their RC1 flags); the rest already had it.
+
+  **The front door stays open.** "Try it now, no signup" (/try) is the funnel
+  and is *supposed* to work without an account, so `/api/tts` and
+  `/api/translate` take a second path: a same-origin check against the
+  existing allow-list in lib/authRedirect.ts, a tight per-IP rate limit
+  (10/min, 60/hr, plus a per-instance hourly cap), and a ceiling on what may
+  be asked for. Be honest about what that is worth — an Origin header is
+  forgeable and the counters are per-instance — which is exactly why the
+  anonymous path reaches only the CHEAP engine. ElevenLabs, the clones, and
+  every realtime session take a real session, no exception. That also matches
+  what the free tier already promises on screen: a plain OpenAI voice.
+
+  Three screens (/live, /tabletop, /translate) rendered fine signed out
+  because their routes used to let anyone through. They now sit behind
+  `<SessionGate>` — the sibling of `<FounderGate>` — so a signed-out visitor
+  gets the sign-in screen instead of a working-looking UI that 401s on first
+  tap. That is the 8/13 field report /vision was built from, and these three
+  had quietly never learned it.
+
+  The guard lives in `lib/spendGuard.ts`; the browser half is
+  `lib/authClient.ts`. tests/spend-guard.test.ts pins all of it, and its last
+  block is a **sweep**: it reads every route off disk, decides which ones
+  spend money (by provider hostname, API-key name, *and* helper import — the
+  first draft grepped hostnames only and reported the two routes that spend
+  through lib/translateProvider.ts as free), and fails if one of them lacks a
+  guard. The original bug was a route nobody remembered was public; a list
+  written by hand today would not catch the next one.
 
 - **The storefront stops selling what the app has switched off** — pricing
   copy labelled for the v1.0.0 launch, the last thing between TAOS and a live

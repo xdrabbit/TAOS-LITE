@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildInterpreterInstructions } from "@/lib/live/instructions";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -9,9 +10,15 @@ export const maxDuration = 30;
 // Realtime session that listens to ambient conversation (dinner, TV, movie —
 // any language, any number of voices) and speaks/writes ultra-short micro-
 // summaries in the target language. Same GA endpoints as the tutor
-// (app/api/tutor/realtime); unauthenticated to match the rest of the /live
-// surface (/api/live-translate, /api/tts) — cost is bounded client-side by the
-// session cap + idle auto-off in lib/live/ambient.ts.
+// (app/api/tutor/realtime).
+//
+// SIGNED-IN ONLY since 8/19. It used to be unauthenticated "to match the rest
+// of the /live surface", and the rest of that surface turned out to be the
+// problem rather than the precedent (ship report cdf9f02a). Minting is the
+// worst place to be open: what this returns is a live OpenAI Realtime session
+// that goes on billing after the response, and the only cap on it — the
+// session limit and idle auto-off in lib/live/ambient.ts — is client-side,
+// which is the wrong side of the wire from anyone who skipped the client.
 
 const CLIENT_SECRETS_URL =
   process.env.OPENAI_REALTIME_CLIENT_SECRETS_URL ??
@@ -20,6 +27,9 @@ const CALLS_URL =
   process.env.OPENAI_REALTIME_CALLS_URL ?? "https://api.openai.com/v1/realtime/calls";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const guard = await guardSpend(req);
+  if (!guard.ok) return guard.response;
+
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(

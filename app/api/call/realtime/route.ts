@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callEnabled } from "@/lib/release";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -10,8 +11,11 @@ export const maxDuration = 30;
 // into the listener's language, spoken + captioned. Unlike /api/live/realtime
 // (ambient micro-summaries), this is a faithful full interpreter: a 1:1 call
 // has one clean voice, so completeness wins over compression.
-// Unauthenticated to match the rest of the /live-family surface; cost is
-// bounded client-side by the call-duration cap in lib/call/interpreter.ts.
+// SIGNED-IN ONLY since 8/19 (ship report cdf9f02a), on top of the RC1 flag
+// below. The duration cap in lib/call/interpreter.ts is client-side, which
+// ENHANCEMENTS.md already called "the wrong side of the wire for an
+// unauthenticated minting route" — this closes the auth half of that note.
+// The server-side cost guards it also asks for are still owed.
 
 const CLIENT_SECRETS_URL =
   process.env.OPENAI_REALTIME_CLIENT_SECRETS_URL ??
@@ -44,15 +48,16 @@ function buildCallInterpreterInstructions(target: TargetLang): string {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  // RC1: /call is off (lib/release.ts). The page redirects home, but this
-  // route is reachable on its own and it is unauthenticated by design — and
-  // it mints a paid realtime session with no server-side duration cap (the
-  // cap lives in the client, lib/call/interpreter.ts, which is exactly the
-  // wrong side of the wire for a screen nobody is supposed to be on). A
-  // disabled feature should cost nothing: answer as if the route didn't exist.
+  // RC1: /call is off (lib/release.ts). A disabled feature should cost
+  // nothing, so this stays first: answer as if the route didn't exist, before
+  // any work at all. The auth check below is what protects it if the flag ever
+  // goes back on.
   if (!callEnabled()) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+
+  const guard = await guardSpend(req);
+  if (!guard.ok) return guard.response;
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {

@@ -10,6 +10,7 @@ import {
   resolveTextLanguages,
   SAME_LANGUAGE
 } from "@/lib/translate/textRequest";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 
@@ -99,6 +100,12 @@ async function translateAuto(
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // A chat completion per call, so: a session, first, before the key is even
+  // read. No anonymous path — the /try funnel does not use this route (it
+  // speaks, via /api/translate), so nothing legitimate reaches here signed out.
+  const guard = await guardSpend(req);
+  if (!guard.ok) return guard.response;
+
   const apiKey = getOpenAIKey();
   if (!apiKey) {
     return NextResponse.json(

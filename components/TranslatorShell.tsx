@@ -25,6 +25,7 @@ import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callEnabled, isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
+import { authHeaders } from "@/lib/authClient";
 
 // The pair's languages, its storage, and the tap rule all live in
 // lib/translate/pair.ts — /vision reads the same saved pair to decide what
@@ -758,7 +759,7 @@ export function TranslatorShell({
       // pipeline. The timeout comfortably exceeds the server's upstream caps.
       const res = await fetchWithRetry(
         "/api/translate",
-        { method: "POST", body: form },
+        { method: "POST", headers: await authHeaders(), body: form },
         { retries: 1, timeoutMs: 210000 }
       );
       const payload = (await res.json().catch(() => ({}))) as {

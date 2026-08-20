@@ -7,6 +7,7 @@ import {
 import { languageLabel } from "@/lib/languages/catalog";
 import { buildConceptInstructions } from "@/lib/live/instructions";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
+import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
 
@@ -40,6 +41,11 @@ function parseContext(value: unknown): string[] {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // One chat completion per spoken chunk — /live fires these continuously, so
+  // an open door here bills faster than any other route in the app.
+  const guard = await guardSpend(req);
+  if (!guard.ok) return guard.response;
+
   const apiKey = getOpenAIKey();
   if (!apiKey) {
     return NextResponse.json(

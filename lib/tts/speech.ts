@@ -17,6 +17,7 @@
 
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { personalVoiceHeaders } from "./personalVoiceClient";
+import { authHeaders } from "@/lib/authClient";
 
 /**
  * The one sentence the app says about a tier-2 language, in both households'
@@ -80,10 +81,23 @@ export async function requestSpeech(
   const { fetch: fetchImpl = fetch, failureMessage = "Voice playback failed." } = options;
   const res = await fetchImpl("/api/tts", {
     method: "POST",
-    // The personal-voice code, when this phone has one: it is what makes
-    // /api/tts eligible to answer in Tom's or Liz's clone. Absent (every
-    // borrowed or shared phone) the reply is the standard voice.
-    headers: { "Content-Type": "application/json", ...personalVoiceHeaders() },
+    // Three separate things travel in these headers, and they are not
+    // interchangeable:
+    //   Authorization  — WHO is asking. /api/tts spends money and since 8/19
+    //                    refuses a stranger (lib/spendGuard.ts). Every screen
+    //                    that calls requestSpeech is behind sign-in, so this
+    //                    is always present in practice; /try does not come
+    //                    through here (it posts to /api/tts directly, on the
+    //                    anonymous allowance).
+    //   personal voice — WHICH voice they may have: the code that makes this
+    //                    phone eligible for Tom's or Liz's clone. Absent on
+    //                    every borrowed or shared phone, and then the reply is
+    //                    the standard voice.
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+      ...personalVoiceHeaders()
+    },
     // undefined fields drop out of JSON.stringify, so a caller that has no
     // opinion about a language sends no key and the server keeps its own.
     body: JSON.stringify(req)
