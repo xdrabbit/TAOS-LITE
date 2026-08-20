@@ -72,6 +72,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   or turn tutor back on for paying tiers only. This was the exact reason
   tutor was kept in v1 on 8/18 (tests/release.test.ts said so), so pulling
   it reopened the question rather than settling it. (added 2026-08-18)
+  → Answered a third way for v1.0.0 (see Shipped): the line items stay and
+  get labelled from the same flag that hides the screen. The plans are still
+  priced around tutor, so this unblocks charging **for translation** — the
+  question of whether the prices themselves are right once tutor returns is
+  still Tom's to make. (2026-08-19)
 - Chat push notifications (tier 2) — phones buzz when a message lands while
   the app is closed. Planned since chat tier 1 shipped. (added 2026-08-03)
 - Call cost guards — /call bills two realtime sessions the whole time it's
@@ -266,6 +271,47 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **The storefront stops selling what the app has switched off** — pricing
+  copy labelled for the v1.0.0 launch, the last thing between TAOS and a live
+  Stripe charge. (shipped 2026-08-19)
+
+  Tutor was pulled from RC1 on 8/18 for good reasons, but the plans are
+  *priced* around it: Free/Basic/Premium each sold "15 / 45 / 200 tutor
+  minutes / month", the paywall sold +100 and +200 minute add-on packs, and
+  the site title called TAOS an "AI language tutor". With /tutor redirecting
+  home, every one of those sold a screen the customer could not open. The two
+  obvious fixes were both wrong: deleting the line items throws away pricing
+  that comes back next week, and turning tutor on ships the half-built thing
+  RC1 deliberately cut.
+
+  So the copy is labelled instead, and labelled **from the flag** —
+  `tutorComingSoon()` in lib/release.ts is just `!tutorEnabled()`. Every tutor
+  promise reads from it: the two feature cards, all eight plan line items, the
+  hero sentence, the "upgrade for more tutor time" line, the heavy-user
+  footnote, the footer tagline, and the free-plan blurb on the paywall. They
+  render greyed with a **Coming soon · Próximamente** badge (bilingual, like
+  the /about link — the storefront gets handed to strangers by QR). Nobody has
+  to remember to un-edit anything: `NEXT_PUBLIC_ENABLE_TUTOR=1` lifts the
+  labels, restores the ✓ ticks and brings back the nav link in one redeploy.
+
+  Two places took a different treatment, both on purpose:
+
+  - **The add-on minute packs are withheld, not badged.** They are the only
+    tutor promise on the paywall that moves money. A "coming soon" badge next
+    to a button that still charges $9.99 is worse than no badge — so the buy
+    buttons render only when tutor is on, with a note in their place.
+    `startPackCheckout` and the Stripe price objects are untouched.
+  - **The site title and description swap wholesale**, because a `<title>` is
+    the one surface a badge cannot sit on. Both wordings live in layout.tsx
+    behind `tutorEnabled()`; the tutor version is not deleted, just not
+    selected. The shipping title describes what the build does today:
+    "Real-time translation for the people in front of you".
+
+  tests/release.test.ts pins the rule rather than the strings — it asserts the
+  tags and the flag wiring, not that a given sentence is on screen, because a
+  string assertion would pass equally against copy someone hand-edited and
+  would go stale the week tutor returns.
 
 - **Table comes back to the nav, and the nav gets a fence** — Tom, 8/19, on
   the Droid walkthrough: the header read Live · Chat · Translate and there was

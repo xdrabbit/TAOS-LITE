@@ -4,10 +4,11 @@
 //
 // Tutor was in that list until RC1 — the paid plans sell tutor minutes, so
 // hiding it makes the pricing page write a cheque the app cannot cash. That
-// is a real and still-open problem: Landing.tsx and Paywall.tsx advertise
-// "15 / 45 / 200 tutor minutes / month" on every plan. Nobody should be
-// charged for those until either tutor comes back or the plans stop selling
-// it. See tutorEnabled() below and the RC1 note in ENHANCEMENTS.md.
+// held up charging anyone until v1.0.0, when tutorComingSoon() below started
+// labelling every tutor promise on Landing.tsx, Paywall.tsx and layout.tsx
+// off the same flag that hides the screen. The plans still sell the minutes,
+// because tutor comes back and they are priced around it — they just no
+// longer sell them as something available today.
 //
 // Everything else is HELD BACK behind the founders gate below — the pages
 // still exist and work, but show "Coming soon" to anyone who isn't a founder,
@@ -55,6 +56,32 @@ export const HELD_BACK_V1 = ["call", "video"] as const;
 export function tutorEnabled(): boolean {
   const flag = (process.env.NEXT_PUBLIC_ENABLE_TUTOR ?? "").trim().toLowerCase();
   return flag === "1" || flag === "true";
+}
+
+// The pricing copy is the other half of that flag, and it was the open
+// objection to pulling tutor at all: the plans sell "15 / 45 / 200 tutor
+// minutes / month" and the add-on packs sell more of them, so with tutor dark
+// the storefront was writing a cheque the app could not cash. Stripe goes
+// live now, which turns that from an inconsistency into a customer paying for
+// a screen they cannot open.
+//
+// The answer is not to delete the tutor line items — tutor comes back next
+// week and the plans are priced around it. It is to label every one of them,
+// from the same flag, so the labels vanish on their own the moment
+// NEXT_PUBLIC_ENABLE_TUTOR=1 lands. Nobody has to remember to un-edit copy.
+//
+// Landing.tsx, Paywall.tsx and layout.tsx are the three surfaces that promise
+// tutor; tests/release.test.ts pins that none of them promise it unlabelled
+// while the flag is off. Bilingual because the storefront is handed to
+// strangers by QR code, and half of them read the Spanish side first — the
+// same reason the /about link says "About TAOS · Acerca de TAOS".
+export const COMING_SOON = "Coming soon · Próximamente";
+
+// True when a tutor-dependent promise needs the label above. Tutor-dependent
+// includes the drills and the progress tracking: both live inside /tutor, so
+// they went dark with it.
+export function tutorComingSoon(): boolean {
+  return !tutorEnabled();
 }
 
 // /call is off for RC1 the way tutor is off: dark to everyone, founders

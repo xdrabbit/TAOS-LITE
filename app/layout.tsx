@@ -1,9 +1,20 @@
 import type { Metadata, Viewport } from "next";
+import { tutorEnabled } from "@/lib/release";
 import "./globals.css";
 
-const TITLE = "TAOS — Real-time translation & AI language tutor";
-const DESCRIPTION =
-  "Speak and be understood instantly, then learn the language with an AI tutor that talks back and fixes your pronunciation.";
+// The site title and description are the first promise TAOS makes — they are
+// what a shared link and a search result show — so they describe what the
+// build actually does. Tutor is gated off (lib/release.ts), and a page title
+// is the one surface where a "Coming soon" badge cannot go, so these swap for
+// the shipping-today wording instead of carrying a label. Both halves stay in
+// the file: flip NEXT_PUBLIC_ENABLE_TUTOR=1 and the tutor wording returns with
+// the screen, the nav link and the pricing ticks, in one redeploy.
+const TITLE = tutorEnabled()
+  ? "TAOS — Real-time translation & AI language tutor"
+  : "TAOS — Real-time translation for the people in front of you";
+const DESCRIPTION = tutorEnabled()
+  ? "Speak and be understood instantly, then learn the language with an AI tutor that talks back and fixes your pronunciation."
+  : "Speak and be understood instantly — live two-way voice translation in 100 languages, for the person across the table.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://taoslite.com"),

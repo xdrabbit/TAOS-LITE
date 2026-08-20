@@ -6,6 +6,7 @@ import {
   HELD_BACK_V1,
   isFounder,
   onDeviceSttEnabled,
+  tutorComingSoon,
   tutorEnabled
 } from "@/lib/release";
 
@@ -23,10 +24,13 @@ import {
 // sell tutor minutes and holding it back would make the pricing page a lie.
 // Tom pulled it from RC1 on 8/18: it is unfinished and is planned as a premium
 // feature, so it now hides behind tutorEnabled() (off by default) rather than
-// behind the founders gate — nobody sees it, founders included. The pricing
-// objection was not answered, only overruled: Landing.tsx and Paywall.tsx
-// still advertise tutor minutes on every plan. That is tracked in
-// ENHANCEMENTS.md and must be settled before anyone is charged.
+// behind the founders gate — nobody sees it, founders included. That left the
+// pricing objection open, and v1.0.0 (8/19) is the release that answers it:
+// every tutor promise on Landing.tsx, Paywall.tsx and layout.tsx now reads
+// from tutorComingSoon(), so the storefront labels what it cannot yet deliver
+// and un-labels it the moment the flag flips. The block at the bottom of this
+// file pins that, because the failure it prevents is a live Stripe charge for
+// a screen the customer cannot open.
 //
 // Changing any of this is a product decision: get Tom's say-so and update
 // lib/release.ts and this test in the same PR.
@@ -261,5 +265,71 @@ describe("callEnabled (RC1: /call is dark)", () => {
     }
     // ...and the gate is really there, so the loop above is not vacuous.
     expect(read("components/TranslatorShell.tsx")).toContain("callEnabled() ? (");
+  });
+});
+
+// The pricing-copy fence (v1.0.0, 8/19). Stripe went live with tutor gated
+// off, so the plans sell minutes nobody can spend yet. The rule is not "delete
+// the tutor line items" — tutor comes back and the plans are priced around it
+// — it is "never promise one unlabelled while the flag is off".
+//
+// These read the source rather than render the components: the point is that
+// the label is wired to the FLAG, not that some particular string is on screen
+// today. A rendered assertion would pass just as well against copy someone had
+// hand-edited to say "coming soon", which is the version that goes stale the
+// week tutor returns.
+describe("pricing copy does not sell a gated tutor (v1.0.0)", () => {
+  it("tracks tutorEnabled, so the labels lift by themselves", () => {
+    delete process.env.NEXT_PUBLIC_ENABLE_TUTOR;
+    expect(tutorComingSoon()).toBe(true);
+    process.env.NEXT_PUBLIC_ENABLE_TUTOR = "1";
+    expect(tutorComingSoon()).toBe(false);
+  });
+
+  it("labels every tutor line item on both pricing surfaces", () => {
+    // Each tutor-dependent feature is tagged `tutor: true` in the plan data
+    // and rendered through that tag. Counting them is what catches a fourth
+    // line item added later without the tag.
+    for (const path of ["components/Landing.tsx", "components/Paywall.tsx"]) {
+      const src = read(path);
+      expect(src).toContain("tutorComingSoon");
+      expect(src).toContain("COMING_SOON");
+
+      // Every "N tutor minutes" and every drills/progress line carries the tag.
+      const tutorLines = src
+        .split("\n")
+        .filter((l) => /tutor minutes|Drills [&+]|minute packs/.test(l) && l.includes("text:"));
+      expect(tutorLines.length).toBeGreaterThan(0);
+      for (const line of tutorLines) expect(line).toContain("tutor: true");
+    }
+  });
+
+  it("withholds the add-on minute packs rather than labelling a live charge", () => {
+    // The packs are the only tutor promise on the paywall that moves money.
+    // A badge next to a button that still charges $9.99 is not honesty, so
+    // the buy buttons render only when tutor is actually on.
+    const src = read("components/Paywall.tsx");
+    expect(src).toContain("isPaid && !comingSoon ? (");
+    // startPackCheckout stays wired — this withholds the button, it does not
+    // rip out the feature or touch the Stripe price objects.
+    expect(src).toContain("startPackCheckout");
+  });
+
+  it("does not call TAOS an AI language tutor in the site metadata", () => {
+    // The title and description are the one surface a badge cannot sit on,
+    // so they swap wholesale — but both halves stay, behind the same flag.
+    const src = read("app/layout.tsx");
+    expect(src).toContain("tutorEnabled()");
+    const titleLine = src.split("\n").find((l) => l.includes("const TITLE"));
+    expect(titleLine).toContain("tutorEnabled()");
+    // The tutor wording is still in the file, ready for the flag.
+    expect(src).toContain("AI language tutor");
+  });
+
+  it("ships the footer version as v1.0.0", () => {
+    // The prod footer reads "v1.0.0 · <sha>"; the smoke test after a deploy is
+    // "does the footer show the sha I just merged", which needs the version
+    // bumped in the same PR as the release.
+    expect(read("lib/version.ts")).toContain('APP_VERSION = "1.0.0"');
   });
 });

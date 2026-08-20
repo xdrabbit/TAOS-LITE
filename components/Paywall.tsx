@@ -1,28 +1,42 @@
 "use client";
 
 import { useState } from "react";
+import { COMING_SOON, tutorComingSoon } from "@/lib/release";
 import { startCheckout, startPackCheckout, supabase, type Tier } from "@/lib/supabase";
 
 interface Plan {
   id: "basic" | "premium";
   name: string;
   price: string;
-  features: string[];
+  features: { text: string; tutor?: boolean }[];
   highlight?: boolean;
 }
 
+// This is the screen with the Stripe button on it, so it is the one that has
+// to be exactly true. Tutor is gated off (lib/release.ts): the minutes, the
+// drills and the progress tracking all live behind /tutor, so each is flagged
+// `tutor: true` and renders as pending rather than as something the charge
+// buys today. Same flag as the nav — when tutor returns, so does the ✓.
 const PLANS: Plan[] = [
   {
     id: "basic",
     name: "Basic",
     price: "$5.99",
-    features: ["Unlimited translation", "45 tutor minutes / month", "Drills + progress"]
+    features: [
+      { text: "Unlimited translation" },
+      { text: "45 tutor minutes / month", tutor: true },
+      { text: "Drills + progress", tutor: true }
+    ]
   },
   {
     id: "premium",
     name: "Premium",
     price: "$19.99",
-    features: ["Unlimited translation", "200 tutor minutes / month", "Drills + progress"],
+    features: [
+      { text: "Unlimited translation" },
+      { text: "200 tutor minutes / month", tutor: true },
+      { text: "Drills + progress", tutor: true }
+    ],
     highlight: true
   }
 ];
@@ -41,6 +55,7 @@ export function Paywall({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isPaid = currentTier === "basic" || currentTier === "premium";
+  const comingSoon = tutorComingSoon();
 
   // Free users start a new checkout; existing subscribers switch plans in the
   // Stripe billing portal (avoids creating a second subscription).
@@ -98,7 +113,9 @@ export function Paywall({
             <h1 className="text-2xl font-semibold tracking-tight text-amber-200">Choose your plan</h1>
             <p className="mt-1 text-sm text-amber-100/70">
               {currentTier === "free"
-                ? "You're on the free plan (25 translations + 15 tutor min / month)."
+                ? comingSoon
+                  ? "You're on the free plan (25 translations / month). Paid plans lift that limit today."
+                  : "You're on the free plan (25 translations + 15 tutor min / month)."
                 : `You're on ${currentTier === "premium" ? "Premium" : "Basic"}.`}
             </p>
           </div>
@@ -133,9 +150,19 @@ export function Paywall({
                   </span>
                 </div>
                 <ul className="mt-2 flex flex-col gap-1 text-sm text-amber-50/80">
-                  {p.features.map((f) => (
-                    <li key={f}>✓ {f}</li>
-                  ))}
+                  {p.features.map((f) => {
+                    const pending = f.tutor === true && comingSoon;
+                    return (
+                      <li key={f.text} className={pending ? "text-amber-50/45" : undefined}>
+                        {pending ? "·" : "✓"} {f.text}
+                        {pending ? (
+                          <span className="ml-1.5 inline-block whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 align-middle text-[0.65rem] font-medium uppercase tracking-wide text-amber-200/90">
+                            {COMING_SOON}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
                 <button
                   type="button"
@@ -160,7 +187,29 @@ export function Paywall({
           })}
         </div>
 
-        {isPaid ? (
+        {/* Add-on minute packs. Unlike every other tutor promise on this page,
+            this one is not copy — it is a live Stripe charge, and the minutes
+            it sells cannot be spent while /tutor is dark. So the block stays
+            (it is how the packs come back, unchanged, with the flag) but the
+            two buy buttons are withheld rather than labelled: a "coming soon"
+            badge on a button that still charges $9.99 would be worse than no
+            badge at all. The Stripe prices themselves are untouched. */}
+        {isPaid && comingSoon ? (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+            <p className="text-sm font-medium text-amber-100/90">
+              Add-on tutor minute packs{" "}
+              <span className="ml-0.5 inline-block whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 align-middle text-[0.65rem] font-medium uppercase tracking-wide text-amber-200/90">
+                {COMING_SOON}
+              </span>
+            </p>
+            <p className="mt-2 text-xs text-amber-100/40">
+              The +100 and +200 minute packs go on sale when the tutor arrives. Your plan&apos;s
+              unlimited translation is unaffected.
+            </p>
+          </div>
+        ) : null}
+
+        {isPaid && !comingSoon ? (
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
             <p className="text-sm font-medium text-amber-100/90">Need more tutor minutes this month?</p>
             <div className="mt-2 flex gap-2">
