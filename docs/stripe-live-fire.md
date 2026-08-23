@@ -184,6 +184,128 @@ it.
 Cost of the test: **$0.88** — Stripe keeps the processing fee on a refund
 (gross 19.99, fee 0.88, net 19.11; the refund returns 19.99 and refunds no fee).
 
+## The re-test (PR #29): $5.99 Basic, and it has to *stay* paid
+
+PR #29 is merged and live on production as `4f48caa`. It is not proven. The
+2026-08-23 run is what found the race, so the criterion it failed has never
+been met by anything. That is what this run is for, and it is the whole point:
+
+> **SUCCESS = the profile row flips to `tier = 'basic'` and is *still*
+> `tier = 'basic'` at least 60 seconds after the last webhook lands.**
+
+Sixty seconds because the bug was a *late* event. The old handler wrote the
+right answer first and the wrong answer second; a check run too early would
+have called that run a pass. Outlasting the last event is the test.
+
+### Before you start — use the right account
+
+Sign in as **`bestboy32445@gmail.com`**. It is the only account with a
+live-mode customer (`cus_V7f63gEEO3LlWK`), and its row is parked at
+`plan=free, tier=null` — a clean baseline, so a flip is visible.
+
+Do **not** re-test from `xdrabbit@` or `lizmariett@`. Both still carry
+*test-mode* customer ids (`cus_Ujcy…`, `cus_UqSB…`, neither of which exists in
+live mode) and stale `plan=pro` rows left over from test mode. On those rows
+"tier is basic" is already true and proves nothing.
+
+Confirm the baseline first, in the Supabase SQL editor:
+
+```sql
+select id, email, plan, tier, subscription_status, current_period_end, updated_at
+from profiles where email = 'bestboy32445@gmail.com';
+```
+
+Expect `plan=free, tier=null, subscription_status=canceled`. Note `updated_at` —
+it is the "before" clock for everything below.
+
+```bash
+export SK=$(grep -E '^STRIPE_SECRET_KEY=' .env.local | sed -E 's/^STRIPE_SECRET_KEY=//' | tr -d '"'"'"'')
+[[ "$SK" == sk_live_* ]] && echo "live key loaded" || echo "WRONG KEY"
+```
+
+### The purchase
+
+Same as the main run above, with two changes: **Basic $5.99/mo** this time
+(`price_1U70KPHRRKSWY3H546OMw43o`), and no promo code.
+
+### Verify
+
+Checks **1**, **2** and **4** are unchanged from the main run above — session
+is livemode/complete/paid at **599 usd**, every event at `pending_webhooks: 0`,
+and the app drops the paywall. Run them as written.
+
+Check **3** is the one that changed. Instead of reading the row once, read it
+once *now* and again after the event storm is over.
+
+**3a — the flip.** Right after checkout, in the SQL editor:
+
+```sql
+select id, plan, tier, subscription_status,
+       stripe_customer_id, stripe_subscription_id, current_period_end, updated_at
+from profiles where email = 'bestboy32445@gmail.com';
+```
+
+Expect `plan='pro'`, `tier='basic'`, `subscription_status='active'`, and —
+new in PR #29 — a **non-null `current_period_end`** about a month out. That
+null was the second bug: the account's API version moved the billing window
+onto the subscription item, so every sync before #29 stored null. **A non-null
+`current_period_end` is your proof the new code did this write**, not a cached
+old bundle.
+
+**3b — wait out the late event.** This prints the last event's timestamp and
+blocks until 60s past it, re-checking for stragglers as it goes:
+
+```bash
+python3 - <<'PY2'
+import json, os, subprocess, time
+sk = os.environ['SK']          # exported in "Before you start"
+def events():
+    out = subprocess.run(['curl','-s','https://api.stripe.com/v1/events?limit=20',
+                          '-u',f'{sk}:'], capture_output=True, text=True).stdout
+    return json.loads(out).get('data', [])
+seen, last = set(), 0
+while True:
+    evs = events()
+    for e in evs:
+        if e['id'] not in seen:
+            seen.add(e['id'])
+            print(f"  {e['type']:38} pending={e['pending_webhooks']} {e['id']}")
+    newest = max((e['created'] for e in evs), default=0)
+    if newest != last:
+        last = newest
+        print(f"-- newest event at {last}; restarting the 60s clock")
+    quiet = time.time() - last
+    if quiet >= 60:
+        print(f"OK: {int(quiet)}s since the last event, none pending")
+        break
+    time.sleep(10)
+PY2
+```
+
+Any event still at `pending>0` when this exits is a delivery problem, not a
+race — go to the endpoint dashboard before reading anything into the row.
+
+**3c — the criterion.** Now re-run the 3a query.
+
+| outcome | meaning |
+| --- | --- |
+| `tier='basic'`, `plan='pro'` still | **PASS.** #29 holds. If `updated_at` moved between 3a and 3c, even better — a late event landed and was a redundant write instead of a downgrade. That is the fix doing its job. |
+| `tier=null`, `plan='free'` | **FAIL.** The race survived. Capture the row, the event list from 3b, and the runtime logs for `/api/stripe/webhook`; do not refund until it is captured. |
+| `current_period_end` null | The period-end half did not take — old bundle, or the item shape changed again. |
+
+Remember the warning from the last run: the handler catches its own errors and
+returns 200, so **a green webhook proves nothing about the database.** 3c is
+the only check here that can fail loudly.
+
+### Undo it
+
+Refund and cancel exactly as in **Undo it** above — the `/tmp/.livefire` script
+works unchanged. Then re-run the 3a query one last time and confirm the
+downgrade path still lands on `plan='free', tier=null`.
+
+Budget for roughly **$0.27** of unrecovered Stripe fee on $5.99 (the refund
+returns the full amount; the processing fee is not returned).
+
 ## Known loose ends
 
 - **Preview has no Stripe config.** `STRIPE_SECRET_KEY` and

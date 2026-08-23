@@ -290,6 +290,15 @@ is not a prerequisite for using it.
   event is a redundant write rather than a downgrade.
   `tests/stripe-webhook-sync.test.ts` replays the real event order.
   Test cost: $0.88 (the Stripe fee is not returned on a refund).
+  Merged and live on production 2026-08-23 as `4f48caa`. The fix itself is
+  still unproven against a real card: tonight's purchase is what *found* the
+  race, so the criterion it failed — a profile that flips to the paid tier and
+  stays there after the last late webhook — is what the $5.99 Basic re-test
+  exists to prove. Re-test from `bestboy32445@gmail.com` (the only account
+  with a live-mode customer); `xdrabbit@` and `lizmariett@` still carry
+  test-mode customer ids and stale `plan=pro` rows, so a flip is not visible
+  there. A non-null `current_period_end` on the row is the tell that the new
+  code wrote it — the old code stored null every time.
   (shipped 2026-08-23, PR #29)
 
 - **Stripe live mode — real cards, and a guard so a missing price id cannot
