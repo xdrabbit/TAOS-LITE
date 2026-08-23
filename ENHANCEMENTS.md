@@ -276,6 +276,42 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **Stripe live mode — real cards, and a guard so a missing price id cannot
+  hide** — the account is on live keys, with the four price ids wired
+  explicitly. (shipped 2026-08-22, PR #27)
+
+  Live catalog (account `acct_1Tk7XQHRRKSWY3H5`, all four on product
+  `prod_UjbTZmdQt2VS7Z` "TAOS-LITE"):
+
+  | env var | live price id | amount |
+  | --- | --- | --- |
+  | `STRIPE_PRICE_BASIC` | `price_1U70KPHRRKSWY3H546OMw43o` | $5.99/mo |
+  | `STRIPE_PRICE_PREMIUM` | `price_1U70KOHRRKSWY3H56ZC3BX5j` | $19.99/mo |
+  | `STRIPE_PACK_100` | `price_1U70KOHRRKSWY3H5JZugAldN` | $9.99 one-time |
+  | `STRIPE_PACK_200` | `price_1U70KNHRRKSWY3H5xLoLqr0g` | $17.99 one-time |
+
+  Every price id used to have a hardcoded test-mode fallback, which is right on
+  a laptop and wrong at the till: unset `STRIPE_PRICE_BASIC` in production and
+  a real customer would be sent to a checkout session built from a test price
+  the live account cannot charge — a generic error, with nothing in the logs
+  pointing at the missing var. In production (`VERCEL_ENV === "production"`) a
+  missing price var, a price var still holding the test id, or an `sk_test_`
+  key now throws at first use, naming the variable. The guard is lazy on
+  purpose: a build imports every route module, so the throw has to reach the
+  request that needed the price, not the build. Outside production the
+  fallbacks stay, unchanged. Pinned by `tests/stripe-live-prices.test.ts`.
+
+  Live webhook `we_1U7PR0HRRKSWY3H5sAnyAxgF` →
+  `https://taoslite.com/api/stripe/webhook`, subscribed to exactly the four
+  events the handler reads. The legacy `STRIPE_PRICE_ID` env is retired.
+
+  One scoping fix came with it: `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`
+  were single vars covering Production *and* Preview, so putting the live key
+  in Production put it in every preview branch too. All six Stripe vars are
+  Production-only now. Preview has no Stripe config at all, so preview billing
+  routes answer "Billing is not configured yet." until Tom adds an `sk_test_`
+  key scoped to Preview.
+
 - **/guide — the quick start travels with the QR code** — a bilingual page
   for the people the app gets handed to. (shipped 2026-08-20, PR #26)
 
