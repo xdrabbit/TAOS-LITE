@@ -275,9 +275,13 @@ describe("the existing gates still gate", () => {
       jsonPost("/api/tts", { text: "hola", sourceLanguage: "en", targetLanguage: "es" }, { signedIn: true })
     );
     const url = String(fetchSpy.mock.calls[0]?.[0]);
-    const { ELEVENLABS_TOM_VOICE, ELEVENLABS_LIZ_VOICE } = await import("@/lib/tts/voice");
+    const { ELEVENLABS_TOM_VOICE, ELEVENLABS_LIZ_VOICE_ENV, lizElevenLabsVoiceId } = await import(
+      "@/lib/tts/voice"
+    );
+    process.env[ELEVENLABS_LIZ_VOICE_ENV] = "liz-voice-id-from-env";
     expect(url).not.toContain(ELEVENLABS_TOM_VOICE);
-    expect(url).not.toContain(ELEVENLABS_LIZ_VOICE);
+    expect(url).not.toContain(lizElevenLabsVoiceId());
+    delete process.env[ELEVENLABS_LIZ_VOICE_ENV];
     delete process.env.TAOS_PERSONAL_VOICE_CODE;
   });
 });
