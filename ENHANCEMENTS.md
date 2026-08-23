@@ -290,7 +290,7 @@ is not a prerequisite for using it.
   Tom's ears are the judge of whether it reads as Liz. The account now holds
   five Liz entries (Lizma, lizma2, Lizma 3, lizma4, lizma5); match on the
   name, not on "the Liz one". No change to the voice-follows-speaker rule or
-  the TAOS_PERSONAL_VOICE_CODE gate. (2026-08-23, PR #31)
+  the TAOS_PERSONAL_VOICE_CODE gate. (2026-08-23, PR #32)
 
 - **First live transaction verified end-to-end — and the webhook bug it
   caught** — a real PREMIUM purchase ($19.99, 2026-08-23 01:02 UTC) was
