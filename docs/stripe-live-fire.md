@@ -153,6 +153,37 @@ handles — so re-run check 3 afterwards and confirm the profile falls back to
 `plan = 'free'`, `tier = null`. That is the second half of the live-fire test:
 the downgrade path works too.
 
+## The run that happened (2026-08-23)
+
+Done once, with PREMIUM rather than Basic. Everything on the Stripe side was
+clean and the app side was not.
+
+| check | result |
+| --- | --- |
+| session `cs_live_b1MIat…` | ✓ livemode, complete, paid, 1999 usd |
+| price id | ✓ `price_1U70KOHRRKSWY3H56ZC3BX5j` = `STRIPE_PRICE_PREMIUM` |
+| webhooks | ✓ all six events `pending_webhooks: 0` |
+| profile row | ✗ `plan=free, tier=null` — **the customer paid and stayed free** |
+| refund `re_3U7PnuHRRKSWY3H50ZD4phcH` | ✓ $19.99 in full |
+| cancel + downgrade | ✓ `subscription.deleted` wrote `canceled` |
+
+The failure was not the price map and not the signature — it was event
+ordering. Stripe delivers concurrently with no ordering guarantee, and
+`customer.subscription.created` carries a `status: "incomplete"` snapshot from
+before the card is charged. It was processed *last*, after
+`checkout.session.completed` had already written the paid state, and the
+handler wrote that stale snapshot straight over it. Fixed in PR #29 by
+re-reading the subscription from Stripe in every handler; pinned by
+`tests/stripe-webhook-sync.test.ts`.
+
+Note for anyone re-running this: **a green webhook proves nothing about the
+database.** The handler catches its own errors and returns 200 so Stripe won't
+retry forever, so check 3 is the only check that can fail loudly. Do not skip
+it.
+
+Cost of the test: **$0.88** — Stripe keeps the processing fee on a refund
+(gross 19.99, fee 0.88, net 19.11; the refund returns 19.99 and refunds no fee).
+
 ## Known loose ends
 
 - **Preview has no Stripe config.** `STRIPE_SECRET_KEY` and
