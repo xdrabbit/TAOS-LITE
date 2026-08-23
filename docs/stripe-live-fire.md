@@ -306,6 +306,50 @@ downgrade path still lands on `plan='free', tier=null`.
 Budget for roughly **$0.27** of unrecovered Stripe fee on $5.99 (the refund
 returns the full amount; the processing fee is not returned).
 
+### The re-test that happened (2026-08-23 02:33 UTC) — PASS
+
+Basic $5.99 from `bestboy32445@gmail.com`. **The criterion was met.**
+
+| check | result |
+| --- | --- |
+| 1. session `cs_live_b1Jm1M…` | ✓ livemode, complete, paid, 599 usd |
+| 1. price id | ✓ `price_1U70KPHRRKSWY3H546OMw43o` = `STRIPE_PRICE_BASIC`, confirmed against the live Vercel production env |
+| 1. account | ✓ `bestboy32445@gmail.com`, uid `212f7b7d…`, customer `cus_V7f63g…` — the clean-baseline account |
+| 2. webhooks | ✓ 13 events, all `pending_webhooks: 0`; 3 POSTs to `/api/stripe/webhook`, all 200 |
+| **3a. the flip** | ✓ `plan=pro, tier=basic, subscription_status=active` at 02:33:37.575 |
+| 3b. quiet | ✓ 228s past the last event, none pending |
+| **3c. it stayed** | ✓ **still `tier=basic`** at 02:38:03 — 266s after the write |
+| 4. `current_period_end` | ✓ non-null, 2026-09-23 — and the only non-null in the whole table |
+| 6. refund `pyr_1U7RJl…` | ✓ $5.99 in full |
+| 6. cancel + downgrade | ✓ `subscription.deleted` at `pending=0`; row → `plan=free, tier=null, canceled` at 02:39:36.664 |
+
+The race was re-run, not dodged. `customer.subscription.created` carried the
+same pre-charge `status: "incomplete"` snapshot, and all three subscription
+events were delivered within the same second (02:33:36) to `dpl_59s7gH…`
+serving `7f94e1a` (contains #29's `4f48caa`). The row ended on current truth
+regardless of interleaving — which is what re-reading the subscription buys.
+
+Sub-second delivery order is not visible in Vercel's runtime logs, so this run
+does not *isolate* "created processed last" the way round 1 did. It does not
+need to: under real concurrent delivery of the identical poison payload, the
+outcome was correct and stayed correct.
+
+The downgrade is also newly meaningful. Round 1's cancel wrote `canceled` onto
+a row that was already `plan=free` — it could not show a transition. This one
+moved a genuinely entitled row `basic → free`.
+
+Actual fee: **$0.47** on $5.99 (2.9% + $0.30), not the $0.27 estimated above.
+Two rounds total **$1.35** unrecovered ($0.88 + $0.47).
+
+**Verdict: the money path is certified for real customers.** A real card can
+buy Basic, the entitlement lands, it survives the late event, and cancelling
+gives it back.
+
+One cosmetic flaw worth knowing: `current_period_end` is not cleared on cancel,
+so a cancelled row keeps a future-dated period end. Nothing gates entitlement
+on that field — it is written and selected but never read in a decision — so it
+is cosmetic, not an entitlement leak.
+
 ## Known loose ends
 
 - **Preview has no Stripe config.** `STRIPE_SECRET_KEY` and
