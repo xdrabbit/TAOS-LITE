@@ -13,15 +13,20 @@ describe("the clone IDs themselves (verified against the ElevenLabs account, 7/2
   // Every earlier test checked the constants SYMBOLICALLY, so when the two
   // values were swapped (day one through 7/27) the suite stayed green while
   // production played the wrong person. These pin the raw IDs to the account's
-  // own voice names — GET /v1/voices says uOQZ… is named "tom" and tpOaz… is
-  // named "lizma2". If these fail, re-list the account's voices before
+  // own voice names — GET /v1/voices says uOQZ… is named "tom" and atyoq… is
+  // named "lizma5". If these fail, re-list the account's voices before
   // touching anything.
   it("ELEVENLABS_TOM_VOICE is the account clone named 'tom'", () => {
     expect(ELEVENLABS_TOM_VOICE).toBe("uOQZaXDzEW5WoyNfLPne");
   });
 
-  it("ELEVENLABS_LIZ_VOICE is the account clone named 'lizma2'", () => {
-    expect(ELEVENLABS_LIZ_VOICE).toBe("tpOaz7u8rY4nup9rRUmh");
+  // Liz's voice was re-made 8/23 (Tom's explicit ask): "lizma2" tpOaz… →
+  // "lizma5" atyoq…, re-listed against the account and confirmed to return
+  // real Spanish audio before merge. The retired ID is written out here on
+  // purpose: if it ever reappears in a diff, that is a revert, not a fix.
+  it("ELEVENLABS_LIZ_VOICE is the account voice named 'lizma5'", () => {
+    expect(ELEVENLABS_LIZ_VOICE).toBe("atyoqJH9EPANrjf6QNDX");
+    expect(ELEVENLABS_LIZ_VOICE).not.toBe("tpOaz7u8rY4nup9rRUmh");
   });
 });
 
