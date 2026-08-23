@@ -276,6 +276,22 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **First live transaction verified end-to-end — and the webhook bug it
+  caught** — a real PREMIUM purchase ($19.99, 2026-08-23 01:02 UTC) was
+  charged, delivered, refunded and cancelled against the live account. The
+  charge and all six webhooks were perfect; the profile row was not. Stripe
+  delivers events concurrently and out of order, and
+  `customer.subscription.created` carries a pre-charge `status: "incomplete"`
+  snapshot — it landed *after* `checkout.session.completed` and overwrote a
+  paying customer back down to `plan=free, tier=null`. A second bug hid inside
+  it: the account's API version moved `current_period_end` onto the
+  subscription item, so every sync stored null. The webhook now re-reads the
+  subscription from Stripe instead of trusting the event snapshot, so a late
+  event is a redundant write rather than a downgrade.
+  `tests/stripe-webhook-sync.test.ts` replays the real event order.
+  Test cost: $0.88 (the Stripe fee is not returned on a refund).
+  (shipped 2026-08-23, PR #29)
+
 - **Stripe live mode — real cards, and a guard so a missing price id cannot
   hide** — the account is on live keys, with the four price ids wired
   explicitly. (shipped 2026-08-22, PR #27)

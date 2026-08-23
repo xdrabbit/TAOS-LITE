@@ -6,7 +6,14 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 
 function periodEndISO(sub: Stripe.Subscription): string | null {
-  const end = sub.current_period_end;
+  // The account's API version (2026-05-27.dahlia) carries the billing window on
+  // the subscription *item*; the top-level field is gone, so reading it stored a
+  // null current_period_end on every sync. Item first, top-level as the fallback
+  // for older versions.
+  const item = sub.items?.data?.[0] as { current_period_end?: number } | undefined;
+  const end =
+    item?.current_period_end ??
+    (sub as Stripe.Subscription & { current_period_end?: number }).current_period_end;
   return typeof end === "number" ? new Date(end * 1000).toISOString() : null;
 }
 
@@ -31,6 +38,26 @@ async function syncSubscription(sub: Stripe.Subscription, userId?: string | null
     await supabaseAdmin.from("profiles").update(fields).eq("id", userId);
   } else {
     await supabaseAdmin.from("profiles").update(fields).eq("stripe_customer_id", customerId);
+  }
+}
+
+// Stripe delivers events concurrently and with no ordering guarantee, and each
+// event carries the object as it looked when the event was *created*. The
+// `customer.subscription.created` snapshot says `status: "incomplete"` — it is
+// minted before the card is charged — so when it is processed after
+// `checkout.session.completed`, writing that snapshot puts a customer who just
+// paid back on the free plan. That is exactly what the first live purchase did
+// (2026-08-23: $19.99 charged, profile left at plan=free, tier=null).
+//
+// Re-reading the subscription from Stripe makes every handler write current
+// truth regardless of arrival order, so a late event is a redundant write
+// instead of a downgrade.
+async function reReadSubscription(snapshot: Stripe.Subscription): Promise<Stripe.Subscription> {
+  try {
+    return await stripe.subscriptions.retrieve(snapshot.id);
+  } catch {
+    // If the re-read fails, the snapshot is still better than nothing.
+    return snapshot;
   }
 }
 
@@ -99,7 +126,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
-        await syncSubscription(event.data.object as Stripe.Subscription);
+        // Never trust the event's snapshot — see reReadSubscription.
+        const snapshot = event.data.object as Stripe.Subscription;
+        await syncSubscription(await reReadSubscription(snapshot));
         break;
       }
       default:
