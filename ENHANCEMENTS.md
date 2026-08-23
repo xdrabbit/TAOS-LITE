@@ -276,6 +276,46 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **The money path is certified: a paid tier that flips and *stays* flipped**
+  — the $5.99 Basic re-test (2026-08-23 02:33 UTC, `bestboy32445@gmail.com`)
+  met the criterion PR #29 was written for and that nothing had met before.
+  `cs_live_b1Jm1M…` completed livemode/paid at 599 usd on
+  `price_1U70KPHRRKSWY3H546OMw43o` = `STRIPE_PRICE_BASIC` (checked against the
+  real Vercel production env, not just the runbook table). All thirteen events
+  delivered at `pending_webhooks: 0`.
+
+  The profile row flipped to `plan=pro, tier=basic, subscription_status=active`
+  at 02:33:37.575 and was **still** `tier=basic` on re-read at 02:38:03 — 266s
+  after the write, 236s after the last event, well past the 60s the race needed.
+  `current_period_end` came back non-null (2026-09-23), and it is the *only*
+  non-null value in the entire `profiles` table — the fingerprint proving the
+  new code did the write, since every pre-#29 sync stored null.
+
+  The race was genuinely re-run, not dodged: `customer.subscription.created`
+  carried the same poison `status: "incomplete"` snapshot, and all three
+  subscription webhooks were delivered inside the same second (02:33:36, three
+  200s on `dpl_59s7gH…`, serving `7f94e1a`). Whatever order they interleaved in,
+  the last writer wrote current truth. That is the re-read doing its job.
+
+  The unwind then demonstrated the half round 1 could not: a real
+  entitled→free transition. Refund `pyr_1U7RJl…` returned $5.99 in full, cancel
+  was immediate, `customer.subscription.deleted` delivered at `pending=0`, and
+  the row moved `basic → plan=free, tier=null, subscription_status=canceled` at
+  02:39:36.664. Round 1's downgrade started from an already-free row and proved
+  nothing.
+
+  Two test rounds cost **$1.35** in unrecovered Stripe fees ($0.88 on the
+  $19.99 premium + $0.47 on the $5.99 basic); refunds return the amount but not
+  the fee. Note the runbook's $0.27 estimate for the Basic round was low — the
+  fee is 2.9% + $0.30 = $0.47.
+
+  One cosmetic loose end, not a failure: `current_period_end` keeps its old
+  value after cancel rather than clearing. Nothing gates entitlement on it (it
+  is only written and selected, never read in a decision — `plan` and `tier` do
+  that work), so there is no entitlement leak, but the field reads stale on a
+  cancelled row.
+  (verified 2026-08-23, live-fire round 2)
+
 - **First live transaction verified end-to-end — and the webhook bug it
   caught** — a real PREMIUM purchase ($19.99, 2026-08-23 01:02 UTC) was
   charged, delivered, refunded and cancelled against the live account. The
@@ -290,11 +330,9 @@ is not a prerequisite for using it.
   event is a redundant write rather than a downgrade.
   `tests/stripe-webhook-sync.test.ts` replays the real event order.
   Test cost: $0.88 (the Stripe fee is not returned on a refund).
-  Merged and live on production 2026-08-23 as `4f48caa`. The fix itself is
-  still unproven against a real card: tonight's purchase is what *found* the
-  race, so the criterion it failed — a profile that flips to the paid tier and
-  stays there after the last late webhook — is what the $5.99 Basic re-test
-  exists to prove. Re-test from `bestboy32445@gmail.com` (the only account
+  Merged and live on production 2026-08-23 as `4f48caa`, and **now proven
+  against a real card** — the $5.99 Basic re-test the same night met the
+  criterion this run failed (see the live-fire round 2 entry above). Re-test from `bestboy32445@gmail.com` (the only account
   with a live-mode customer); `xdrabbit@` and `lizmariett@` still carry
   test-mode customer ids and stale `plan=pro` rows, so a flip is not visible
   there. A non-null `current_period_end` on the row is the tell that the new
