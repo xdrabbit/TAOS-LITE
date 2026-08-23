@@ -276,7 +276,35 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **Liz's voice ID swapped to the retrained voice** — Tom had Liz's voice
+- **Liz's voice rolled back to the familiar clone, and her ID is config now**
+  — the 8/23 swap to `atyoq…` ("lizma5") was the WRONG VOICE, and Tom heard it
+  before anything else could. `ELEVENLABS_LIZ_VOICE` is gone; her ID is read
+  from `ELEVENLABS_LIZ_VOICE_ID`, set in Vercel Production and Preview to
+  `tpOaz…` ("lizma2") — the voice that was live before PR #32. What makes this
+  worth writing down is WHY every check passed on a voice that was not Liz:
+  `lizma5`'s ElevenLabs category is "generated", a Voice Design synthesised
+  from the text prompt "…Venezuelan accent with a San Cristobal vicinity
+  focus…". It resolves, the account names it, and it returns HTTP 200 with
+  real Spanish MP3 audio on both `eleven_turbo_v2_5` and
+  `eleven_multilingual_v2` — identical evidence to the actual clone
+  (`lizma2`, category "cloned", description "liz better"), which was re-probed
+  on both models before this rollback. A prompt-built stranger with the right
+  accent is indistinguishable from a clone to every automated test we can
+  write; only ears can tell. So the value left the repo: the next retrain is a
+  dashboard edit plus a redeploy, no PR. There is deliberately no hardcoded
+  fallback ID — unset means the stock multilingual voice plus a loud server
+  log, because a stale constant sounds like a person and nothing downstream
+  can flag it. The tests now pin the SHAPE of the lookup (env read, loud
+  fallback, no personal ID literal in `lib/tts/voice.ts`) instead of a value
+  they cannot verify. Tom's clone, the voice-follows-speaker rule and the
+  `TAOS_PERSONAL_VOICE_CODE` gate are untouched. (2026-08-23, PR #33)
+
+- **Liz's voice ID swapped to the retrained voice** — SUPERSEDED the same day
+  by the rollback above: `atyoq…` ("lizma5") was not the voice Tom wanted.
+  Kept for the record because of what it proves — the swap was verified
+  against the account listing AND with real 200-plus-audio TTS calls, and
+  every one of those checks was satisfied by the wrong voice. Original entry:
+  Tom had Liz's voice
   re-made in ElevenLabs, so `ELEVENLABS_LIZ_VOICE` in `lib/tts/voice.ts` moved
   from `tpOaz…` ("lizma2") to `atyoq…` ("lizma5"); the retired ID is out of
   active code. Per the standing rule in that file, the account was re-listed

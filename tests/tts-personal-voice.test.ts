@@ -6,20 +6,31 @@
 // follows the SPEAKER. Nothing here changes that rule: an unlocked device is
 // expected to behave EXACTLY as TAOS did before this gate existed, which is
 // what the first describe block below asserts pair by pair.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_ELEVENLABS_VOICE,
-  ELEVENLABS_LIZ_VOICE,
+  ELEVENLABS_LIZ_VOICE_ENV,
   ELEVENLABS_TOM_VOICE,
   elevenLabsVoiceId,
   gatedElevenLabsVoiceId
 } from "@/lib/tts/voice";
 import { personalVoiceUnlocked } from "@/lib/tts/personalVoice";
 
+// Liz's clone id comes from the environment (8/23). The gate must hold it back
+// from strangers exactly as it holds Tom's hardcoded one, so set a stand-in and
+// assert against that — an UNSET variable would make the gate look airtight for
+// the wrong reason (her slot would resolve to the stock voice on its own).
+const LIZ = "liz-voice-id-from-env";
 const savedVoiceEnv = process.env.ELEVENLABS_VOICE_ID;
+const savedLizEnv = process.env[ELEVENLABS_LIZ_VOICE_ENV];
+beforeEach(() => {
+  process.env[ELEVENLABS_LIZ_VOICE_ENV] = LIZ;
+});
 afterEach(() => {
   if (savedVoiceEnv === undefined) delete process.env.ELEVENLABS_VOICE_ID;
   else process.env.ELEVENLABS_VOICE_ID = savedVoiceEnv;
+  if (savedLizEnv === undefined) delete process.env[ELEVENLABS_LIZ_VOICE_ENV];
+  else process.env[ELEVENLABS_LIZ_VOICE_ENV] = savedLizEnv;
 });
 
 describe("unlocked (Tom's and Liz's phones) — the speaker rule, untouched", () => {
@@ -45,12 +56,12 @@ describe("unlocked (Tom's and Liz's phones) — the speaker rule, untouched", ()
 
   it("Tom speaking English still plays his clone; Liz's Spanish still plays hers", () => {
     expect(gatedElevenLabsVoiceId(true, "en", "es")).toBe(ELEVENLABS_TOM_VOICE);
-    expect(gatedElevenLabsVoiceId(true, "es", "en")).toBe(ELEVENLABS_LIZ_VOICE);
+    expect(gatedElevenLabsVoiceId(true, "es", "en")).toBe(LIZ);
   });
 
   it("the explicit override still wins on an unlocked device", () => {
     expect(gatedElevenLabsVoiceId(true, "es", "en", "tom")).toBe(ELEVENLABS_TOM_VOICE);
-    expect(gatedElevenLabsVoiceId(true, "en", "es", "liz")).toBe(ELEVENLABS_LIZ_VOICE);
+    expect(gatedElevenLabsVoiceId(true, "en", "es", "liz")).toBe(LIZ);
   });
 });
 
@@ -73,7 +84,7 @@ describe("locked (every phone that scanned the QR) — no clone is reachable", (
   });
 
   it("never returns either clone id, whatever the arguments", () => {
-    const clones = new Set([ELEVENLABS_TOM_VOICE, ELEVENLABS_LIZ_VOICE]);
+    const clones = new Set([ELEVENLABS_TOM_VOICE, LIZ]);
     const langs = ["en", "es", "zh", "yue", "it", "bs", undefined] as const;
     const overrides = ["tom", "liz", undefined] as const;
     for (const src of langs) {
