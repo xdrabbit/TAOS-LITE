@@ -276,6 +276,22 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **Liz's voice ID swapped to the retrained voice** — Tom had Liz's voice
+  re-made in ElevenLabs, so `ELEVENLABS_LIZ_VOICE` in `lib/tts/voice.ts` moved
+  from `tpOaz…` ("lizma2") to `atyoq…` ("lizma5"); the retired ID is out of
+  active code. Per the standing rule in that file, the account was re-listed
+  before the swap and the new ID was proved with real TTS calls (HTTP 200 +
+  MP3 audio) on both `eleven_turbo_v2_5` — the model `/api/tts` actually
+  sends — and `eleven_multilingual_v2`. Two things worth knowing: the live
+  value comes from code, not a Vercel env var (there is no Liz voice var in
+  Production), and the new voice's ElevenLabs category is "generated" (Voice
+  Design from a text prompt) rather than "cloned" like lizma2 was, so it is a
+  new voice built to Liz's accent rather than a retrain of her recordings —
+  Tom's ears are the judge of whether it reads as Liz. The account now holds
+  five Liz entries (Lizma, lizma2, Lizma 3, lizma4, lizma5); match on the
+  name, not on "the Liz one". No change to the voice-follows-speaker rule or
+  the TAOS_PERSONAL_VOICE_CODE gate. (2026-08-23, PR #32)
+
 - **First live transaction verified end-to-end — and the webhook bug it
   caught** — a real PREMIUM purchase ($19.99, 2026-08-23 01:02 UTC) was
   charged, delivered, refunded and cancelled against the live account. The
