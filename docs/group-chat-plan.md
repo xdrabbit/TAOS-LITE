@@ -62,3 +62,9 @@ In order. Each is a future dispatch.
 5. **Verification bar.** A real multi-account thread, 3+ languages, transcript
    read both directions, RLS checked — the same standard the 1:1 invite flow
    was held to. The ask-first rule for live data applies.
+
+---
+
+*On the arc:* group chat is **Connect**, the second step of Translate →
+Connect → Learn → Understand. See `docs/tutor-curriculum-plan.md` (Learn) and
+`docs/reflections-plan.md` (Understand) for what follows it.

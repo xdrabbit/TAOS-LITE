@@ -108,6 +108,15 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 - Cantonese field verdict — have the Cantonese-speaking guest judge the v3
   voice and the zh⇄yue auto-detection; swap ELEVENLABS_YUE_MODEL or tune the
   detect prompt based on her review. (added 2026-08-03)
+- Reflections — the couples superglue, and the step after tutor on the arc
+  (Translate → Connect → Learn → **Understand**). Couples who don't share a
+  language run their whole relationship through TAOS; Reflections reflects
+  that history back to them, reframed with warmth — never a verdict on who
+  was right. Tom and Liz have already prototyped it by hand on their own
+  transcripts. Sequenced AFTER tutor phase 2 meters and after group chat
+  ships for the trip. Design constitution, consent model and safety rails:
+  `docs/reflections-plan.md` — read it before any code, the guardrails are
+  the product. (added 2026-08-25)
 
 ## Ideas
 

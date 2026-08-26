@@ -84,3 +84,9 @@ case, pure.
    REQUIRED before customer-facing
 6. Re-enable flag; pricing page copy resolves itself if tutor ships before
    billing goes live
+
+---
+
+*On the arc:* tutor is **Learn**, the third step of Translate → Connect →
+Learn → Understand. The step after it is `docs/reflections-plan.md`
+(Reflections), which is sequenced explicitly after tutor phase 2 metering.
