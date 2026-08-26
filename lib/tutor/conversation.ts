@@ -5,6 +5,8 @@
 // and surface live transcripts over the data channel. Guardrails: a hard
 // session cap and a silence auto-off keep realtime spend predictable.
 
+import type { TutorLevel, TutorPhase } from "./types";
+
 export type ConvState =
   | "idle"
   | "requesting_mic"
@@ -14,13 +16,18 @@ export type ConvState =
   | "stopping"
   | "error";
 
-export type LearnLang = "es" | "en";
-export type Level = "beginner" | "intermediate" | "advanced";
 export type StopReason = "user" | "cap" | "idle" | "error";
 
 export interface ConversationConfig {
-  learn: LearnLang;
-  level: Level;
+  /** Catalog code of the language being learned (lib/languages/catalog.ts). */
+  target: string;
+  /** Catalog code of the language the learner already speaks. */
+  learner: string;
+  level: TutorLevel;
+  /** Which part of the loop this session is: walk, run, or free partner talk. */
+  phase: TutorPhase;
+  /** The module in play. Absent for Conversation Partner. */
+  moduleId?: string;
   focus?: string;
   maxDurationMs?: number; // hard cap; default 10 min
   idleTimeoutMs?: number; // silence auto-off; default 20 s
@@ -48,11 +55,14 @@ const DEFAULT_MAX_MS = 10 * 60 * 1000;
 const DEFAULT_IDLE_MS = 20 * 1000;
 
 interface MintResponse {
+  sessionId?: string;
   clientSecret: string;
   callUrl: string;
   model: string;
   voice: string;
   instructions: string;
+  /** False when Walk asked for a lesson the server had no cached copy of. */
+  lessonAvailable?: boolean;
   error?: string;
   details?: string;
 }
@@ -73,6 +83,10 @@ export async function startConversation(
   let stopped = false;
   let greeted = false;
   let baseInstructions = "";
+  // The server's id for this session (lib/tutor/meter.ts). Held so the end of
+  // the call can be reported against the same id the mint was logged under —
+  // phase 2 reconciles the two lines into billed minutes.
+  let sessionId = "";
   const steerNotes: string[] = [];
   const startMs = Date.now();
 
@@ -112,7 +126,37 @@ export async function startConversation(
       audioEl.remove();
     }
     setState("idle");
-    events.onStopped?.(reason, elapsedSec());
+    const seconds = elapsedSec();
+    reportSessionEnd(reason, seconds);
+    events.onStopped?.(reason, seconds);
+  };
+
+  // Tell the server the session ended, and how long it ran. keepalive so it
+  // survives the tab being closed mid-call, which is exactly the case where
+  // nothing else would ever record the minutes. Best effort by design: a
+  // failed beacon must not keep a microphone open or surface an error to
+  // someone who just hung up.
+  const reportSessionEnd = (reason: StopReason, seconds: number) => {
+    if (!sessionId) return;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (config.authToken) headers.Authorization = `Bearer ${config.authToken}`;
+    try {
+      void fetch("/api/tutor/session", {
+        method: "POST",
+        headers,
+        keepalive: true,
+        body: JSON.stringify({
+          sessionId,
+          seconds,
+          reason,
+          phase: config.phase,
+          moduleId: config.moduleId ?? null
+        })
+      }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    sessionId = "";
   };
 
   const bumpIdle = () => {
@@ -135,20 +179,33 @@ export async function startConversation(
     );
   };
 
+  /**
+   * A one-off nudge for the NEXT turn only.
+   *
+   * `response.instructions` REPLACES the session's instructions for that
+   * response — it does not add to them. Sending a bare nudge therefore strips
+   * the persona for exactly one turn, which is how a Walk scene opened with a
+   * cheerful general-purpose assistant in English instead of the pharmacist's
+   * first line (found driving a real session, 8/25). Everything sent this way
+   * carries the persona with it.
+   */
+  const sendTurn = (nudge: string) => {
+    if (!dc || dc.readyState !== "open") return;
+    dc.send(
+      JSON.stringify({
+        type: "response.create",
+        response: { instructions: `${baseInstructions}\n\nFor this turn only: ${nudge}` }
+      })
+    );
+  };
+
   const steer = (text: string) => {
     const t = text.trim();
     if (!t) return;
     steerNotes.push(t);
     pushSessionUpdate();
     // Nudge the tutor to acknowledge the change right away.
-    if (dc && dc.readyState === "open") {
-      dc.send(
-        JSON.stringify({
-          type: "response.create",
-          response: { instructions: `The student just asked: "${t}". Briefly acknowledge and adjust.` }
-        })
-      );
-    }
+    sendTurn(`The student just asked: "${t}". Briefly acknowledge and adjust.`);
   };
 
   const setMicEnabled = (on: boolean) => {
@@ -162,13 +219,15 @@ export async function startConversation(
   const maybeGreet = () => {
     if (greeted || !dc || dc.readyState !== "open") return;
     greeted = true;
-    dc.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          instructions: "Greet the student warmly in one short sentence and ask an easy opening question."
-        }
-      })
+    sendTurn(
+      config.phase === "walk"
+        ? // Walk opens IN the scene. A "hello, how are you?" here would spend
+          // the learner's first line on small talk the roleplay does not
+          // contain.
+          "Open the scene now, in character, with your first line. Do not greet the learner as a tutor and do not explain the exercise."
+        : config.phase === "run"
+          ? "Open in character with one short line that starts the conversation, and ask a question."
+          : "Greet the student warmly in one short sentence and ask an easy opening question."
     );
   };
 
@@ -194,7 +253,15 @@ export async function startConversation(
     const mintRes = await fetch("/api/tutor/realtime", {
       method: "POST",
       headers: mintHeaders,
-      body: JSON.stringify({ learn: config.learn, level: config.level, focus: config.focus ?? "" })
+      body: JSON.stringify({
+        target: config.target,
+        learner: config.learner,
+        level: config.level,
+        phase: config.phase,
+        moduleId: config.moduleId ?? null,
+        focus: config.focus ?? "",
+        capSeconds: Math.round(maxMs / 1000)
+      })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
@@ -204,7 +271,14 @@ export async function startConversation(
       throw new Error(mint.details || mint.error || "Could not start the tutor session.");
     }
     baseInstructions = mint.instructions ?? "";
-    dbg(`mint ok · model=${mint.model} voice=${mint.voice}`);
+    sessionId = mint.sessionId ?? "";
+    dbg(`mint ok · model=${mint.model} voice=${mint.voice} phase=${config.phase}`);
+    if (config.phase === "walk" && mint.lessonAvailable === false) {
+      // The scene still runs off the module's seed; it just isn't following
+      // the lesson's script. Worth saying in the debug log rather than
+      // silently rehearsing lines the learner cannot see.
+      dbg("walk: no cached lesson on the server — roleplay is module-only");
+    }
 
     pc = new RTCPeerConnection();
 

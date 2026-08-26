@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { tutorEnabled } from "@/lib/release";
+import { isLanguageCode } from "@/lib/languages/catalog";
+import { buildTutorInstructions } from "@/lib/tutor/instructions";
+import { getTutorModule } from "@/lib/tutor/modules";
+import { lessonCacheKey } from "@/lib/tutor/lesson";
+import { readCachedLesson } from "@/lib/tutor/lessonStore";
+import { logTutorSessionEvent, newTutorSessionId } from "@/lib/tutor/meter";
+import { toTutorLevel, toTutorPhase } from "@/lib/tutor/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -25,11 +32,21 @@ function monthKey(): string {
 }
 
 // Returns an error response if the caller has used up this month's tutor minutes
-// for their tier; otherwise null (allowed). Comp/unlimited always pass.
-async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | null> {
+// for their tier; otherwise the caller's user id (allowed). Comp/unlimited pass.
+//
+// Phase 2 (docs/tutor-curriculum-plan.md step 5) moves this behind
+// lib/tutor/meter.ts, so Walk, Run and Partner cannot grow three copies of the
+// allowance rule between them. It stays here meanwhile because it is the only
+// thing standing between a flag flip and an unmetered realtime session.
+async function checkTutorAllowance(
+  req: NextRequest
+): Promise<{ ok: true; userId: string } | { ok: false; response: NextResponse }> {
   const user = await getUserFromRequest(req);
   if (!user) {
-    return NextResponse.json({ error: "Please sign in to use the tutor." }, { status: 401 });
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Please sign in to use the tutor." }, { status: 401 })
+    };
   }
   const { data: profile } = await supabaseAdmin
     .from("profiles")
@@ -37,7 +54,7 @@ async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | nul
     .eq("id", user.id)
     .maybeSingle();
   const status = (profile?.subscription_status as string | undefined) ?? "free";
-  if (status === "comp") return null; // unlimited
+  if (status === "comp") return { ok: true, userId: user.id }; // unlimited
 
   // Effective tier: active subscribers use their tier; everyone else is free.
   const tier =
@@ -64,18 +81,21 @@ async function checkTutorAllowance(req: NextRequest): Promise<NextResponse | nul
     0
   );
   if (used >= cap) {
-    return NextResponse.json(
-      {
-        error: "quota_exhausted",
-        details:
-          tier === "free"
-            ? "Your free tutor minutes for this month are used up."
-            : "You've used this month's tutor minutes. Upgrade for more."
-      },
-      { status: 402 }
-    );
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error: "quota_exhausted",
+          details:
+            tier === "free"
+              ? "Your free tutor minutes for this month are used up."
+              : "You've used this month's tutor minutes. Upgrade for more."
+        },
+        { status: 402 }
+      )
+    };
   }
-  return null;
+  return { ok: true, userId: user.id };
 }
 
 // GA Realtime endpoints. Overridable via env in case OpenAI moves them.
@@ -85,42 +105,33 @@ const CLIENT_SECRETS_URL =
 const CALLS_URL =
   process.env.OPENAI_REALTIME_CALLS_URL ?? "https://api.openai.com/v1/realtime/calls";
 
-type LearnLang = "es" | "en";
-type Level = "beginner" | "intermediate" | "advanced";
-
-// Build the steerable coach persona. `focus` lets the learner aim the chat at a
-// topic ("kitchen words", "baseball"); steering mid-call is done client-side via
-// session.update using this same string + accumulated directives.
-function buildTutorInstructions(opts: {
-  learn: LearnLang;
-  level: Level;
-  focus?: string;
-}): string {
-  const targetName = opts.learn === "es" ? "Spanish" : "English";
-  const nativeName = opts.learn === "es" ? "English" : "Spanish";
-
-  const levelLine =
-    opts.level === "beginner"
-      ? `The learner is a BEGINNER. Speak slowly with short, simple sentences; drop into ${nativeName} briefly when they're truly stuck, then return to ${targetName}.`
-      : opts.level === "advanced"
-        ? `The learner is ADVANCED. Speak naturally and at a normal pace in ${targetName}; correct even subtle errors of grammar, idiom, and accent.`
-        : `The learner is INTERMEDIATE. Speak mostly in ${targetName} at a natural but clear pace.`;
-
-  const focusLine = opts.focus
-    ? `Center the conversation on this topic / vocabulary: ${opts.focus}.`
-    : `Keep the conversation lively and varied — ask about their day, interests, food, plans, and surroundings.`;
-
-  return [
-    `You are TAOS Tutor, a warm, upbeat, but EXACTING ${targetName} conversation and pronunciation coach.`,
-    `Your student is a native ${nativeName} speaker learning ${targetName}.`,
-    levelLine,
-    `Hold a natural back-and-forth conversation. Keep YOUR turns short (1-3 sentences) so the student does most of the talking.`,
-    `Be a stickler about pronunciation and grammar: the moment the student makes a meaningful mistake, kindly correct it — say the correct version clearly, have them repeat it once, then move on. Don't let errors slide, but never lecture.`,
-    `Always end your turn with a simple question so they keep talking.`,
-    focusLine,
-    `If the student gives a meta-instruction (e.g. "use more English", "slower", "let's talk about kitchens" or "baseball"), follow it immediately and from then on.`,
-    `Never break character or say you are an AI. Stay encouraging, patient, and a little playful.`
-  ].join(" ");
+/**
+ * The language pair for this session.
+ *
+ * `target` is what the learner is learning; `learner` is what they already
+ * speak. Both are catalog codes (lib/languages/catalog.ts) — this route used
+ * to carry `type LearnLang = "es" | "en"` and pick the two language NAMES off
+ * a ternary, which is the ceiling docs/tutor-curriculum-plan.md step 4 exists
+ * to remove and the same bug that had /call interpreting into the wrong
+ * language on a trip.
+ *
+ * The legacy `{ learn: "es" | "en" }` body still works: it is what an old
+ * client bundle sends, and answering it with a 400 would break a phone that
+ * has not reloaded rather than teach it anything.
+ */
+function resolvePair(body: { target?: string; learner?: string; learn?: string }): {
+  target: string;
+  learner: string;
+} | null {
+  const target = String(body.target ?? "");
+  const learner = String(body.learner ?? "");
+  if (isLanguageCode(target) && isLanguageCode(learner) && target !== learner) {
+    return { target, learner };
+  }
+  if (body.learn === "es" || body.learn === "en") {
+    return { target: body.learn, learner: body.learn === "es" ? "en" : "es" };
+  }
+  return null;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -140,19 +151,40 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Enforce the free-trial minute cap before spending on a realtime session.
-  const denied = await checkTutorAllowance(req);
-  if (denied) return denied;
+  // Enforce the monthly minute cap before spending on a realtime session.
+  const allowance = await checkTutorAllowance(req);
+  if (!allowance.ok) return allowance.response;
 
   const body = (await req.json().catch(() => ({}))) as {
+    target?: string;
+    learner?: string;
     learn?: string;
     level?: string;
     focus?: string;
+    phase?: string;
+    moduleId?: string;
+    capSeconds?: number;
   };
-  const learn: LearnLang = body.learn === "en" ? "en" : "es";
-  const level: Level =
-    body.level === "beginner" ? "beginner" : body.level === "advanced" ? "advanced" : "intermediate";
+
+  const pair = resolvePair(body);
+  if (!pair) {
+    return NextResponse.json({ error: "Unsupported language pair." }, { status: 400 });
+  }
+  const level = toTutorLevel(body.level);
+  const phase = toTutorPhase(body.phase);
   const focus = typeof body.focus === "string" ? body.focus.slice(0, 200).trim() : "";
+  const mod = getTutorModule(String(body.moduleId ?? ""));
+
+  // Walk needs the lesson's script and Run wants its phrase list. The lesson
+  // is read from the CACHE rather than accepted from the request body: the
+  // browser has it already, but a persona assembled from whatever the client
+  // posted is a prompt-injection surface on a route that mints a paid session.
+  // A cache miss is not an error — the module alone still makes a usable
+  // scene (lib/tutor/instructions.ts), it is just less specific.
+  const lesson =
+    mod && (phase === "walk" || phase === "run")
+      ? (await readCachedLesson(lessonCacheKey(mod.id, pair.target, pair.learner)))?.lesson
+      : undefined;
 
   // IMPORTANT: do NOT fall back to OPENAI_REALTIME_MODEL — that env is set to
   // the translation-only model (gpt-realtime-translate) left over from the old
@@ -163,7 +195,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const instructions = buildTutorInstructions({ learn, level, focus: focus || undefined });
+  const instructions = buildTutorInstructions({
+    target: pair.target,
+    learner: pair.learner,
+    level,
+    phase,
+    module: mod,
+    lesson,
+    focus: focus || undefined
+  });
 
   const session: Record<string, unknown> = {
     type: "realtime",
@@ -223,13 +263,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       (nested && typeof nested.expires_at === "number" && nested.expires_at) ||
       undefined;
 
+    // The metering seam (lib/tutor/meter.ts). Emitted only once the session
+    // actually exists — a start line for a mint that failed would overstate
+    // every cost report built on this log.
+    const sessionId = newTutorSessionId();
+    logTutorSessionEvent({
+      event: "start",
+      sessionId,
+      userId: allowance.userId,
+      phase,
+      moduleId: mod?.id ?? null,
+      target: pair.target,
+      learner: pair.learner,
+      level,
+      model,
+      capSeconds: typeof body.capSeconds === "number" ? Math.round(body.capSeconds) : undefined
+    });
+
     return NextResponse.json({
+      sessionId,
       clientSecret,
       callUrl: `${CALLS_URL}?model=${encodeURIComponent(model)}`,
       model,
       voice,
-      learn,
+      target: pair.target,
+      learner: pair.learner,
+      // Kept so an un-reloaded client bundle still reads a field it knows.
+      learn: pair.target,
       level,
+      phase,
+      moduleId: mod?.id ?? null,
+      lessonAvailable: Boolean(lesson),
       focus,
       instructions,
       expiresAt

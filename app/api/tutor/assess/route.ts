@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { tutorEnabled } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
+import { languageLabel } from "@/lib/languages/catalog";
+import { resolveAssessmentLocale } from "@/lib/tutor/pronunciation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -12,10 +14,20 @@ interface WordScore {
 }
 
 // Short, strict-but-kind coaching from the scores (best-effort; never blocks).
+//
+// The two language names are ARGUMENTS now. They were "English pronunciation
+// coach for a Spanish speaker", baked in — which was true of the 30-day drills
+// and false the moment the curriculum modules arrived, because Crawl scores a
+// phrase in whichever of the catalog's languages the learner is learning. A
+// coach that names the wrong two languages does not just read oddly: it tells
+// the model to explain Spanish interference to someone whose problem is
+// Hindi's retroflex stops.
 async function coach(reference: string, result: {
   pron: number | null;
   transcript: string;
   words: WordScore[];
+  targetName: string;
+  learnerName: string;
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return "";
@@ -33,7 +45,8 @@ async function coach(reference: string, result: {
           {
             role: "system",
             content:
-              "You are a strict but encouraging English pronunciation coach for a Spanish speaker. " +
+              `You are a strict but encouraging ${result.targetName} pronunciation coach for a ${result.learnerName} speaker. ` +
+              `Write your feedback in ${result.learnerName}. ` +
               "In 1-2 short sentences give specific, actionable feedback. If certain words scored low, " +
               "name them and give one quick tip. Be direct, warm, and brief — no fluff."
           },
@@ -80,10 +93,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const audio = form.get("audio");
   const referenceText = String(form.get("referenceText") ?? "").trim();
-  const language = String(form.get("language") ?? "en-US");
+  // Either a catalog code ("es", from a module lesson) or a full locale
+  // ("en-US", from the legacy 30-day drills) — lib/tutor/pronunciation.ts
+  // takes both and refuses to guess at anything else.
+  const languageRaw = String(form.get("language") ?? "en-US");
+  const learnerRaw = String(form.get("learner") ?? "en");
+  const locale = resolveAssessmentLocale(languageRaw);
 
   if (!(audio instanceof File) || audio.size === 0 || !referenceText) {
     return NextResponse.json({ error: "audio and referenceText are required." }, { status: 400 });
+  }
+
+  // Azure assesses 24 of the catalog's 100 languages. Saying so plainly beats
+  // sending the audio anyway and returning a confident score computed against
+  // the wrong acoustic model — and it costs nothing, which is the other half
+  // of why the check is here rather than after the request.
+  if (!locale) {
+    return NextResponse.json({
+      configured: true,
+      supported: false,
+      message: `Pronunciation scoring isn't available for ${languageLabel(languageRaw)} yet — the phrase and its meaning still are.`
+    });
   }
 
   if (!key || !region) {
@@ -106,7 +136,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const url =
     `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1` +
-    `?language=${encodeURIComponent(language)}&format=detailed`;
+    `?language=${encodeURIComponent(locale)}&format=detailed`;
 
   try {
     const audioBuffer = Buffer.from(await audio.arrayBuffer());
@@ -145,6 +175,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const result = {
       configured: true as const,
+      supported: true as const,
+      locale,
       transcript: String(data.DisplayText ?? nbest?.Display ?? ""),
       accuracy: pa.AccuracyScore ?? null,
       fluency: pa.FluencyScore ?? null,
@@ -157,7 +189,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const coaching = await coach(referenceText, {
       pron: result.pron,
       transcript: result.transcript,
-      words
+      words,
+      // The names, not the codes: "Spanish", not "es". languageLabel() falls
+      // back to the raw string, so a locale from the legacy drills still reads
+      // as something rather than blowing up.
+      targetName: languageLabel(languageRaw.split("-")[0]),
+      learnerName: languageLabel(learnerRaw.split("-")[0])
     });
 
     return NextResponse.json({ ...result, coaching });
