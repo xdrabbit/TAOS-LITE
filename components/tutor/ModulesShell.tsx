@@ -411,6 +411,10 @@ function Crawl({
       // Unlock the element inside the tap, the same dance /translate does.
       a.play().catch(() => {});
       a.pause();
+      // No `sourceLanguage` on purpose. That field picks the CLONE under the
+      // voice-follows-speaker rule (lib/tts/voice.ts), and the speaker here is
+      // the tutor — neither Tom nor Liz. Omitting it lands on the default
+      // multilingual voice, which is what a Hindi lesson should sound like.
       const blob = await requestSpeech({ text, engine, targetLanguage: target });
       if (!blob) return; // tier 2 — the page says so already
       a.src = URL.createObjectURL(blob);
