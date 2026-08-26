@@ -40,6 +40,18 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   → Curriculum plan for bringing it back: `docs/tutor-curriculum-plan.md`
   (14 language-agnostic intent modules, crawl/walk/run loop, engineering
   order — cost guards land before customers). (added 2026-08-19)
+  → PHASE 1 built 2026-08-25, PR #35, open for Tom — steps 1-3 of the plan
+  plus Conversation Partner and the catalog wiring step 4 asked for. The
+  fourteen modules are data (`lib/tutor/modules.ts`), lessons generate per
+  (module × target × learner) with the contrast hook and are cached so repeat
+  visits are free, and crawl/walk/run runs against real Azure and real
+  realtime. **The flag stays off** — phase 2 is the plan-minute metering, and
+  the hook points for it are already emitted (`lib/tutor/meter.ts`: a start
+  line at mint, an end line at hang-up, one session id tying them). Run log
+  and transcripts: `docs/tutor-phase1-verification.md`. What phase 2 owes:
+  debit the minutes in those two functions, move `checkTutorAllowance` behind
+  them, decide whether `tutor_sessions` is written server-side, and put
+  progress somewhere better than localStorage.
 - /live "On-device" mode: find out why it never works, or delete it — Tom
   (8/18): it has never once worked for him. Gated off for RC1 behind
   NEXT_PUBLIC_ENABLE_ONDEVICE_STT (lib/release.ts), so /live now has one
