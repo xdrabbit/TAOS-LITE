@@ -42,6 +42,7 @@ import type { Lesson, LessonPronunciationItem } from "@/lib/tutor/lesson";
 import type { TutorLevel, TutorPhase } from "@/lib/tutor/types";
 import {
   completedPhases,
+  markForReview,
   markPhaseDone,
   nextPhase,
   progressKey,
@@ -50,6 +51,15 @@ import {
   writeStoredProgress,
   type TutorProgress
 } from "@/lib/tutor/progress";
+import {
+  CRAWL_MAX_ATTEMPTS,
+  CRAWL_PASS_SCORE,
+  crawlFraming,
+  crawlOutcome,
+  crawlPassScore,
+  crawlScore,
+  type CrawlOutcome
+} from "@/lib/tutor/crawl";
 import {
   startConversation,
   type ActiveConversation,
@@ -84,10 +94,16 @@ interface AssessResult {
   coaching?: string;
 }
 
-function scoreColor(n: number | null | undefined): string {
+// Green means "this passed", not "this was excellent".
+//
+// The bar is an argument because the gate moved: Crawl advances at
+// CRAWL_PASS_SCORE (lib/tutor/crawl.ts), and a 68 painted red while the screen
+// says "Got it — next phrase" is the app disagreeing with itself. The word
+// chips keep the default bar; a per-word accuracy is not the gate.
+function scoreColor(n: number | null | undefined, pass: number = CRAWL_PASS_SCORE): string {
   if (typeof n !== "number") return "text-amber-100/60";
-  if (n >= 80) return "text-emerald-300";
-  if (n >= 60) return "text-amber-300";
+  if (n >= pass) return "text-emerald-300";
+  if (n >= pass - 20) return "text-amber-300";
   return "text-rose-300";
 }
 
@@ -280,6 +296,18 @@ function ModuleLoop({
     onProgress(markPhaseDone(progress, key, which, new Date().toISOString()));
   };
 
+  // One attempt, one write. The score and the review mark both land on the
+  // same progress entry and both derive from the `progress` prop, so sending
+  // them as two calls would have the second one built from a value the first
+  // already superseded — the review mark would quietly drop the new best
+  // score. Folded into a single transform instead.
+  const recordAttempt = (score: number | null, reviewPhrase: string | null) => {
+    let next = progress;
+    if (typeof score === "number") next = recordScore(next, key, score);
+    if (reviewPhrase) next = markForReview(next, key, reviewPhrase);
+    if (next !== progress) onProgress(next);
+  };
+
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
@@ -330,9 +358,10 @@ function ModuleLoop({
               target={target}
               learner={learner}
               profile={profile}
+              level={level}
               scoringAvailable={capabilities?.pronunciationScoring !== false}
               bestScore={progress[key]?.bestScore}
-              onScore={(score) => onProgress(recordScore(progress, key, score))}
+              onAttempt={recordAttempt}
               onDone={() => {
                 markDone("crawl");
                 setPhase("walk");
@@ -361,15 +390,21 @@ function ModuleLoop({
 
 // ── Crawl ──────────────────────────────────────────────────────────────────
 
+// Advancing is on a short delay, not instant: the score is the thing that
+// makes progress feel earned rather than arbitrary, and swapping the phrase
+// out the same frame it appears means the learner never reads it.
+const CRAWL_ADVANCE_MS = 1800;
+
 function Crawl({
   lesson,
   module: mod,
   target,
   learner,
   profile,
+  level,
   scoringAvailable,
   bestScore,
-  onScore,
+  onAttempt,
   onDone
 }: {
   lesson: Lesson;
@@ -377,31 +412,64 @@ function Crawl({
   target: string;
   learner: string;
   profile: Profile | null;
+  level: TutorLevel;
   scoringAvailable: boolean;
   bestScore?: number;
-  onScore: (score: number) => void;
+  /** One scored attempt: the score to keep, and the phrase to revisit (or null). */
+  onAttempt: (score: number | null, reviewPhrase: string | null) => void;
   onDone: () => void;
 }): JSX.Element {
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<"idle" | "recording" | "scoring">("idle");
   const [result, setResult] = useState<AssessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Scored attempts on the CURRENT phrase, and what the last one decided.
+  // Both reset with the phrase — the cap is per phrase, not per lesson.
+  const [attempts, setAttempts] = useState(0);
+  const [outcome, setOutcome] = useState<CrawlOutcome | null>(null);
+  // The count is also a ref because the attempt is counted inside the
+  // recorder's onstop callback, which was created a render ago. Counting off
+  // the ref means the cap cannot be undercounted by a stale closure and let a
+  // fourth attempt through.
+  const attemptsRef = useRef(0);
+  // Once a phrase has been passed, it is passed. A learner who taps record
+  // again to polish a 62 must not be able to talk their way onto the review
+  // list — that list is for phrases Crawl gave up on, not for perfectionism.
+  const passedRef = useRef(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mimeRef = useRef("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const advanceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const items = lesson.pronunciation;
   const item: LessonPronunciationItem | undefined = items[index];
   const engine = isSubscriber(profile) ? "elevenlabs" : "openai";
+  const passScore = crawlPassScore(level);
+  const lastPhrase = index + 1 >= items.length;
 
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      if (advanceRef.current) clearTimeout(advanceRef.current);
     };
   }, []);
+
+  function goTo(next: number) {
+    if (advanceRef.current) {
+      clearTimeout(advanceRef.current);
+      advanceRef.current = null;
+    }
+    setIndex(next);
+    setResult(null);
+    setError(null);
+    attemptsRef.current = 0;
+    passedRef.current = false;
+    setAttempts(0);
+    setOutcome(null);
+  }
 
   async function hear(text: string) {
     if (!audioRef.current && typeof Audio !== "undefined") audioRef.current = new Audio();
@@ -427,6 +495,13 @@ function Crawl({
   async function startRecording() {
     setError(null);
     setResult(null);
+    // Recording again during the hand-off means "I want another go at this
+    // one". Honour it: cancel the pending advance and stay put. The cap still
+    // applies, so this cannot become the old trap in reverse.
+    if (advanceRef.current) {
+      clearTimeout(advanceRef.current);
+      advanceRef.current = null;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Microphone not available. Use HTTPS and allow mic access.");
       return;
@@ -490,8 +565,30 @@ function Crawl({
       const payload = (await res.json().catch(() => ({}))) as AssessResult;
       if (!res.ok && !payload.configured) throw new Error(payload.error || "Scoring failed.");
       setResult(payload);
+      const number = payload.configured ? crawlScore(payload) : null;
+      if (typeof number === "number") {
+        // The gate (lib/tutor/crawl.ts): pass the bar and move on, or run out
+        // of attempts and move on anyway. Either way the learner leaves.
+        const attempt = attemptsRef.current + 1;
+        attemptsRef.current = attempt;
+        setAttempts(attempt);
+        const verdict = crawlOutcome({ score: number, attempts: attempt, level });
+        if (verdict.verdict === "passed") passedRef.current = true;
+        setOutcome(verdict);
+        onAttempt(number, verdict.markForReview && !passedRef.current ? item.phrase : null);
+        if (verdict.advance && !lastPhrase) {
+          // Only within the lesson. The last phrase hands back to the learner
+          // rather than auto-starting Walk — Walk opens a realtime session,
+          // which costs money, and nothing should spend that on a timer.
+          const next = index + 1;
+          if (advanceRef.current) clearTimeout(advanceRef.current);
+          advanceRef.current = setTimeout(() => {
+            advanceRef.current = null;
+            goTo(next);
+          }, CRAWL_ADVANCE_MS);
+        }
+      }
       if (payload.configured && typeof payload.pron === "number") {
-        onScore(payload.pron);
         void saveTutorAttempt({
           course: "modules",
           lesson_id: `${mod.id}:${target}`,
@@ -581,7 +678,27 @@ function Crawl({
       {item ? (
         <div className="rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4">
           <div className="flex items-baseline justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
-            <span>Say it</span>
+            <span className="flex items-center gap-2">
+              Say it
+              {/* Attempts on this phrase, as dots — numerals and dots read the
+                  same in both languages, and three of them make the cap
+                  visible before it arrives rather than after. */}
+              {attempts > 0 ? (
+                <span
+                  className="flex items-center gap-1"
+                  aria-label={`Attempt ${attempts} of ${CRAWL_MAX_ATTEMPTS}`}
+                >
+                  {Array.from({ length: CRAWL_MAX_ATTEMPTS }, (_, i) => (
+                    <span
+                      key={i}
+                      className={`inline-block h-1.5 w-1.5 rounded-full ${
+                        i < attempts ? "bg-amber-300" : "bg-white/15"
+                      }`}
+                    />
+                  ))}
+                </span>
+              ) : null}
+            </span>
             <span>
               {index + 1} / {items.length}
             </span>
@@ -640,10 +757,20 @@ function Crawl({
                   </p>
                 ) : (
                   <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                    <div className="flex items-baseline justify-between">
+                    {/* The score is present but small. It is here so advancing
+                        feels earned rather than arbitrary — not so the learner
+                        reads a verdict on themselves off a 3xl number. */}
+                    <div className="flex items-baseline justify-between gap-2">
                       <span className="text-sm text-amber-100/60">Pronunciation</span>
-                      <span className={`text-3xl font-bold ${scoreColor(result.pron ?? null)}`}>
-                        {typeof result.pron === "number" ? Math.round(result.pron) : "—"}
+                      <span className="flex items-baseline gap-1.5">
+                        <span
+                          className={`text-xl font-semibold ${scoreColor(crawlScore(result), passScore)}`}
+                        >
+                          {typeof crawlScore(result) === "number"
+                            ? `${Math.round(crawlScore(result) as number)}%`
+                            : "—"}
+                        </span>
+                        <span className="text-[11px] text-amber-100/40">{passScore} to pass</span>
                       </span>
                     </div>
                     {result.words?.length ? (
@@ -661,6 +788,19 @@ function Crawl({
                     {result.coaching ? (
                       <p className="mt-2 text-sm text-amber-50/85">{result.coaching}</p>
                     ) : null}
+                    {outcome ? (
+                      // What Crawl decided, in the learner's two languages.
+                      // None of the three says "you failed" — see crawlFraming.
+                      <p
+                        className={`mt-2 rounded-xl px-3 py-2 text-sm ${
+                          outcome.verdict === "retry"
+                            ? "bg-amber-400/10 text-amber-100"
+                            : "bg-emerald-400/10 text-emerald-100"
+                        }`}
+                      >
+                        {crawlFraming(outcome.verdict)}
+                      </p>
+                    ) : null}
                   </div>
                 )
               ) : null}
@@ -677,14 +817,10 @@ function Crawl({
             <span className="text-amber-100/40">
               {typeof bestScore === "number" ? `Best ${bestScore}` : ""}
             </span>
-            {index + 1 < items.length ? (
+            {!lastPhrase ? (
               <button
                 type="button"
-                onClick={() => {
-                  setIndex(index + 1);
-                  setResult(null);
-                  setError(null);
-                }}
+                onClick={() => goTo(index + 1)}
                 className="font-medium text-amber-300"
               >
                 Next phrase →

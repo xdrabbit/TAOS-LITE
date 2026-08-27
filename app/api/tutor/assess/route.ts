@@ -3,15 +3,14 @@ import { tutorEnabled } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
 import { languageLabel } from "@/lib/languages/catalog";
 import { resolveAssessmentLocale } from "@/lib/tutor/pronunciation";
+import { parseAzureAssessment, type AssessmentWord } from "@/lib/tutor/assessment";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-interface WordScore {
-  word: string;
-  accuracy: number | null;
-  errorType: string | null;
-}
+/** One scored word. The shape is lib/tutor/assessment.ts's; this is the name
+ * the coaching prompt below has always used for it. */
+type WordScore = AssessmentWord;
 
 // Short, strict-but-kind coaching from the scores (best-effort; never blocks).
 //
@@ -160,30 +159,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const nbest = (Array.isArray(data.NBest) ? data.NBest[0] : null) as Record<string, unknown> | null;
-    const pa = (nbest?.PronunciationAssessment ?? {}) as Record<string, number>;
-    const words: WordScore[] = Array.isArray(nbest?.Words)
-      ? (nbest!.Words as Array<Record<string, unknown>>).map((w) => {
-          const wpa = (w.PronunciationAssessment ?? {}) as Record<string, unknown>;
-          return {
-            word: String(w.Word ?? ""),
-            accuracy: typeof wpa.AccuracyScore === "number" ? (wpa.AccuracyScore as number) : null,
-            errorType: typeof wpa.ErrorType === "string" ? (wpa.ErrorType as string) : null
-          };
-        })
-      : [];
+    // This endpoint returns the scores FLAT on the NBest entry, not nested
+    // under PronunciationAssessment the way the SDK does — reading only the
+    // nested shape is why Crawl rendered "—" on every attempt for a month.
+    // lib/tutor/assessment.ts reads both and explains the whole failure.
+    const scores = parseAzureAssessment(data);
+    const words: WordScore[] = scores.words;
 
     const result = {
       configured: true as const,
       supported: true as const,
       locale,
-      transcript: String(data.DisplayText ?? nbest?.Display ?? ""),
-      accuracy: pa.AccuracyScore ?? null,
-      fluency: pa.FluencyScore ?? null,
-      completeness: pa.CompletenessScore ?? null,
-      prosody: pa.ProsodyScore ?? null,
-      pron: pa.PronScore ?? null,
-      words
+      ...scores
     };
 
     const coaching = await coach(referenceText, {

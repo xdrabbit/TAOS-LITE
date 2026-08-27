@@ -32,6 +32,14 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   is founders-only. This is a manual step until there is a "delete my
   account" flow to hang it on. (added 2026-08-26)
 
+- Walk one Crawl module with a real mouth — every pronunciation number behind
+  the new "close enough" bar (PR #38) came from text-to-speech, which has no
+  hesitation and scores high on fluency, so a person's takes will land LOWER
+  than the 76-92 the synthetic ones did. Liz saying five phrases on a preview
+  answers whether 60 is the right bar or whether it wants to be 50. Same
+  session also covers the other gap: nobody has tapped Crawl on a phone since
+  the assess route started returning a score at all. (added 2026-08-27)
+
 - First-release scope cut — Tom (8/16): "we need to look seriously about what
   we can take off for a first release. Liz and I are ready to hook up the bank
   to Stripe." Decide which screens are in v1, hide the rest, and do the Stripe
@@ -355,6 +363,43 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **Crawl moves on at "close enough" — Liz's field report, and the score that
+  was never there** (PR #38, 2026-08-27) — Liz was the first person outside
+  this repo to walk the curriculum and she hit a wall: Crawl's Say-It step held
+  her on one phrase, asking for a pronunciation she was not going to produce
+  that day. There are now two ways out of a phrase and no third — **pass at 60**
+  (`CRAWL_PASS_SCORE`, `lib/tutor/crawl.ts`; 70 at Intermediate, 80 at Advanced,
+  because a learner who chose Advanced asked to be pushed), or **three attempts
+  and Crawl lets go anyway**, warmly — "Close enough — we'll circle back ·
+  Suficiente por ahora — volveremos" — marking the phrase for review in
+  localStorage for phase 2 to surface. The attempt cap applies at every level,
+  so Advanced means "three tries at 80" and never "stuck at 80". The score is
+  still on screen but small, beside the bar it is measured against ("32% · 60 to
+  pass"), with three dots that make the cap visible before it arrives.
+  → **The verification found a bug older than the fix: Crawl never showed a
+  score at all.** Not once, in any language, since phase 1. The assess route
+  read `NBest[0].PronunciationAssessment.PronScore` — the Speech SDK's shape —
+  and the REST endpoint the app actually calls returns the scores FLAT on the
+  NBest entry. `pa.PronScore` was `undefined` on every request, `?? null` made
+  it null, the screen rendered "—", and the coaching model was handed
+  `pron ?? 0` and wrote warm specific feedback about a score of zero, which is
+  why it still looked alive. Nothing threw and nothing logged. Fixed in
+  `lib/tutor/assessment.ts`, which reads both shapes and is pinned by a REAL
+  captured Azure response. **Reaching Azure is not the same as a number
+  arriving** — phase 1 verified the former and recorded it as the latter.
+  → Verified against real Azure (westus2, es-MX) through a temporary
+  secret-guarded probe deployed to a preview, because the key is SENSITIVE in
+  Vercel and cannot be pulled to a laptop; the probe is deleted from the branch.
+  An audibly-foreign but recognizable attempt scores **76–92** and passes;
+  only a missing word or real hesitation falls under 60 (**32–38**). Then the
+  real screen was walked in headless Chrome replaying those exact payloads:
+  three failures → the bilingual cap framing renders and the review mark
+  lands → auto-advance → the next phrase passes at 76%. The last phrase never
+  auto-advances into Walk, because Walk opens a realtime session and nothing
+  should spend money on a timer. Full run, numbers and the two remaining gaps
+  (a human mouth; a phone against the fixed route):
+  `docs/tutor-crawl-gating-verification.md`.
 
 - **Data hygiene: delete means delete** (PR #37, 2026-08-26) — the three
   gaps `docs/data-map.md` found between what TAOS promises and what the
