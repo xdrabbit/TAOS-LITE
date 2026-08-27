@@ -51,7 +51,11 @@ const REACHABLE: Record<string, Array<keyof typeof SURFACES>> = {
  */
 const GATED: Record<string, string> = {
   tutor: "tutorEnabled()",
-  call: "callEnabled()",
+  // /call went from "dark to everyone" back to founders-only on 8/27, so the
+  // guard it hides behind is a founder check now, not the public flag. The
+  // flag is still off and still real — callVisibleTo() is `flag || founder`,
+  // so stripping this block is what a CUSTOMER's nav looks like.
+  call: "callVisible",
   video: "founder"
 };
 

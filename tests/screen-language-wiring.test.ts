@@ -33,7 +33,18 @@ const SCREENS = {
   typeTranslate: "components/TranslateShell.tsx",
   live: "components/LiveShell.tsx",
   tabletop: "components/TabletopShell.tsx",
-  chat: "components/ChatShell.tsx"
+  chat: "components/ChatShell.tsx",
+  /**
+   * The one this file was written about, added late and on purpose.
+   *
+   * When the catalog landed (1711a3f4) /live, /tabletop and /chat were wired
+   * to it and /call was NOT — it kept `type TargetLang = "en" | "es"` and a
+   * two-name lookup table, so a pair of [en, it] got interpreted into
+   * Spanish. Nobody noticed because /call was founders-only and then dark.
+   * The screen is back on 2026-08-27 and it is listed here, which means it
+   * has to keep passing every rule below like everyone else.
+   */
+  call: "components/CallShell.tsx"
 } as const;
 
 /** Server-side language plumbing behind those screens. */
@@ -43,7 +54,8 @@ const ROUTES = {
   tabletopRealtime: "app/api/tabletop/realtime/route.ts",
   chatSend: "app/api/chat/send/route.ts",
   chatVoice: "app/api/chat/voice/route.ts",
-  textTranslate: "app/api/text-translate/route.ts"
+  textTranslate: "app/api/text-translate/route.ts",
+  callRealtime: "app/api/call/realtime/route.ts"
 } as const;
 
 function read(path: string): string {
@@ -77,7 +89,7 @@ describe("no screen keeps its own language pair", () => {
     // The typing surface is here for the same reason and was found late: its
     // DIRECTIONS Record keyed by "en-es" carried a label AND a placeholder,
     // so the ceiling was three deep in one table.
-    for (const path of [SCREENS.live, SCREENS.tabletop, SCREENS.typeTranslate]) {
+    for (const path of [SCREENS.live, SCREENS.tabletop, SCREENS.typeTranslate, SCREENS.call]) {
       expect(code(path)).not.toMatch(/["']es-en["']|["']en-es["']/);
     }
   });
@@ -137,7 +149,7 @@ describe("every screen draws the SAME picker", () => {
 });
 
 describe("the pair screens share one pair", () => {
-  it("/translate, /live and /tabletop all read the same hook", () => {
+  it("/translate, /live, /tabletop and /call all read the same hook", () => {
     // One pair on disk, one restore, one recency list. Three copies of the
     // restore effect is how you get a phone whose languages depend on which
     // screen you happened to open first.
@@ -145,7 +157,8 @@ describe("the pair screens share one pair", () => {
       SCREENS.translate,
       SCREENS.typeTranslate,
       SCREENS.live,
-      SCREENS.tabletop
+      SCREENS.tabletop,
+      SCREENS.call
     ]) {
       expect(code(path)).toContain("useLanguagePair");
     }
@@ -168,7 +181,8 @@ describe("the pair screens share one pair", () => {
       SCREENS.translate,
       SCREENS.typeTranslate,
       SCREENS.live,
-      SCREENS.tabletop
+      SCREENS.tabletop,
+      SCREENS.call
     ]) {
       expect(code(path)).not.toContain("writeStoredPair");
       expect(code(path)).not.toContain("readStoredPair");
@@ -208,5 +222,56 @@ describe("streaming screens ask the catalog before they ask for a voice", () => 
   it("both say 'text only' somewhere a person will see it", () => {
     expect(code(SCREENS.live)).toContain("TEXT_ONLY_TITLE");
     expect(code(SCREENS.tabletop)).toMatch(/TextOnlyNote|TEXT_ONLY_TITLE/);
+  });
+});
+
+describe("/call carries the pair across two phones", () => {
+  it("names languages through the catalog, never through a table of its own", () => {
+    // The exact shape of the original sin: `target === "en" ? "English" :
+    // "Spanish"` inside the mint route, with the pair stopping at the network
+    // boundary even after the screen was fixed.
+    const route = code(ROUTES.callRealtime);
+    expect(route).not.toContain("TargetLang");
+    expect(route).not.toMatch(/["']English["']|["']Spanish["']/);
+    expect(code("lib/call/instructions.ts")).toContain("languageLabel(");
+  });
+
+  it("validates both ends against the catalog before either reaches the prompt", () => {
+    const route = code(ROUTES.callRealtime);
+    expect(route).toContain("isSupportedLanguageCode");
+  });
+
+  it("sends the pair on the wire, because the other end is a different phone", () => {
+    // This is what made /call harder than the other three screens, and what
+    // ENHANCEMENTS.md meant by "the handshake is the actual work, not the
+    // picker": each phone holds its OWN pair and cannot see the other's. A
+    // picker with no handshake is a screen that still guesses.
+    const session = code("lib/call/session.ts");
+    expect(session).toContain('"language"');
+    expect(session).toContain("onPeerLanguage");
+    expect(session).toContain("sendLanguage");
+    const shell = code(SCREENS.call);
+    expect(shell).toContain("onPeerLanguage");
+    expect(shell).toContain("sendLanguage");
+  });
+
+  it("does not fall back to a hardcoded partner language", () => {
+    // The fallback when the partner has not announced yet is `theirs` from
+    // the local pair — a guess drawn from the catalog, not from this file.
+    expect(code(SCREENS.call)).toContain("resolveCallDirection");
+    expect(code(SCREENS.call)).not.toMatch(/["'](?:en|es)["']/);
+  });
+
+  it("has no private road to /api/tts", () => {
+    // The interpreter speaks through requestSpeech (lib/tts/speech.ts) like
+    // /live and /tabletop, which is what makes a tier-2 language come back as
+    // quiet captions instead of a red banner.
+    expect(code(SCREENS.call)).not.toMatch(/fetch\(\s*["']\/api\/tts["']/);
+    expect(code("lib/call/interpreter.ts")).toContain("requestSpeech");
+    expect(code("lib/call/interpreter.ts")).not.toMatch(/fetch\(\s*["']\/api\/tts["']/);
+  });
+
+  it("says 'text only' where a person will see it", () => {
+    expect(code(SCREENS.call)).toContain("TEXT_ONLY_TITLE");
   });
 });

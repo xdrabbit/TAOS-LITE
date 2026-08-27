@@ -22,7 +22,7 @@ import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
-import { callEnabled, isFounder, tutorEnabled } from "@/lib/release";
+import { callVisibleTo, isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
@@ -375,9 +375,13 @@ export function TranslatorShell({
   const pulsePhaseRef = useRef<number>(0);
   const lastTickRef = useRef<number>(0);
 
-  // v1 release gate: Call/Table/Video links only render for founders
+  // v1 release gate: Call and Video links only render for founders
   // (lib/release.ts — the pages themselves are wrapped in FounderGate too).
   const founder = isFounder(email);
+  // /call asks its own question rather than reusing `founder`: it is founders
+  // OR everyone, once NEXT_PUBLIC_ENABLE_CALL ships it, and the nav must not
+  // be the surface that forgets the second half.
+  const callVisible = callVisibleTo(email);
 
   // The pair, the pill row and the sheet, shared with /live and /tabletop
   // (lib/translate/useLanguagePair.ts). pair[0] is YOUR side, pair[1] is
@@ -889,8 +893,8 @@ export function TranslatorShell({
                 plain Chat pill beside it — which is how /tabletop ended up
                 with no nav entry at all for anyone who isn't Tom or Liz.
                 Table is customer-facing now (lib/release.ts), so there is one
-                menu for everyone. Call is still dark for RC1, so today it
-                opens to Chat + Table. */}
+                menu for everyone. Call came back on 8/27 as founders-only, so
+                Tom and Liz see three entries here and customers see two. */}
             <div ref={togetherMenuRef} className="relative">
               <button
                 type="button"
@@ -907,11 +911,10 @@ export function TranslatorShell({
                   aria-label="Together"
                   className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
-                  {/* Call is off for RC1 (lib/release.ts) — it never got
-                      wired to the language catalog. Chat leads the menu
-                      when it's gone, so it drops the top border the way a
-                      first item should. */}
-                  {callEnabled() ? (
+                  {/* Call is founders-only (lib/release.ts). Chat leads the
+                      menu when it's gone, so it drops the top border the way
+                      a first item should. */}
+                  {callVisible ? (
                     <a
                       href="/call"
                       role="menuitem"
@@ -924,7 +927,7 @@ export function TranslatorShell({
                     href="/chat"
                     role="menuitem"
                     className={`block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10 ${
-                      callEnabled() ? "border-t border-white/10" : ""
+                      callVisible ? "border-t border-white/10" : ""
                     }`}
                   >
                     Chat · Chat

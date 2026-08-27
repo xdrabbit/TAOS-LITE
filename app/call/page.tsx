@@ -1,18 +1,15 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { CallShell } from "@/components/CallShell";
 import { FounderGate } from "@/components/FounderGate";
 import { callEnabled } from "@/lib/release";
 
-// Same reason as /tutor: without this the route is statically prerendered and
-// Next turns a build-time redirect() into an HTML shell that only bounces
-// after hydration — no Location header, and a flash of a page that is meant
-// to be gone. Dynamic rendering makes it a real 307 from the server.
+// Dynamic because the metadata below reads a release flag, and a statically
+// prerendered head would freeze whichever value was true at build time.
 export const dynamic = "force-dynamic";
 
-// The redirect still streams a head, so the title is conditional too:
-// `curl /call` and any link preview should not announce a screen RC1 does
-// not have.
+// `curl /call` and any link preview should not announce a screen customers do
+// not have. Founders reaching it from the nav don't need a title to find it,
+// and the room links they share with each other open the app either way.
 export function generateMetadata(): Metadata {
   if (!callEnabled()) return {};
   return {
@@ -23,15 +20,16 @@ export function generateMetadata(): Metadata {
 }
 
 export default function CallPage(): JSX.Element {
-  // Off for RC1 (lib/release.ts): /call never got wired to the language
-  // catalog, so it interprets into English or Spanish whatever pair the trip
-  // is actually on. Hiding the nav link is not enough — /call?room=XYZ links
-  // are the whole point of the screen and they live in people's messages.
-  if (!callEnabled()) redirect("/");
-  // Flag on: back to founders-only, the pre-RC1 behavior. /call bills two
-  // realtime lines while connected and the cost guards still aren't in.
+  // Founders only (lib/release.ts). A stranger who taps a forwarded
+  // /call?room=XYZ link gets bounced home rather than shown a card for a
+  // screen they can't have — see FounderGate's `deny`.
+  //
+  // The gate that MATTERS is in app/api/call/realtime/route.ts: this one runs
+  // in the browser off a client-held session, so it hides the screen without
+  // defending it. Rendering CallShell without a founder's access token buys
+  // you a 404 from the only route that spends money.
   return (
-    <FounderGate>
+    <FounderGate publicRelease={callEnabled()} deny="home">
       <CallShell />
     </FounderGate>
   );
