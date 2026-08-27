@@ -20,6 +20,10 @@ bottom of this file so any of it can be re-run.
 
 ## The one gap: the Azure score itself
 
+> **Closed 2026-08-26.** Tom ran this leg himself on the branch preview,
+> where `AZURE_SPEECH_KEY` is present, and pronunciation scoring came back
+> real. Everything below describes why the *local* run could not do it.
+
 `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` are marked **sensitive** in Vercel,
 which means `vercel env pull` returns `"[SENSITIVE]"` and the value cannot reach
 a laptop at all. Everything on the learner's side of that call is verified —
@@ -245,7 +249,9 @@ function say(line: string): void {
   appendFileSync(REPORT, line + "\n");
 }
 
-const TOM = "950d3c95-0385-4f16-8ceb-49963b2d4b75";
+// Auth is mocked, so the id is never checked against the database — any
+// well-formed UUID stands in for the signed-in user.
+const TOM = "00000000-0000-4000-8000-000000000000";
 
 vi.mock("@/lib/spendGuard", () => ({
   guardSpend: async () => ({ ok: true, user: { id: TOM }, anonymous: false }),
