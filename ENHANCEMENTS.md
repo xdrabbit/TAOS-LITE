@@ -150,6 +150,31 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- Data-map follow-ups (from the read-only audit, `docs/data-map.md`,
+  2026-08-26) — Reflections groundwork turned up four things worth deciding
+  before any couple-data plumbing lands. (1) Two backup tables,
+  `taos_lite_translations_bak_20260706` (2,081 rows, **zero** overlap with the
+  live table) and `_bak_20260825` (1,718 rows), hold full `original_text` /
+  `translation_text` with no FK to `auth.users` — so they survive account
+  deletion, are unreachable by "clear history", and are unreadable by the
+  people whose words they are. That is the sharpest edge against Reflections'
+  "delete means delete — raw *and* derived". (2) `taos_lite_chat_messages`
+  cascades on `sender_id`, so deleting one partner's account leaves the other
+  half of the dialogue in place — and nobody can delete a chat message at all
+  (no DELETE policy, no route). Revocation semantics need settling. (3) Voice
+  audio in `chat-voice` (27 objects) has no delete path and orphans on account
+  deletion. (4) `tutor_mastery` is dead (0 rows, no code refs) with a stale
+  `course_id in ('tom-spanish-1','liz-english-1')` CHECK — it looks like the
+  right home for phase 2's "progress off localStorage" and would reject every
+  real module id. Also noted: `taos_lite_predict_models` still carries
+  `direction in ('en-es','es-en')`, and ten of the fourteen tables exist only
+  in the database, not in `supabase/migrations/`. (added 2026-08-26)
+- /chat: Tom's member language reads `bs` (Bosnian) in BOTH threads, including
+  the real Tom & Liz one — so Liz's Spanish is being translated into Bosnian
+  for him, and 35 messages have `source_lang = 'bs'` recorded. Almost certainly
+  a stray tap from the 100-language catalog testing. One tap on /chat fixes it
+  going forward; the historical rows would stay wrong. Left alone deliberately
+  by the read-only audit. (added 2026-08-26)
 - /chat should translate on what you WROTE, not on what you read — the send
   and voice routes take the sender's own member language as the source
   (`sourceLang = me.lang`) and feed it to the prompt as "the sender usually
