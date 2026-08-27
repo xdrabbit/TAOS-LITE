@@ -135,6 +135,11 @@ export function CallShell(): JSX.Element {
   const timerRef = useRef<number | null>(null);
   const heardQueueRef = useRef<string[]>([]);
   const peerSpeakingGuardRef = useRef<number | null>(null);
+  // True from the moment a session is asked for until it is in hand. Without
+  // it, anything that re-points the interpreter during the ~1s mint window
+  // sees `interpreterRef.current === null`, decides there is nothing running,
+  // and starts a SECOND billing session alongside the first.
+  const startingRef = useRef(false);
   const elapsedRef = useRef(0);
   const roomRef = useRef("");
 
@@ -244,6 +249,7 @@ export function CallShell(): JSX.Element {
 
   const startInterpreterFor = useCallback(
     (track: MediaStreamTrack) => {
+      if (startingRef.current) return;
       stopInterpreter();
       setNotice(null); // clears the "partner left" banner on rejoin
       const dir = directionRef.current;
@@ -256,6 +262,8 @@ export function CallShell(): JSX.Element {
         );
         return;
       }
+
+      startingRef.current = true;
       startCallInterpreter(
         {
           direction: dir,
@@ -305,6 +313,9 @@ export function CallShell(): JSX.Element {
         })
         .catch(() => {
           /* onError already surfaced it */
+        })
+        .finally(() => {
+          startingRef.current = false;
         });
     },
     [stopInterpreter]
@@ -330,7 +341,7 @@ export function CallShell(): JSX.Element {
   // A doubled pair that comes back apart deserves its interpreter back, and
   // the remote track is already in hand.
   useEffect(() => {
-    if (!inCallRef.current || interpreterRef.current) return;
+    if (!inCallRef.current || interpreterRef.current || startingRef.current) return;
     if (direction.source === direction.target) return;
     const track = remoteTrackRef.current;
     if (track && track.readyState === "live") startInterpreterFor(track);
@@ -346,6 +357,7 @@ export function CallShell(): JSX.Element {
     inCallRef.current = false;
     const it = interpreterRef.current;
     const finalSpend = it?.spend() ?? null;
+    startingRef.current = false;
     stopInterpreter();
     const call = callRef.current;
     callRef.current = null;

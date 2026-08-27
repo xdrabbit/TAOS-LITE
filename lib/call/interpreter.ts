@@ -334,7 +334,11 @@ export async function startCallInterpreter(
     const mintRes = await fetch("/api/call/realtime", {
       method: "POST",
       headers: await jsonAuthHeaders(),
-      body: JSON.stringify({ ...direction, mode: voiceMode })
+      body: JSON.stringify({
+        source: direction.source,
+        target: direction.target,
+        mode: voiceMode
+      })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
