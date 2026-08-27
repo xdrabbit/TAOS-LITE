@@ -52,6 +52,43 @@ export const CHAT_LIST_SOMEONE = "Someone · Alguien";
 /** A thread with a second person in it and nothing said yet. */
 export const CHAT_LIST_NO_MESSAGES = "No messages yet · Aún no hay mensajes";
 
+// ── Deleting a chat ────────────────────────────────────────────────────────
+// The first destructive control /chat has ever had, and the words have one
+// job: make sure nobody taps it thinking it clears their own copy.
+//
+// It does not. A 1:1 thread belongs to both people (see the migration,
+// 20260826_chat_thread_deletion.sql), so either member deletes ALL of it —
+// both senders' messages and the voice notes behind them, off both phones,
+// with no undo and no notification to the partner. That is the semantic the
+// Reflections constitution implies ("either partner can revoke at any time"),
+// and it is a heavier thing than a delete button usually means. So the
+// confirmation says "for both of you" in both languages, and says the audio
+// goes too, because a voice note is the thing people would most regret.
+
+/** The control itself. Quiet — it sits below the conversation, not beside it. */
+export const CHAT_DELETE_LABEL = "Delete chat · Eliminar chat";
+
+export const CHAT_DELETE_BUSY = "Deleting… · Eliminando…";
+
+/**
+ * The confirm, as one string, because window.confirm takes one string — the
+ * same shape the history drawer's "Clear all" uses (components/HistoryDrawer),
+ * so the two destructive prompts in this app sound like one app.
+ *
+ * Newline-separated rather than "·"-separated: this is four sentences, not a
+ * label, and a wall of English and Spanish run together in a system dialog is
+ * exactly the thing people tap through without reading.
+ */
+export const CHAT_DELETE_CONFIRM =
+  "Delete this chat for BOTH of you?\n" +
+  "Every message and voice note goes, on both phones. This can't be undone.\n\n" +
+  "¿Eliminar este chat para LOS DOS?\n" +
+  "Se borran todos los mensajes y notas de voz, en ambos teléfonos. No se puede deshacer.";
+
+/** When the route says no. */
+export const CHAT_DELETE_FAILED =
+  "Could not delete the chat. · No se pudo eliminar el chat.";
+
 /** Longest name a row will show before it starts eating the timestamp. */
 export const NAME_MAX = 28;
 

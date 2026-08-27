@@ -1,0 +1,44 @@
+-- taos_leads stops accepting writes from the internet.
+--
+-- The policy this drops was `taos_leads_anon_insert`: INSERT, for {anon,
+-- authenticated}, `with check (true)`. The publishable key that satisfies
+-- "anon" ships in the browser bundle of every Supabase app by design — it is
+-- in lib/supabase.ts, in plain sight, correctly — so the policy's real
+-- meaning was "anyone on the internet may insert any row into this table".
+--
+-- Verified against production rather than assumed, because the first probe
+-- said the opposite and the reason it lied is worth writing down. A POST with
+-- the publishable key and `Prefer: return=representation` comes back 401,
+-- `new row violates row-level security policy` — which reads exactly like a
+-- table that is already closed. It is not: `return=representation` needs the
+-- inserted row READ back, and taos_leads has no SELECT policy, so the refusal
+-- was about the read. The same POST with `Prefer: return=minimal` answers
+-- **201 Created**. The write was always open; only the echo was shut.
+--
+-- ── What is lost ───────────────────────────────────────────────────────────
+-- Nothing in this repo. `taos_leads` has zero call sites here (checked again
+-- for this migration, and across every other project on the machine), one row
+-- in it — the owner's own address, 2026-06-20 — and a `source` column
+-- defaulting to 'atom', which is a different app's name. It is dead capture.
+--
+-- Be honest about the edge that is not in this repo: if some OTHER page
+-- somewhere still posts a lead here with the publishable key, this migration
+-- breaks it, silently, on the next visitor who types their email. That page
+-- has left no trace anywhere we can search and has produced no row since
+-- June, so the trade is one dead form against a table the whole internet can
+-- write to. The replacement path is POST /api/leads (app/api/leads/route.ts)
+-- — validated, rate limited, service role — and any page that needs to keep
+-- capturing leads should call that instead of the table.
+--
+-- ── Why no policy at all, rather than a narrower one ───────────────────────
+-- Same shape as taos_lite_chat_invites and tutor_lessons: RLS enabled, no
+-- policies, service role only. A narrower INSERT policy would still be a
+-- browser-reachable write endpoint, and the validation and rate limit that
+-- make a lead form safe are not things a `with check` can express. The
+-- table's writer is a route now, and the route holds the rules.
+drop policy if exists taos_leads_anon_insert on public.taos_leads;
+
+-- RLS is already enabled; state it anyway so this file describes the whole
+-- fence rather than half of it. A table with no policies and RLS OFF is wide
+-- open, which is the one way this could be got wrong later.
+alter table public.taos_leads enable row level security;

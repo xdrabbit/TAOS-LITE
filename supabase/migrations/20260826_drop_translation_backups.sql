@@ -1,0 +1,42 @@
+-- The two backup copies of everyone's translation history, dropped.
+--
+-- `docs/data-map.md` (2026-08-26) went looking for where the app's promises
+-- and its database disagree and found the answer sitting in two tables nobody
+-- in this repo has ever named:
+--
+--   taos_lite_translations_bak_20260706 — 2,081 rows, 5 users, June 16 to
+--     July 6, and ZERO overlap with the live table. Not a snapshot: a
+--     standalone corpus of things people said, in full, original AND
+--     translation, that the app cannot see and the owners cannot reach.
+--   taos_lite_translations_bak_20260825 — 1,718 rows, a copy of the current
+--     window taken the night before the tutor migration.
+--
+-- Neither had an FK to auth.users, so deleting an account did not touch them.
+-- Neither was reachable by clearHistory() or by the per-row Delete in the
+-- history drawer, because RLS was on with no policies at all — invisible to
+-- the user whose words they were, readable only by the service role. So
+-- "Delete · Eliminar" was already a true statement about one table and a
+-- false one about three, and the June set is the sharp end of that: a user
+-- who cleared their history in July would have every reason to believe those
+-- 2,081 rows no longer existed.
+--
+-- Reflections (`docs/reflections-plan.md`) puts "delete means delete — raw
+-- AND derived" in writing as a promise to couples. It cannot be made from
+-- here. This is the prerequisite.
+--
+-- ── Straight drop, on the owner's explicit instruction ─────────────────────
+-- Tom's call, 2026-08-26, asked and answered before this file was written:
+-- drop them, he keeps his own backups. So there is deliberately no export
+-- step, no archive schema, and no time-boxed retention window in this file —
+-- an "archive" is the same rows in a different place, and the thing being
+-- fixed is that the rows exist somewhere no delete path reaches.
+--
+-- Not `if exists` on the tables themselves for a reason: this migration is
+-- the record that these two specific tables were removed on purpose, and a
+-- silent no-op would make a re-run indistinguishable from a run against a
+-- database where somebody had recreated them under the same names. `cascade`
+-- is not used either — nothing references these tables (no FKs, no views),
+-- and if something did, this should stop and be looked at rather than take
+-- the dependent object with it.
+drop table public.taos_lite_translations_bak_20260706;
+drop table public.taos_lite_translations_bak_20260825;

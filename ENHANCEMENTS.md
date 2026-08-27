@@ -16,6 +16,22 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- Chat delete, one real tap — the hygiene pass (PR #37) shipped
+  "either partner can burn the chat" and proved the semantics against the
+  live schema in a rolled-back transaction, but nobody has yet tapped Delete
+  on a real thread on a real phone. Make a throwaway chat from the Start
+  button, send one voice note into it, delete it, and confirm the row is gone
+  from the list AND the audio is gone from the bucket (`GET
+  /api/chat/voice/orphans` should still say 0). **Do not test on the Tom &
+  Liz thread** — it is 35 messages and 20 voice notes, and there is no undo.
+  (added 2026-08-26)
+- Run the orphan sweep after any account deletion — Postgres cannot delete
+  from a storage bucket (Supabase blocks it outright), so deleting an account
+  in the Supabase dashboard removes its chat threads and rows but leaves the
+  voice audio behind. `POST /api/chat/voice/orphans` is the cleanup, and it
+  is founders-only. This is a manual step until there is a "delete my
+  account" flow to hang it on. (added 2026-08-26)
+
 - First-release scope cut — Tom (8/16): "we need to look seriously about what
   we can take off for a first release. Liz and I are ready to hook up the bank
   to Stripe." Decide which screens are in v1, hide the rest, and do the Stripe
@@ -339,6 +355,43 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **Data hygiene: delete means delete** (PR #37, 2026-08-26) — the three
+  gaps `docs/data-map.md` found between what TAOS promises and what the
+  database does, closed, plus the world-writable table it found on the way.
+  **The two backup tables are dropped** —
+  `taos_lite_translations_bak_20260706` (2,081 rows, June–July, with ZERO
+  overlap with the live table) and `..._bak_20260825` (1,718 rows) held
+  everyone's utterances in full, outside every delete path, with no FK to
+  `auth.users` and no policies, so a user who cleared their history was
+  wrong about what still existed. Straight drop, Tom's call, no export.
+  **`taos_leads` is server-only** — its policy was INSERT for `{anon}` with
+  `WITH CHECK (true)`, and the key that satisfies "anon" is in every browser
+  bundle: a real POST with `Prefer: return=minimal` answered 201 Created
+  before this landed. Policy gone; `POST /api/leads` is the replacement
+  (origin check, rate limit, shape validation). **Either partner can burn a
+  chat** — a 1:1 thread belongs to both, so either member deletes ALL of it
+  (both senders' messages and the voice audio), with a bilingual confirm that
+  says "for BOTH of you" out loud. Deleting an account now takes its threads
+  with it, which ends the asymmetry where one person's deletion left the
+  other holding half a conversation they could not remove. So delete means
+  delete for chat now, as it already did for translate history (that path was
+  re-verified against the live schema this pass — per-row and clear-all both
+  work and neither reaches anyone else's rows; unchanged).
+  → **The one thing SQL cannot do**, and the reason there is a sweep: Supabase
+  refuses direct deletes on `storage.objects`, so no trigger or cascade can
+  ever reach a voice note. The delete route holds the Storage API and removes
+  a thread's audio BEFORE its rows; for the paths a route cannot see — an
+  account deleted in the dashboard, most of all — `/api/chat/voice/orphans`
+  (founders-only, GET reports, POST sweeps) is the cleanup. **Run it after any
+  account deletion.** Orphan count at the time of the pass was already 0 (27
+  objects, 27 owning rows — the "27 orphans" that started this was a
+  misreading of the map), and the point of the sweep is that it stays 0.
+  → Verified in a rolled-back transaction against the live schema: a member's
+  delete removed both senders' messages, a stranger's delete removed nothing,
+  and an account deletion removed the whole thread including the survivor's
+  half. Production data was not touched. What is NOT machine-verified is one
+  real tap on a real phone — see the note in **Up next**.
 
 - **Tutor phase 1 — the curriculum engine, merged dark** (PR #35,
   2026-08-26) — fourteen language-agnostic intent modules as data
