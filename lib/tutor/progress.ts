@@ -27,7 +27,25 @@ export interface ModuleProgress {
   run?: string;
   /** Best Azure pronunciation score seen in Crawl, 0-100. */
   bestScore?: number;
+  /**
+   * Phrases Crawl moved past on the attempt cap rather than on a passing score
+   * (lib/tutor/crawl.ts). Unfinished business, not a failure list: nothing
+   * reads it yet, and phase 2 is where it becomes a review pass. Written now
+   * because the moment the information exists is the moment it is free to
+   * keep — reconstructing it later would mean asking the learner to miss the
+   * phrase a second time.
+   */
+  review?: string[];
 }
+
+/**
+ * A cap on the review list, per (module, target, learner).
+ *
+ * localStorage is a few megabytes shared with the rest of the app, and a
+ * lesson has a handful of pronunciation items, so this is generous. It exists
+ * so a phone that somehow loops cannot grow the record without bound.
+ */
+export const MAX_REVIEW_MARKS = 20;
 
 /** Keyed by progressKey(). */
 export type TutorProgress = Record<string, ModuleProgress>;
@@ -66,6 +84,10 @@ export function parseStoredProgress(raw: string | null): TutorProgress {
       if (typeof v.bestScore === "number" && Number.isFinite(v.bestScore)) {
         entry.bestScore = Math.max(0, Math.min(100, v.bestScore));
       }
+      if (Array.isArray(v.review)) {
+        const phrases = v.review.filter((p): p is string => typeof p === "string" && p.length > 0);
+        if (phrases.length) entry.review = Array.from(new Set(phrases)).slice(-MAX_REVIEW_MARKS);
+      }
       out[key] = entry;
     }
     return out;
@@ -94,6 +116,29 @@ export function recordScore(progress: TutorProgress, key: string, score: number)
   const current = progress[key]?.bestScore ?? 0;
   if (!Number.isFinite(score) || score <= current) return progress;
   return { ...progress, [key]: { ...progress[key], bestScore: Math.round(score) } };
+}
+
+/**
+ * Crawl moved past this phrase on the attempt cap. Idempotent — the same
+ * phrase missed twice is one entry, because this is a set of things to revisit
+ * and not a tally of misses.
+ */
+export function markForReview(progress: TutorProgress, key: string, phrase: string): TutorProgress {
+  const trimmed = phrase.trim();
+  if (!trimmed) return progress;
+  const current = progress[key]?.review ?? [];
+  if (current.includes(trimmed)) return progress;
+  const review = [...current, trimmed].slice(-MAX_REVIEW_MARKS);
+  return { ...progress, [key]: { ...progress[key], review } };
+}
+
+/** Is this phrase on the revisit list? */
+export function isMarkedForReview(
+  progress: TutorProgress,
+  key: string,
+  phrase: string
+): boolean {
+  return (progress[key]?.review ?? []).includes(phrase.trim());
 }
 
 export function readStoredProgress(): TutorProgress {
