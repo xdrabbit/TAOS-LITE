@@ -33,7 +33,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   account" flow to hang it on. (added 2026-08-26)
 
 - Walk one Crawl module with a real mouth — every pronunciation number behind
-  the new "close enough" bar (PR #PRNUM) came from text-to-speech, which has no
+  the new "close enough" bar (PR #38) came from text-to-speech, which has no
   hesitation and scores high on fluency, so a person's takes will land LOWER
   than the 76-92 the synthetic ones did. Liz saying five phrases on a preview
   answers whether 60 is the right bar or whether it wants to be 50. Same
@@ -365,7 +365,7 @@ is not a prerequisite for using it.
 ## Shipped
 
 - **Crawl moves on at "close enough" — Liz's field report, and the score that
-  was never there** (PR #PRNUM, 2026-08-27) — Liz was the first person outside
+  was never there** (PR #38, 2026-08-27) — Liz was the first person outside
   this repo to walk the curriculum and she hit a wall: Crawl's Say-It step held
   her on one phrase, asking for a pronunciation she was not going to produce
   that day. There are now two ways out of a phrase and no third — **pass at 60**
