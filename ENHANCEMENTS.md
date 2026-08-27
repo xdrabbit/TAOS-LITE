@@ -376,6 +376,34 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **Walk and Run cannot circle one phrase — the client owns the script
+  position** (PR #TBD, 2026-08-27) — Tom's field test, screenshot-verified: the
+  Walk agent took "Buenos días" correctly five times, said "Ahora es perfecto.
+  Gracias." and then asked for it again after a "mhm". The second line of the
+  scene never arrived. The cause is structural — a realtime model holds no
+  script state and re-derives where the scene is on every turn — so the fix is
+  not a better prompt: **`lib/tutor/beats.ts` holds the position in the client**
+  (an ordered beat list derived from the lesson's roleplay for Walk, topic
+  checkpoints from the module's core moves for Run) and pushes it back into the
+  live session with `session.update` whenever it moves. A beat ends two ways
+  and no third: the learner produces the line (fuzzy match, accents and extra
+  words forgiven) or **three attempts and the scene moves on anyway** —
+  `BEAT_MAX_ATTEMPTS` is `CRAWL_MAX_ATTEMPTS` by import, so Liz's mercy law is
+  one number in one place. Acknowledgments ("mhm", "ok", "sí") are explicitly
+  "carry on": no attempt, no advance, no restart — and the current line is
+  tested first, so a module that teaches "yes" still takes "Sí" as the line.
+  If the model re-drills anyway it is corrected, and after two corrections on a
+  beat the learner is already working the client advances without it. Two
+  things the verification run found that the plan did not: the prompt was
+  arguing with itself ("have them repeat it once" is the loop's own
+  instruction — Walk and Run now correct inside the tutor's own reply, Partner
+  keeps the kindlier version), and a line the mercy cap SKIPPED has to be
+  closed too, worded so the model is not told the learner said it. Scene ends
+  → the phase ticks itself and the "go to Run" button pulses. Live transcripts:
+  `docs/tutor-walk-progression-verification.md`. Still owed: nobody has spoken
+  to it with a mouth (every learner turn in the run was text), and no live Run
+  session was minted. Tutor stays flag-off in Production.
+
 - **/call comes back — founders only, catalog-wired, and half the price**
   (PR #39, 2026-08-27) — /call had been dark to everyone since 8/18. Two
   objections put it there and both are answered.

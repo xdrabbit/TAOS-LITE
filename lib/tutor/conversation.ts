@@ -49,6 +49,14 @@ export interface ActiveConversation {
   stop: (reason?: StopReason) => Promise<void>;
   steer: (text: string) => void;
   setMicEnabled: (on: boolean) => void;
+  /**
+   * Replace the client's script-position block for the rest of the session
+   * (lib/tutor/beats.ts builds it). One slot, replaced rather than appended:
+   * the position is a single fact, and a model handed a growing pile of
+   * "beat 1 done… beat 2 done…" has to work out which line is current — the
+   * exact re-derivation this whole mechanism exists to take away from it.
+   */
+  setScriptState: (block: string) => void;
 }
 
 const DEFAULT_MAX_MS = 10 * 60 * 1000;
@@ -83,6 +91,9 @@ export async function startConversation(
   let stopped = false;
   let greeted = false;
   let baseInstructions = "";
+  // Where the client says the scene is. Empty for Conversation Partner, which
+  // has no script to be at a position in.
+  let scriptState = "";
   // The server's id for this session (lib/tutor/meter.ts). Held so the end of
   // the call can be reported against the same id the mint was logged under —
   // phase 2 reconciles the two lines into billed minutes.
@@ -167,10 +178,18 @@ export async function startConversation(
   // session.update keeps steering persistent for the rest of the call.
   const pushSessionUpdate = () => {
     if (!dc || dc.readyState !== "open") return;
-    const instructions =
+    // Persona first, then where the scene is, then anything the student asked
+    // for out loud. session.update REPLACES the instructions, so every part
+    // has to be re-sent together or sending one silently drops the others.
+    const instructions = [
+      baseInstructions,
+      scriptState,
       steerNotes.length > 0
-        ? `${baseInstructions}\n\nLive directives from the student (follow these from now on): ${steerNotes.join(" ")}`
-        : baseInstructions;
+        ? `Live directives from the student (follow these from now on): ${steerNotes.join(" ")}`
+        : ""
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     dc.send(
       JSON.stringify({
         type: "session.update",
@@ -197,6 +216,21 @@ export async function startConversation(
         response: { instructions: `${baseInstructions}\n\nFor this turn only: ${nudge}` }
       })
     );
+  };
+
+  /**
+   * The client moved the scene on. Pushed with session.update rather than a
+   * response.create: with server VAD the model is already answering the turn
+   * that triggered this, and a second response would either error as an active
+   * response or talk over the learner. session.update lands on the tutor's
+   * NEXT turn, which is precisely the turn that would otherwise have re-drilled
+   * a finished line.
+   */
+  const setScriptState = (block: string) => {
+    const next = block.trim();
+    if (next === scriptState) return;
+    scriptState = next;
+    pushSessionUpdate();
   };
 
   const steer = (text: string) => {
@@ -406,7 +440,7 @@ export async function startConversation(
     }
     await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
 
-    return { stop, steer, setMicEnabled };
+    return { stop, steer, setMicEnabled, setScriptState };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start the tutor.";
     setState("error");

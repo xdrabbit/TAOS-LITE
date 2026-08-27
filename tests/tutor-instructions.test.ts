@@ -135,6 +135,98 @@ describe("Run — free conversation, gently kept in-module", () => {
   });
 });
 
+describe("the anti-loop discipline", () => {
+  // Pinned verbatim, because these clauses are not decoration. Each one is a
+  // way the 2026-08-27 field session went wrong: it re-requested a line that
+  // had already landed, it read "mhm" as a restart, and it re-asked a question
+  // it had already been answered. lib/tutor/beats.ts is the mechanism that
+  // makes the loop impossible; this is the wording that makes it rare.
+  const walk = buildTutorInstructions({
+    target: "es",
+    learner: "en",
+    level: "beginner",
+    phase: "walk",
+    module: needs,
+    lesson
+  });
+  const run = buildTutorInstructions({
+    target: "es",
+    learner: "en",
+    level: "beginner",
+    phase: "run",
+    module: needs,
+    lesson
+  });
+
+  for (const [name, text] of [
+    ["walk", walk],
+    ["run", run]
+  ] as const) {
+    it(`${name} forbids re-requesting a produced phrase`, () => {
+      expect(text).toContain(
+        "NEVER ask for a phrase the learner has already produced in this session"
+      );
+      expect(text).toContain("that beat is FINISHED");
+    });
+
+    it(`${name} reads an acknowledgment as "carry on"`, () => {
+      expect(text).toContain('"mhm"');
+      expect(text).toContain("never a reason to start over");
+    });
+
+    it(`${name} treats the app's script position as authoritative`, () => {
+      // The client owns where the scene is (lib/tutor/beats.ts) and pushes it
+      // in with session.update. A model told this is advisory will argue.
+      expect(text).toContain("SCRIPT POSITION block");
+      expect(text).toContain("overrides your own sense of where you are");
+      expect(text).toContain("never re-open one");
+    });
+
+    it(`${name} forbids re-asking an answered question`, () => {
+      expect(text).toContain("Never ask a question you have already been answered");
+    });
+  }
+
+  it("does not ask for a line back while forbidding re-requests", () => {
+    // The contradiction that survived the first live run: "have them repeat it
+    // once" is the loop's own instruction when it sits next to "never
+    // re-request a produced phrase". Inside a scene the correction rides along
+    // in the tutor's own reply.
+    for (const text of [walk, run]) {
+      expect(text).toContain("Do NOT ask them to say it back to you");
+      expect(text).not.toContain("have them repeat it once");
+    }
+    // Conversation Partner is not a scene, and keeps the kindlier version.
+    const partner = buildTutorInstructions({
+      target: "es",
+      learner: "en",
+      level: "beginner",
+      phase: "partner"
+    });
+    expect(partner).toContain("have them repeat it once");
+  });
+
+  it("walk closes the scene instead of restarting it", () => {
+    expect(walk).toContain("Do not start the scene again");
+    expect(walk).toContain("you never walk back up it");
+  });
+
+  it("run refuses to collapse into a drill", () => {
+    expect(run).toContain("This is a conversation, not a drill");
+    expect(run).toContain("never run an exchange you have already had");
+  });
+
+  it("says none of it to Conversation Partner, which has no script", () => {
+    const partner = buildTutorInstructions({
+      target: "es",
+      learner: "en",
+      level: "beginner",
+      phase: "partner"
+    });
+    expect(partner).not.toContain("SCRIPT POSITION");
+  });
+});
+
 describe("Partner — no curriculum", () => {
   const text = buildTutorInstructions({
     target: "es",
