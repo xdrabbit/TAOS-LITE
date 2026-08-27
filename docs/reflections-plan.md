@@ -54,6 +54,10 @@ founders would not use on themselves.
    Conversations exist to be translated — that is the standing promise, and
    Reflections does not get to quietly widen it. Reflections is a separate,
    opt-in purpose with its own consent, in its own words, at its own moment.
+   - The couple graph does not exist before dual opt-in — no inferred partner
+     links, no shadow profiles; collection for Reflections begins at opt-in,
+     never retroactively by default (any retroactive inclusion is a separate,
+     explicit, both-partners choice).
    - Per-couple encryption for the analysis layer.
    - Delete means delete — raw *and* derived.
    - No training on couples' content. Ever, and said plainly in-product.
