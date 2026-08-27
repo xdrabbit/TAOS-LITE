@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   callEnabled,
+  callVisibleTo,
   founderEmails,
   HELD_BACK_V1,
   isFounder,
@@ -195,14 +196,20 @@ describe("onDeviceSttEnabled (RC1: /live has one engine)", () => {
   });
 });
 
-// /call is off for RC1 — and note it is BOTH flagged off here and still a
-// member of HELD_BACK_V1 above. That is deliberate, not a leftover: the flag
-// is the RC1 decision (nobody sees /call, founders included), the founders
-// gate is what it lands back on when the flag goes to 1, and the cost
-// argument that put it behind the gate in the first place is still unanswered.
-// Turning the flag on must not quietly ship /call to customers.
-describe("callEnabled (RC1: /call is dark)", () => {
-  it("is off when the flag is unset — the RC1 default, and what production ships", () => {
+// /call came back on 2026-08-27, founders-only — the gate /video sits behind
+// — and the public flag changed meaning in the process. It used to be "is
+// /call reachable at all" (RC1: no, by anyone, founders included); it is now
+// "has /call shipped to CUSTOMERS", which is still no.
+//
+// Both halves of the RC1 objection were answered to get here: CallShell reads
+// the shared language pair like every other screen (the catalog gap that
+// caused the blackout), and the cost guards ENHANCEMENTS.md asked for are in
+// with numbers measured against a live session. What has NOT been answered is
+// whether a stranger's carrier NAT can hold a call, or whether the per-minute
+// spend is customer-shaped — which is why the flag stays off and this block
+// pins that turning it on is a product decision, not a refactor.
+describe("callEnabled (the public flag: /call has NOT shipped to customers)", () => {
+  it("is off when the flag is unset — the default, and what production ships", () => {
     delete process.env.NEXT_PUBLIC_ENABLE_CALL;
     expect(callEnabled()).toBe(false);
   });
@@ -224,47 +231,129 @@ describe("callEnabled (RC1: /call is dark)", () => {
   it("reads the literal process.env expression, so Next can inline it client-side", () => {
     expect(read("lib/release.ts")).toContain("process.env.NEXT_PUBLIC_ENABLE_CALL");
   });
+});
 
-  it("stays in the founders-held set, so flag-on is not flag-on-for-everyone", () => {
+describe("callVisibleTo (founders now, everyone only when the flag ships)", () => {
+  it("lets founders in with the flag off — the whole point of this change", () => {
+    delete process.env.NEXT_PUBLIC_ENABLE_CALL;
+    delete process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
+    expect(callVisibleTo("xdrabbit@gmail.com")).toBe(true);
+    expect(callVisibleTo("lizmariett@gmail.com")).toBe(true);
+  });
+
+  it("keeps everyone else out with the flag off, signed in or not", () => {
+    delete process.env.NEXT_PUBLIC_ENABLE_CALL;
+    delete process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
+    expect(callVisibleTo("customer@example.com")).toBe(false);
+    expect(callVisibleTo(null)).toBe(false);
+    expect(callVisibleTo(undefined)).toBe(false);
+    expect(callVisibleTo("")).toBe(false);
+  });
+
+  it("opens to everyone only when the flag actually ships it", () => {
+    process.env.NEXT_PUBLIC_ENABLE_CALL = "1";
+    expect(callVisibleTo("customer@example.com")).toBe(true);
+    expect(callVisibleTo(null)).toBe(true);
+  });
+
+  it("stays in the founders-held set — /call is not a customer screen", () => {
     expect(new Set<string>(HELD_BACK_V1).has("call")).toBe(true);
-    expect(read("app/call/page.tsx")).toContain("<FounderGate>");
   });
 
-  it("redirects /call home rather than rendering it, and dynamically", () => {
-    // force-dynamic matters as much as the redirect: statically prerendered,
-    // Next turns redirect() into a post-hydration bounce with no Location
-    // header — a visible flash of a screen that is supposed to be gone.
-    const page = read("app/call/page.tsx");
-    expect(page).toContain('export const dynamic = "force-dynamic"');
-    expect(page).toContain('if (!callEnabled()) redirect("/")');
-    // A shared /call?room=XYZ link should not preview a title either.
-    expect(page).toContain("if (!callEnabled()) return {};");
+  it("is what the page gate, the nav and the money route all ask", () => {
+    // Three surfaces, one question. /tabletop lost its nav entry precisely
+    // because each surface grew its own idea of who was allowed, so this
+    // pins that none of them re-derives the answer from isFounder directly.
+    expect(read("app/call/page.tsx")).toContain("<FounderGate");
+    expect(read("components/TranslatorShell.tsx")).toContain("callVisibleTo(email)");
+    expect(read("app/api/call/realtime/route.ts")).toContain("callVisibleTo(email)");
   });
 
-  it("404s the one route that spends money", () => {
-    // /api/call/realtime is unauthenticated and its duration cap lives in the
-    // client, so an off feature that still mints sessions is a live billing
-    // hole, not a cosmetic one.
+  it("bounces a non-founder home rather than showing them a coming-soon card", () => {
+    // /call?room=XYZ links live in people's messages. A stranger who taps a
+    // forwarded one should land on TAOS, not on an advert for a screen they
+    // will never get — unlike /video, which you can only reach on purpose.
+    expect(read("app/call/page.tsx")).toContain('deny="home"');
+    expect(read("app/video/page.tsx")).not.toContain("deny=");
+  });
+});
+
+describe("the /call routes are the fence, not the page", () => {
+  // The page gate runs in the browser off a client-held Supabase session, so
+  // it hides /call without defending it. These two routes re-ask the same
+  // question against a server-validated token, and they are the ones that
+  // reach a paid provider.
+  for (const path of ["app/api/call/realtime/route.ts", "app/api/call/usage/route.ts"]) {
+    it(`${path} refuses a non-founder as a 404`, () => {
+      // The behaviour itself is exercised against the real handlers in
+      // tests/call-gating.test.ts; this is the cheap structural half, so a
+      // refactor that drops the check fails in two places rather than none.
+      const route = read(path);
+      expect(route).toContain("!callVisibleTo(email)");
+      expect(route).toContain("404");
+    });
+
+    it(`${path} identifies the caller before it decides anything`, () => {
+      // guardSpend FIRST, because founder-ness is an answer only a validated
+      // access token can give — and it must land before any provider call.
+      const route = read(path);
+      const guardAt = route.indexOf("await guardSpend(req)");
+      const visibleAt = route.indexOf("callVisibleTo(email)");
+      expect(guardAt).toBeGreaterThan(-1);
+      expect(visibleAt).toBeGreaterThan(guardAt);
+    });
+  }
+
+  it("the minting route never reaches OpenAI before the gate", () => {
     const route = read("app/api/call/realtime/route.ts");
-    expect(route).toContain("callEnabled");
-    expect(route).toMatch(/if \(!callEnabled\(\)\) \{[\s\S]*?status: 404/);
+    expect(route.indexOf("callVisibleTo(email)")).toBeLessThan(route.indexOf("fetch(CLIENT_SECRETS_URL"));
   });
 
-  it("has no /call link left in the nav outside the flag", () => {
-    // The Together menu is the only place /call was ever linked. Every link
-    // to it must sit directly under a callEnabled() gate — checked positionally
-    // rather than by stripping the block, because a second, ungated copy
-    // pasted in later is exactly the failure worth catching.
-    for (const path of ["components/TranslatorShell.tsx", "components/Landing.tsx"]) {
-      const lines = read(path).split("\n");
-      lines.forEach((line, i) => {
-        if (!line.includes('href="/call"')) return;
-        const preceding = lines.slice(Math.max(0, i - 3), i).join("\n");
-        expect(preceding).toContain("callEnabled() ? (");
-      });
-    }
-    // ...and the gate is really there, so the loop above is not vacuous.
-    expect(read("components/TranslatorShell.tsx")).toContain("callEnabled() ? (");
+  it("the client sends its access token, or the fence answers nobody", () => {
+    // The old client posted to /api/call/realtime with no Authorization
+    // header at all. That was invisible while the route 404'd for everyone;
+    // the moment the gate went to "founders", it would have 401'd Tom.
+    expect(read("lib/call/interpreter.ts")).toContain("jsonAuthHeaders()");
+    expect(read("components/CallShell.tsx")).toContain("jsonAuthHeaders()");
+  });
+});
+
+describe("/call cost guards (ENHANCEMENTS.md, asked for on 8/03)", () => {
+  it("caps how much conversation the model re-reads per response", () => {
+    // THE saving. Measured 2026-08-27: uncapped, a session billed 209% of the
+    // audio actually spoken and was still climbing turn over turn, because
+    // every response re-reads the whole call at $32/Mtok. Capped, it billed
+    // 66% and held flat. Deleting this is how a long call gets expensive
+    // again, silently.
+    const route = read("app/api/call/realtime/route.ts");
+    expect(route).toContain("truncation");
+    expect(route).toContain("post_instructions");
+    expect(route).toContain("retention_ratio");
+  });
+
+  it("shrinks the four-hour client cap to the API's own one-hour ceiling", () => {
+    const interpreter = read("lib/call/interpreter.ts");
+    expect(interpreter).toContain("DEFAULT_MAX_MS = 60 * 60 * 1000");
+    expect(interpreter).not.toContain("4 * 60 * 60 * 1000");
+  });
+
+  it("hangs the interpreter up after two minutes of quiet, with a warning", () => {
+    const interpreter = read("lib/call/interpreter.ts");
+    expect(interpreter).toContain("DEFAULT_IDLE_MS = 2 * 60 * 1000");
+    expect(interpreter).toContain("IDLE_WARNING_MS");
+    expect(interpreter).toContain("onIdleWarning");
+  });
+
+  it("gives the minted secret a short life", () => {
+    const route = read("app/api/call/realtime/route.ts");
+    expect(route).toContain("expires_after");
+    expect(route).toContain("SECRET_TTL_SECONDS");
+  });
+
+  it("puts the dollars on the screen and in the log", () => {
+    // "What does a minute of this cost?" had no answer after the July spikes.
+    expect(read("components/CallShell.tsx")).toContain("formatUsdPerMinute");
+    expect(read("lib/call/cost.ts")).toContain("[taos-call-cost]");
   });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   generateRoomCode,
   normalizeRoomCode,
@@ -11,17 +11,47 @@ import {
 import {
   startCallInterpreter,
   type ActiveInterpreter,
-  type InterpreterTarget
+  type InterpreterEndReason,
+  type InterpreterVoiceMode
 } from "@/lib/call/interpreter";
+import { resolveCallDirection, type CallDirection } from "@/lib/call/instructions";
+import {
+  emptySpend,
+  formatUsd,
+  formatUsdPerMinute,
+  spendUsd,
+  usdPerMinute,
+  type CallSpend
+} from "@/lib/call/cost";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { languageLabel } from "@/lib/languages/catalog";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { isTextOnlyLanguage, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
+import { jsonAuthHeaders } from "@/lib/authClient";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 
 // ── /call: translated 1:1 calls ─────────────────────────────────────────────
-// Use case: Tom (EN) and Liz (ES) call each other over wifi or cellular —
-// video or audio-only. Each phone hears the other person's real voice AND an
-// AI interpreter speaking in the listener's own language, with live captions.
-// The call itself is peer-to-peer WebRTC (signaled through Supabase); each
-// side runs its own interpreter session on the partner's incoming audio, so
-// each person independently chooses captions/voice/volume for their ear.
+// Use case: Tom and Liz call each other over wifi or cellular — video or
+// audio-only. Each phone hears the other person's real voice AND an AI
+// interpreter speaking in the listener's own language, with live captions.
+// The call itself is peer-to-peer WebRTC (signaled through Supabase, media
+// never touches a server); each side runs its own interpreter session on the
+// partner's incoming audio, so each person independently chooses
+// captions/voice/volume for their ear.
+//
+// ── The pair, and the handshake ────────────────────────────────────────────
+// This screen used to hold `useState<"en" | "es">` and ask for "English" or
+// "Spanish" in so many words. It reads the shared pair now, like /translate,
+// /live and /tabletop — but a call is the one screen where the two ends hold
+// SEPARATE pairs on separate phones, so the picker alone was never going to
+// be enough. `mine` is announced to the partner over the call's own signaling
+// channel and their `mine` arrives back; each interpreter then listens for
+// THEIR language and speaks MINE. Until their announcement lands (the first
+// second of a call), `theirs` from the local pair stands in — this phone's
+// standing guess about who it is talking to, and usually right.
+//
+// So a phone left on [en, it] after ordering dinner is already correct for a
+// call to the Italian side of the family, with no taps.
 
 interface CaptionLine {
   id: number;
@@ -31,11 +61,6 @@ interface CaptionLine {
 }
 
 const MAX_FEED = 100;
-
-const TARGET_LABEL: Record<InterpreterTarget, string> = {
-  en: "I want to hear English",
-  es: "Quiero escuchar Español"
-};
 
 // Original-voice volume steps the ducking button cycles through.
 const VOLUME_STEPS: Array<{ value: number; label: string }> = [
@@ -70,8 +95,8 @@ function stateLabel(s: CallState): string {
 export function CallShell(): JSX.Element {
   const [phase, setPhase] = useState<"lobby" | "call">("lobby");
   const [room, setRoom] = useState("");
-  const [target, setTarget] = useState<InterpreterTarget>("en");
   const [withVideo, setWithVideo] = useState(true);
+  const [voiceMode, setVoiceMode] = useState<InterpreterVoiceMode>("clone");
   const [callState, setCallState] = useState<CallState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -81,9 +106,11 @@ export function CallShell(): JSX.Element {
   const [cameraOn, setCameraOn] = useState(true);
   const [voiceOn, setVoiceOn] = useState(true);
   const [captionsOn, setCaptionsOn] = useState(true);
-  const [volumeStep, setVolumeStep] = useState(1); // start on "quiet": duck under translation
+  const [volumeStep, setVolumeStep] = useState(1);
   const [elapsed, setElapsed] = useState(0);
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
+  const [idleSecondsLeft, setIdleSecondsLeft] = useState<number | null>(null);
+  const [spend, setSpend] = useState<CallSpend>(() => emptySpend("elevenlabs"));
 
   const [feed, setFeed] = useState<CaptionLine[]>([]);
   const [liveText, setLiveText] = useState("");
@@ -91,6 +118,9 @@ export function CallShell(): JSX.Element {
   // True while the PARTNER's phone is playing a translation of what was said
   // here — speaking now would talk over it and clip it for them.
   const [peerInterpreterSpeaking, setPeerInterpreterSpeaking] = useState(false);
+  // What the partner's phone says THEY speak. Null until their announcement
+  // lands; `theirs` from the local pair stands in until then.
+  const [peerLanguage, setPeerLanguage] = useState<string | null>(null);
 
   const callRef = useRef<ActiveCall | null>(null);
   const interpreterRef = useRef<ActiveInterpreter | null>(null);
@@ -99,11 +129,54 @@ export function CallShell(): JSX.Element {
   const wakeHoldRef = useRef<WakeLockHold | null>(null);
   const inCallRef = useRef(false);
   const voiceOnRef = useRef(true);
-  const targetRef = useRef<InterpreterTarget>("en");
+  const voiceModeRef = useRef<InterpreterVoiceMode>("clone");
+  const remoteTrackRef = useRef<MediaStreamTrack | null>(null);
   const nextIdRef = useRef(1);
   const timerRef = useRef<number | null>(null);
   const heardQueueRef = useRef<string[]>([]);
   const peerSpeakingGuardRef = useRef<number | null>(null);
+  const elapsedRef = useRef(0);
+  const roomRef = useRef("");
+
+  // The pair, exactly as every other screen holds it. Changing it mid-call
+  // re-points the live interpreter and tells the partner, rather than
+  // dropping the session: the languages are a setting, not a restart.
+  const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
+
+  // Seeded from the pair rather than from two literal codes — a call that
+  // starts before the first effect runs still starts on the catalog's answer,
+  // not on this file's opinion about which two languages exist.
+  const directionRef = useRef<CallDirection>({ source: theirs, target: mine });
+
+  // What this phone's interpreter is doing right now: listen for the
+  // partner's language, speak the owner's.
+  const direction = useMemo(
+    () => resolveCallDirection(mine, peerLanguage, theirs),
+    [mine, peerLanguage, theirs]
+  );
+
+  const spendNow = spendUsd(spend);
+  const perMinute = usdPerMinute(spend, elapsed);
+  const noVoiceForMe = isTextOnlyLanguage(mine);
+
+  useEffect(() => {
+    voiceOnRef.current = voiceOn;
+  }, [voiceOn]);
+  useEffect(() => {
+    voiceModeRef.current = voiceMode;
+  }, [voiceMode]);
+  useEffect(() => {
+    elapsedRef.current = elapsed;
+  }, [elapsed]);
+  useEffect(() => {
+    roomRef.current = room;
+  }, [room]);
+
+  // Prefill the room code from a shared /call?room=XYZ link.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("room");
+    if (q) setRoom(normalizeRoomCode(q));
+  }, []);
 
   // A lost "stopped" broadcast must never strand the hold-on indicator, so
   // every "speaking" signal re-arms a generous auto-clear.
@@ -120,19 +193,6 @@ export function CallShell(): JSX.Element {
       );
     }
   }, []);
-
-  // Prefill the room code from a shared /call?room=XYZ link.
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get("room");
-    if (q) setRoom(normalizeRoomCode(q));
-  }, []);
-
-  useEffect(() => {
-    voiceOnRef.current = voiceOn;
-  }, [voiceOn]);
-  useEffect(() => {
-    targetRef.current = target;
-  }, [target]);
 
   // Screen wake lock for the duration of the call. Shared holder
   // (lib/wakeLock.ts): re-acquires on visibility return AND on the sentinel's
@@ -153,18 +213,71 @@ export function CallShell(): JSX.Element {
     if (it) void it.stop();
   }, []);
 
+  /**
+   * Hand the finished call's bill to the server log.
+   *
+   * Best-effort and deliberately unawaited at the call site: the phone is
+   * hanging up and nothing on screen depends on the answer. A dropped report
+   * costs a log line, not a call.
+   */
+  const reportSpend = useCallback(
+    async (finalSpend: CallSpend, seconds: number, mode: InterpreterVoiceMode, dir: CallDirection) => {
+      if (finalSpend.responses === 0 && finalSpend.transcribedSeconds === 0) return;
+      try {
+        await fetch("/api/call/usage", {
+          method: "POST",
+          headers: await jsonAuthHeaders(),
+          body: JSON.stringify({
+            room: roomRef.current,
+            mode,
+            direction: `${dir.source}->${dir.target}`,
+            seconds,
+            spend: finalSpend
+          })
+        });
+      } catch {
+        /* the meter on screen already said it */
+      }
+    },
+    []
+  );
+
   const startInterpreterFor = useCallback(
     (track: MediaStreamTrack) => {
       stopInterpreter();
       setNotice(null); // clears the "partner left" banner on rejoin
+      const dir = directionRef.current;
+      // Two people who already share a language have nothing to interpret,
+      // and an interpreter pointed at its own output language either parrots
+      // or sits silent. Either way it bills, so it simply doesn't start.
+      if (dir.source === dir.target) {
+        setNotice(
+          `You and your partner are both on ${languageLabel(dir.target)} — no interpreter needed.`
+        );
+        return;
+      }
       startCallInterpreter(
-        { target: targetRef.current, inputTrack: track, muted: !voiceOnRef.current },
+        {
+          direction: dir,
+          inputTrack: track,
+          muted: !voiceOnRef.current,
+          voiceMode: voiceModeRef.current
+        },
         {
           onError: (msg) => setNotice(`Interpreter: ${msg}`),
           // This phone's interpreter speaks translations of the PARTNER's
           // words — so it's the partner who must not talk over it. Relay the
           // state so their phone can show the hold-on indicator.
           onSpeaking: (speaking) => callRef.current?.sendInterpreterSpeaking(speaking),
+          onSpend: (next) => setSpend(next),
+          onIdleWarning: (secondsLeft) => setIdleSecondsLeft(secondsLeft),
+          onAutoEnd: (reason: InterpreterEndReason) => {
+            setNotice(
+              reason === "idle"
+                ? "The interpreter stopped after two minutes of quiet — tap Rejoin to bring it back."
+                : "The interpreter hit its one-hour limit — tap Rejoin to start a fresh hour."
+            );
+          },
           onHeard: (text) => {
             heardQueueRef.current.push(text);
             setLiveHeard(text);
@@ -197,8 +310,42 @@ export function CallShell(): JSX.Element {
     [stopInterpreter]
   );
 
+  // Keep the live session pointed at the current pair. Either phone changing
+  // its language lands here — mine through the picker, theirs over the wire.
+  useEffect(() => {
+    directionRef.current = direction;
+    const it = interpreterRef.current;
+    if (!it) return;
+    if (direction.source === direction.target) {
+      // Gone doubled mid-call: stop paying for a session with no job.
+      stopInterpreter();
+      setNotice(
+        `You and your partner are both on ${languageLabel(direction.target)} — no interpreter needed.`
+      );
+      return;
+    }
+    it.setDirection(direction);
+  }, [direction, stopInterpreter]);
+
+  // A doubled pair that comes back apart deserves its interpreter back, and
+  // the remote track is already in hand.
+  useEffect(() => {
+    if (!inCallRef.current || interpreterRef.current) return;
+    if (direction.source === direction.target) return;
+    const track = remoteTrackRef.current;
+    if (track && track.readyState === "live") startInterpreterFor(track);
+  }, [direction, startInterpreterFor]);
+
+  // Tell the partner when this phone's own language changes, so their
+  // interpreter follows without either of us re-joining.
+  useEffect(() => {
+    callRef.current?.sendLanguage(mine);
+  }, [mine]);
+
   const endCall = useCallback(() => {
     inCallRef.current = false;
+    const it = interpreterRef.current;
+    const finalSpend = it?.spend() ?? null;
     stopInterpreter();
     const call = callRef.current;
     callRef.current = null;
@@ -207,15 +354,26 @@ export function CallShell(): JSX.Element {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (finalSpend) {
+      void reportSpend(
+        finalSpend,
+        elapsedRef.current,
+        voiceModeRef.current,
+        directionRef.current
+      );
+    }
     wakeHoldRef.current?.ensure(); // inCallRef is false now → holder releases
+    remoteTrackRef.current = null;
     setPhase("lobby");
     setCallState("idle");
     setElapsed(0);
     setRemoteHasVideo(false);
     setLiveText("");
     setLiveHeard(null);
+    setIdleSecondsLeft(null);
+    setPeerLanguage(null);
     setPeerSpeaking(false);
-  }, [stopInterpreter, setPeerSpeaking]);
+  }, [stopInterpreter, setPeerSpeaking, reportSpend]);
 
   useEffect(() => {
     return () => {
@@ -235,6 +393,8 @@ export function CallShell(): JSX.Element {
     setNotice(null);
     setFeed([]);
     setElapsed(0);
+    setSpend(emptySpend("elevenlabs"));
+    setPeerLanguage(null);
     inCallRef.current = true;
     setPhase("call");
     setCameraOn(withVideo);
@@ -246,7 +406,7 @@ export function CallShell(): JSX.Element {
 
     try {
       const call = await startCall(
-        { room: code, video: withVideo },
+        { room: code, video: withVideo, language: mine },
         {
           onState: (s) => {
             setCallState(s);
@@ -268,10 +428,16 @@ export function CallShell(): JSX.Element {
               if (stream) void remoteVideoRef.current.play().catch(() => {});
             }
           },
-          onRemoteAudioTrack: (track) => startInterpreterFor(track),
+          onRemoteAudioTrack: (track) => {
+            remoteTrackRef.current = track;
+            startInterpreterFor(track);
+          },
+          onPeerLanguage: (code) => setPeerLanguage(code),
           onPeerInterpreterSpeaking: (speaking) => setPeerSpeaking(speaking),
           onPeerLeft: () => {
             stopInterpreter();
+            remoteTrackRef.current = null;
+            setPeerLanguage(null);
             setNotice("Your partner left the call. Waiting for them to rejoin…");
           }
         }
@@ -285,7 +451,7 @@ export function CallShell(): JSX.Element {
     } catch {
       endCall();
     }
-  }, [room, withVideo, startInterpreterFor, stopInterpreter, endCall, setPeerSpeaking]);
+  }, [room, withVideo, mine, startInterpreterFor, stopInterpreter, endCall, setPeerSpeaking]);
 
   const createRoom = useCallback(() => {
     setRoom(generateRoomCode());
@@ -376,21 +542,24 @@ export function CallShell(): JSX.Element {
               </p>
             </div>
 
-            {/* What do I want to hear? */}
-            <div className="grid grid-cols-1 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
-              {(Object.keys(TARGET_LABEL) as InterpreterTarget[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setTarget(t)}
-                  className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                    target === t ? "bg-emerald-400 text-stone-950" : "text-amber-100/70"
-                  }`}
-                >
-                  {TARGET_LABEL[t]}
-                </button>
-              ))}
-            </div>
+            {/* The shared pair, drawn the way every screen draws it. The solid
+                pill is THEIRS — who you expect to be talking to — and it is
+                only a guess until their phone says otherwise on connect. */}
+            <LanguagePillRow
+              pills={pills}
+              selected={theirs}
+              paired={mine}
+              pairedTitle="You hear this · Tú escuchas esto"
+              caption="They speak · Ellos hablan"
+              sheetOpen={sheetOpen}
+              onSelect={selectLanguage}
+              onOpenSheet={() => setSheetOpen(true)}
+            />
+            <p className="-mt-2 text-xs text-amber-100/50">
+              You hear <span className="text-amber-200">{languageLabel(mine)}</span>. Their phone
+              announces what they speak when the call connects.
+              {noVoiceForMe ? ` ${TEXT_ONLY_TITLE}.` : ""}
+            </p>
 
             {/* Video or audio-only */}
             <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
@@ -411,6 +580,36 @@ export function CallShell(): JSX.Element {
                   {label}
                 </button>
               ))}
+            </div>
+
+            {/* Which voice reads the translation. See lib/call/interpreter.ts:
+                the clone is cheaper AND it is the partner's own voice, at the
+                price of about a second. */}
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-1">
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    ["clone", "🎙️ Their voice"],
+                    ["instant", "⚡ Fastest"]
+                  ] as [InterpreterVoiceMode, string][]
+                ).map(([m, label]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setVoiceMode(m)}
+                    className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                      voiceMode === m ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="px-2 pb-1 pt-2 text-[11px] text-amber-100/50">
+                {voiceMode === "clone"
+                  ? "The translation is read in their own voice — about a second behind."
+                  : "The model speaks it the moment it can. A stock voice, and the priciest way to run a call."}
+              </p>
             </div>
 
             {/* Room */}
@@ -499,16 +698,41 @@ export function CallShell(): JSX.Element {
                 {callState === "connected" ? formatElapsed(elapsed) : stateLabel(callState)}
                 <span className="text-amber-100/50">· {room}</span>
               </div>
+              {/* The meter. /call was pulled partly because nobody could say
+                  what a minute of it cost; now it says so while it spends. */}
+              <div
+                className="absolute right-2 top-2 rounded-full bg-stone-950/70 px-3 py-1 text-xs text-amber-100/70"
+                title="This phone's share of the call. Your partner's phone spends its own."
+              >
+                {formatUsd(spendNow)}
+                {perMinute > 0 ? (
+                  <span className="text-amber-100/40"> · {formatUsdPerMinute(perMinute)}</span>
+                ) : null}
+              </div>
             </div>
+
+            {/* Who is being interpreted into what, once their phone has said. */}
+            <div className="flex items-center justify-between gap-2 text-xs text-amber-100/50">
+              <span>
+                {languageLabel(direction.source)} → {languageLabel(direction.target)}
+                {peerLanguage ? "" : " (assumed)"}
+              </span>
+              <span>{voiceMode === "clone" ? "their voice" : "fastest voice"}</span>
+            </div>
+
+            {idleSecondsLeft !== null ? (
+              <div className="rounded-2xl border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-sm text-amber-200">
+                Quiet for a while — the interpreter stops in about {idleSecondsLeft}s to save
+                money. Say anything to keep it.
+              </div>
+            ) : null}
 
             {/* Hold-on indicator: the partner's phone is still speaking the
                 translation of what was said here — talking now clips it. */}
             {peerInterpreterSpeaking ? (
               <div className="flex items-center gap-2 rounded-2xl border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-sm text-amber-200">
                 <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-300" />
-                {target === "es"
-                  ? "El intérprete les sigue hablando — un momento…"
-                  : "Interpreter is still speaking to them — one sec…"}
+                Interpreter is still speaking to them — one sec…
               </div>
             ) : null}
 
@@ -568,6 +792,18 @@ export function CallShell(): JSX.Element {
               </button>
             </div>
 
+            {/* Mid-call language change: re-points the live session and tells
+                the partner's phone, without either of you rejoining. */}
+            <LanguagePillRow
+              pills={pills}
+              selected={theirs}
+              paired={mine}
+              pairedTitle="You hear this · Tú escuchas esto"
+              sheetOpen={sheetOpen}
+              onSelect={selectLanguage}
+              onOpenSheet={() => setSheetOpen(true)}
+            />
+
             <button
               type="button"
               onClick={endCall}
@@ -577,6 +813,16 @@ export function CallShell(): JSX.Element {
             </button>
           </>
         )}
+
+        <LanguageSheet
+          open={sheetOpen}
+          selected={theirs}
+          paired={mine}
+          pairedLabel="You hear this"
+          caption="What they speak · Lo que ellos hablan"
+          onSelect={selectLanguage}
+          onClose={() => setSheetOpen(false)}
+        />
       </div>
     </main>
   );

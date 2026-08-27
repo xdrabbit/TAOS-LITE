@@ -27,6 +27,19 @@ export interface CallConfig {
   room: string;
   /** Start with the camera on (video call) or off (audio-only). */
   video: boolean;
+  /**
+   * The language THIS phone's owner speaks and reads — the `mine` half of the
+   * shared pair (lib/translate/useLanguagePair.ts).
+   *
+   * A call is the only screen where the two ends each hold their own pair and
+   * neither can see the other's, which is what ENHANCEMENTS.md meant by "the
+   * handshake is the actual work, not the picker". So it travels: each phone
+   * announces its own language on the signaling channel, and the partner uses
+   * it as the SOURCE its interpreter listens for. Without it, /call would
+   * still be guessing — which is precisely how it spent the catalog era
+   * interpreting Italian into Spanish.
+   */
+  language: string;
 }
 
 export interface CallEvents {
@@ -48,6 +61,12 @@ export interface CallEvents {
    * UI shows a "hold on" indicator.
    */
   onPeerInterpreterSpeaking?: (speaking: boolean) => void;
+  /**
+   * The partner told us what language they speak. Fires on pair-up and again
+   * any time they change it mid-call, so this phone's interpreter can be
+   * re-pointed without dropping the session.
+   */
+  onPeerLanguage?: (code: string) => void;
 }
 
 export interface ActiveCall {
@@ -59,11 +78,13 @@ export interface ActiveCall {
   setRemoteVolume: (volume: number) => void;
   /** Tell the partner whether THIS phone's interpreter is speaking right now. */
   sendInterpreterSpeaking: (speaking: boolean) => void;
+  /** Announce a language change on this phone, so their interpreter follows. */
+  sendLanguage: (code: string) => void;
 }
 
 interface SignalMessage {
   from: string;
-  kind: "description" | "candidate" | "bye" | "interpreter";
+  kind: "description" | "candidate" | "bye" | "interpreter" | "language";
   data?: unknown;
 }
 
@@ -116,6 +137,12 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   let micMuted = false;
   let remoteVolume = 1;
   let ended = false;
+  let myLanguage = config.language;
+  // Broadcast has no retention: a language announced before the partner
+  // subscribed is simply gone. So whoever hears one first echoes theirs back,
+  // once per pairing — enough for both ends to converge, few enough that two
+  // phones cannot volley announcements at each other forever.
+  let languageEchoedTo: string | null = null;
 
   // Perfect-negotiation state. `polite` is decided per-pairing by comparing
   // random peer ids — both sides deterministically pick opposite roles.
@@ -134,6 +161,10 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       event: "signal",
       payload: { ...msg, from: peerId } satisfies SignalMessage
     });
+  };
+
+  const announceLanguage = () => {
+    if (!ended && otherPeerId) sendSignal({ kind: "language", data: { lang: myLanguage } });
   };
 
   const teardownPeer = () => {
@@ -167,7 +198,11 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     localStream = null;
     if (channel) {
       try {
-        await channel.unsubscribe();
+        // removeChannel, not unsubscribe: unsubscribe closes the socket
+        // subscription but leaves the channel on the client, and the next
+        // join of the same room then finds it and throws. /chat has always
+        // torn down this way (lib/chat.ts).
+        await supabase.removeChannel(channel);
       } catch {
         /* ignore */
       }
@@ -291,6 +326,7 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   const handlePeerGone = () => {
     if (ended) return;
     otherPeerId = null;
+    languageEchoedTo = null;
     teardownPeer();
     // Their interpreter can't be speaking to us anymore — never strand the
     // "hold on" indicator across a drop/rejoin.
@@ -330,7 +366,29 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     const room = normalizeRoomCode(config.room);
     if (!room) throw new Error("Enter a room code first.");
 
-    channel = supabase.channel(`taos-call-${room}`, {
+    // A channel per room, and never two.
+    //
+    // supabase-js keeps subscribed channels on the client by topic, and a
+    // second `.on("presence", …)` against one that is already subscribed
+    // throws "cannot add presence callbacks after subscribe()". The call then
+    // dies at "camera/mic…" with an error about a word nobody on this screen
+    // has heard of.
+    //
+    // The way in is a double tap on Join. Nothing disables that button while
+    // the first join is in flight, so an impatient thumb on a slow phone
+    // starts two calls into the same room and the second one poisons both.
+    // Verified 2026-08-27 by driving this file from two browser tabs: two
+    // taps 250ms apart failed every time before this loop, and connect
+    // cleanly after it. (A sequential hang-up-then-rejoin was always fine —
+    // it is the OVERLAP that breaks, which is why nobody hit it by hand.)
+    const topic = `taos-call-${room}`;
+    for (const stale of supabase.getChannels()) {
+      if (stale.topic === topic || stale.topic === `realtime:${topic}`) {
+        await supabase.removeChannel(stale);
+      }
+    }
+
+    channel = supabase.channel(topic, {
       config: { broadcast: { self: false }, presence: { key: peerId } }
     });
 
@@ -344,6 +402,7 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
         // deadlock).
         otherPeerId = msg.from;
         polite = peerId < msg.from;
+        announceLanguage();
       }
       if (msg.from !== otherPeerId) return; // room is strictly 1:1
       if (msg.kind === "bye") handlePeerGone();
@@ -352,6 +411,13 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       else if (msg.kind === "interpreter") {
         const speaking = Boolean((msg.data as { speaking?: boolean } | undefined)?.speaking);
         events.onPeerInterpreterSpeaking?.(speaking);
+      } else if (msg.kind === "language") {
+        const lang = (msg.data as { lang?: unknown } | undefined)?.lang;
+        if (typeof lang === "string" && lang) events.onPeerLanguage?.(lang);
+        if (languageEchoedTo !== msg.from) {
+          languageEchoedTo = msg.from;
+          announceLanguage();
+        }
       }
     });
 
@@ -371,8 +437,10 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       const partner = others[0] ?? null;
       if (partner && partner !== otherPeerId) {
         otherPeerId = partner;
+        languageEchoedTo = null;
         // Both sides compare the same two random ids and pick opposite roles.
         polite = peerId < partner;
+        announceLanguage();
         buildPeer();
       } else if (!partner && otherPeerId) {
         handlePeerGone();
@@ -429,6 +497,10 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       },
       sendInterpreterSpeaking: (speaking: boolean) => {
         if (!ended && otherPeerId) sendSignal({ kind: "interpreter", data: { speaking } });
+      },
+      sendLanguage: (code: string) => {
+        myLanguage = code;
+        announceLanguage();
       }
     };
   } catch (error) {

@@ -13,11 +13,11 @@
 // Everything else is HELD BACK behind the founders gate below — the pages
 // still exist and work, but show "Coming soon" to anyone who isn't a founder,
 // and their nav links are hidden:
-// - /call     — bills two realtime lines the whole time it's connected
-//               (the July 14/22 spikes); not sellable until the cost guards
-//               in ENHANCEMENTS.md land. Now ALSO off entirely for RC1 —
-//               see callEnabled() below; the founders gate is what it falls
-//               back to once the flag is on again.
+// - /call     — bills two realtime lines while connected (the July 14/22
+//               spikes). The cost guards landed 8/27 and the per-minute
+//               spend is measured now (lib/call/cost.ts), but "cheap enough
+//               for two founders" is not "sellable", and it has still never
+//               met a stranger's carrier NAT. See callVisibleTo() below.
 // - /video    — works, but heavy (uploads, ffmpeg) for a first release.
 //
 // /tabletop was held here too, as "niche party mode; every extra screen is a
@@ -84,32 +84,59 @@ export function tutorComingSoon(): boolean {
   return !tutorEnabled();
 }
 
-// /call is off for RC1 the way tutor is off: dark to everyone, founders
-// included, rather than founders-only behind the gate above.
+// /call: FOUNDERS ONLY, and the flag below no longer means what it meant.
 //
-// The founders gate was the right answer while /call was finished work
-// waiting on cost guards. It stopped being the right answer when the
-// 100-language catalog landed (commit 1711a3f4): /live, /tabletop and /chat
-// were wired to it, /call was not. It still mints an interpreter session with
-// a hardcoded "en" | "es" target and an English/Spanish prompt, so on a trip
-// where the pair is [en, it] the call screen quietly interprets into the
-// wrong language. Half-integrated and never verified with two phones is not
-// something to hand a founder either — the founders are the people who would
-// reach for it in a real conversation and be let down by it.
+// The RC1 answer (8/18) was to black /call out for everyone, founders
+// included, because it was the one screen the 100-language catalog never
+// reached (commit 1711a3f4): it minted an interpreter with a hardcoded
+// "en" | "es" target, so a trip on [en, it] got interpreted into Spanish.
+// Half-integrated is not something to hand a founder either — the founders
+// are exactly the people who would reach for it in a real conversation and
+// be let down by it.
 //
-// So: nav link gone, /call redirects home, and POST /api/call/realtime — the
-// one route it has, and the one that spends money — answers 404. Setting
+// Both halves of that objection are answered now (this PR):
+//   - CallShell reads useLanguagePair() like every other screen, and the two
+//     phones exchange their languages over the call's own signaling channel,
+//     so each end interprets INTO its owner's language whatever the pair is.
+//   - The cost guards ENHANCEMENTS.md has been asking for since 8/03 are in:
+//     context truncation, a 60-minute cap, a 2-minute idle hangup, and a
+//     per-session dollar meter on screen. lib/call/cost.ts has the numbers.
+//
+// So the gate goes back to the founders gate — the one /video sits behind —
+// and the public flag becomes what its name always said it was: whether
+// /call has shipped to CUSTOMERS. It has not, and it stays off. Founders no
+// longer need it set to reach the screen; nobody else gets there with it
+// unset. That is the whole difference from RC1, and it is why callEnabled()
+// is not what any surface asks any more — they ask callVisibleTo(email).
 //
 //     NEXT_PUBLIC_ENABLE_CALL=1
 //
-// restores exactly the previous behavior, founders gate and all; it does not
-// ship /call to customers. Before that flag goes on for real: wire CallShell
-// to the language catalog (useLanguagePair, like the other three) and make
-// the interpreter prompt take a language pair instead of TargetLang, then
-// walk it with two phones. ENHANCEMENTS.md carries the list.
+// would ship /call to everyone, and is a product decision, not a refactor:
+// two founders on two phones is not the same test as a stranger's carrier
+// NAT, and the per-minute spend below is founder-shaped, not customer-shaped.
+// tests/release.test.ts pins the default.
 export function callEnabled(): boolean {
   const flag = (process.env.NEXT_PUBLIC_ENABLE_CALL ?? "").trim().toLowerCase();
   return flag === "1" || flag === "true";
+}
+
+/**
+ * May this person reach /call at all?
+ *
+ * THE question every /call surface asks — the nav link, the page gate, and
+ * POST /api/call/realtime, which is the one that spends money. Public when
+ * the flag says so; founders always. A single helper because the three
+ * surfaces disagreeing is precisely how /tabletop lost its nav entry: each
+ * one grew its own idea of who was allowed.
+ *
+ * The route-level check is the load-bearing one. The nav link and the page
+ * gate run in the browser off a Supabase session the client already holds,
+ * which makes them a courtesy, not a fence — a determined stranger can render
+ * the component. What they cannot do is mint a realtime session, because the
+ * route re-asks this question against a server-validated access token.
+ */
+export function callVisibleTo(email: string | null | undefined): boolean {
+  return callEnabled() || isFounder(email);
 }
 
 // /live's second engine — "On-device", the Web Speech API path — is off for

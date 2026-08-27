@@ -50,7 +50,10 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   Live, Chat, Photo; Call/Tabletop/Video are founders-only. STILL TO
   DO before charging: Stripe live keys + live price ids + production webhook
   (Tom's dashboard work), one real end-to-end purchase, and ideally the call
-  cost guards.
+  cost guards. → The call cost guards landed 2026-08-27 (PR #39); Stripe went
+  live 8/22 and the money path was certified 8/23, so this entry is closed
+  except for the note that /call stays founders-only and is not what anyone is
+  being charged for.
   → Tabletop un-cut 2026-08-19 (see Shipped): Tom walked RC1 on the Droid and
   could not reach Table at all. It is customer-facing now; Call and Video stay
   founders-only.
@@ -133,32 +136,20 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   still Tom's to make. (2026-08-19)
 - Chat push notifications (tier 2) — phones buzz when a message lands while
   the app is closed. Planned since chat tier 1 shipped. (added 2026-08-03)
-- Call cost guards — /call bills two realtime sessions the whole time it's
-  connected, silence included: auto-hangup after ~10 min with no speech,
-  shrink the 4h hard cap to ~90 min, show an elapsed/cost timer on screen.
+- Call cost guards — SHIPPED 2026-08-27 (PR #39, see Shipped). /call is
+  founders-only again, catalog-wired, and its per-minute cost is measured
+  rather than guessed: ~$0.123/min → **~$0.058/min** for a two-phone call,
+  with the numbers and the method in docs/call-cost-model.md.
   (added 2026-08-03, from the July 14/22 OpenAI bill spikes)
-  → /call is GATED OFF for RC1 (2026-08-18) behind NEXT_PUBLIC_ENABLE_CALL
-  (lib/release.ts), dark to everyone including founders: nav link gone, /call
-  redirects home, POST /api/call/realtime 404s. The trigger was not cost but
-  the language catalog — when the 100 languages landed (1711a3f4), /live,
-  /tabletop and /chat were wired to the catalog and **/call was not**. It
-  still takes a hardcoded `"en" | "es"` target and builds an English/Spanish
-  interpreter prompt, so on a trip with the pair set to, say, [en, it] the
-  call screen interprets into the wrong language. It has also never been
-  walked end-to-end with two phones. Before the flag goes back on:
-  1. Wire CallShell to `useLanguagePair()` like the other three screens.
-  2. Make `buildCallInterpreterInstructions` take a language pair instead of
-     `TargetLang`, and drop the `en`/`es` name table with it.
-  3. Land the cost guards above — the client-side duration cap in
-     lib/call/interpreter.ts is on the wrong side of the wire for an
-     unauthenticated minting route.
-     → The AUTH half is done (see Shipped, 8/19): POST /api/call/realtime
-       now requires a session on top of the 404. The DURATION cap is still
-       client-side and still owed — auth says who may start a call, not how
-       long it may bill.
-  4. Two phones, two networks, one real conversation.
-  Flag on restores the *previous* behavior exactly, founders gate included —
-  it does not ship /call to customers. Nothing was deleted.
+  → Still open, and deliberately: /call has never been walked on two real
+  phones on two real networks. Everything below the transport was verified
+  without them (two browser tabs for the peer-to-peer leg and the language
+  handshake, a live realtime session for the interpreting), but the things
+  that need a trip are the things a trip is for — carrier NAT, whether TURN
+  turns out to be needed, and whether the ~1s the cloned voice costs is worth
+  paying. The "⚡ Fastest" toggle on the lobby screen exists so Tom can answer
+  that last one on a real call without a deploy.
+
 - Cantonese field verdict — have the Cantonese-speaking guest judge the v3
   voice and the zh⇄yue auto-detection; swap ELEVENLABS_YUE_MODEL or tune the
   detect prompt based on her review. (added 2026-08-03)
@@ -285,12 +276,15 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   Planned in docs/group-chat-plan.md — trip-critical, targeted before Spencer's
   Bosnia/Italy trip; "Per-seat languages at /tabletop" below shares the design.
   (planned 2026-08-19)
-- Multi-language phase 3 — /call is the last screen still hardcoded EN⇄ES.
-  (Phase 2 — /tabletop, /live and /chat — SHIPPED 2026-08-18, see Shipped.)
-  /call is two realtime sessions pointed at each other, so it needs the pair
-  on BOTH phones and a way for each end to know what the other picked;
-  that handshake is the actual work, not the picker. (added 2026-08-03,
-  narrowed 2026-08-18)
+- Multi-language phase 3 — SHIPPED 2026-08-27 (PR #39, see Shipped). /call
+  was the last screen still hardcoded EN⇄ES; it reads the shared pair now, and
+  the handshake this entry called "the actual work" is a `language` message on
+  the call's own signaling channel. Each phone announces what its owner
+  speaks, the other echoes back once, and both interpreters point themselves.
+  Walked EN⇄IT across two browser contexts, including a mid-call switch to
+  Portuguese that the far end followed without either side rejoining.
+  (added 2026-08-03, narrowed 2026-08-18)
+
 - Per-seat languages at /tabletop — the table is one PAIR today, which is
   exactly right for two people and wrong for four. A party where one end of
   the table is Italian, one is Bosnian and two are English needs a language
@@ -363,6 +357,65 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **/call comes back — founders only, catalog-wired, and half the price**
+  (PR #39, 2026-08-27) — /call had been dark to everyone since 8/18. Two
+  objections put it there and both are answered.
+
+  **The catalog.** It was the last screen still holding `type TargetLang =
+  "en" | "es"` with a two-name lookup table beside it, so a trip on [en, it]
+  got its call interpreted into Spanish — confidently, with no error anywhere.
+  CallShell reads `useLanguagePair()` now like every other screen. But a call
+  is the one screen where the two ends hold SEPARATE pairs on separate phones,
+  which is what ENHANCEMENTS.md meant by "the handshake is the actual work,
+  not the picker": each phone announces its owner's language on the call's own
+  signaling channel, the other echoes back once, and each interpreter listens
+  for THEIR language and speaks MINE. `tests/screen-language-wiring.test.ts`
+  lists /call now, so it keeps passing the same rules as everyone else.
+
+  **The money.** The guards asked for on 8/03 are in, and the per-minute cost
+  is measured rather than estimated — `docs/call-cost-model.md` has the runs.
+  Two findings changed the design:
+  - The obvious saving wasn't there. Server VAD already filters silence out of
+    the bill (34.1 s streamed, 22.7 s billed), so there is no client-side
+    speech gate — it would only have bought a way to clip the start of a
+    sentence.
+  - The real cost was invisible: **every response re-reads the whole
+    conversation as audio at $32/Mtok**. Uncapped, a session billed 209% of
+    the audio actually spoken and was still climbing turn over turn. Capped
+    with `truncation.token_limits.post_instructions: 100`, it bills 66% and
+    holds flat, with translations no worse (both settings turned the same
+    Spanish into the same Italian).
+
+  Plus: the model no longer speaks by default. It writes text and `/api/tts`
+  reads it in the app's own voices — Liz's clone saying her own sentence in
+  English — which is 3× cheaper than model-generated audio AND the better
+  voice. Also a 2-minute idle hangup with a warning, a 60-minute cap in place
+  of four hours, a 120-second TTL on the minted secret, and near-field noise
+  reduction so a passing bus is not a billed turn.
+
+  **~$0.123/min → ~$0.058/min** for a two-phone call, and the number is on
+  screen while it spends, plus one `[taos-call-cost]` line per call in the
+  Vercel log.
+
+  **Who can reach it.** Founders only, via `callVisibleTo()` — the gate /video
+  sits behind. `NEXT_PUBLIC_ENABLE_CALL` stays off and changed meaning: it is
+  "has /call shipped to customers" now, not "does /call exist". Non-founders
+  get no nav entry, a bounce home from `/call?room=XYZ` (a card would be an
+  advert for something they can't have), and a 404 from both call routes —
+  proved against the real handlers, asserting that OpenAI is never reached.
+
+  Two things found on the way: the mint route was never sending an
+  Authorization header, so it would have 401'd Tom the moment the gate went
+  from "nobody" to "founders"; and two taps on Join — nothing disables that
+  button — started two sessions on one room and killed the call with a
+  Supabase presence error. Both fixed, the second verified by driving two
+  browser tabs through it.
+
+  **Not verified:** two real phones on two real networks. Carrier NAT, whether
+  TURN is needed, and whether the ~1s the cloned voice costs is worth paying
+  are all trip questions. The "⚡ Fastest" toggle answers the last one without
+  a deploy.
 
 - **Crawl moves on at "close enough" — Liz's field report, and the score that
   was never there** (PR #38, 2026-08-27) — Liz was the first person outside
