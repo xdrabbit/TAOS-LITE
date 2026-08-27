@@ -46,12 +46,47 @@ function levelLine(level: TutorLevel, targetName: string, learnerName: string): 
   return `The learner is INTERMEDIATE. Speak mostly in ${targetName} at a natural but clear pace, and stay in ${targetName} unless they ask.`;
 }
 
-/** Rules that hold in every phase, so they cannot drift apart between them. */
-function commonRules(targetName: string): readonly string[] {
+/**
+ * Rules that hold in every phase, so they cannot drift apart between them.
+ *
+ * `repeatBack` is the one clause that cannot be shared, and finding that out
+ * cost a live run. Conversation Partner is open-ended, so "say it back once"
+ * is a kindness there. Inside a SCENE it is the loop's own instruction: the
+ * live session on 2026-08-27 answered every corrected line with "Tu turno.
+ * Inténtalo" — obediently, because it had been told to. A rule that says
+ * "never re-request a produced phrase" while another says "have them repeat
+ * it" is not a prompt, it is a coin flip.
+ */
+function commonRules(targetName: string, repeatBack: boolean): readonly string[] {
   return [
     `Keep YOUR turns short (1-3 sentences) so the learner does most of the talking.`,
-    `When the learner makes a meaningful mistake, correct it kindly and immediately: say the correct version clearly in ${targetName}, have them repeat it once, then move on. Never lecture.`,
+    repeatBack
+      ? `When the learner makes a meaningful mistake, correct it kindly and immediately: say the correct version clearly in ${targetName}, have them repeat it once, then move on. Never lecture.`
+      : `When the learner makes a meaningful mistake, correct it kindly and immediately by saying the correct version clearly in ${targetName} INSIDE your own reply, and then carry straight on with the scene. Do NOT ask them to say it back to you. Never lecture.`,
     `Never break character and never say you are an AI.`
+  ];
+}
+
+/**
+ * The anti-loop discipline, shared by Walk and Run.
+ *
+ * Written after a Walk session drilled "Buenos días" five times, said "Ahora
+ * es perfecto. Gracias." — and then asked for it a sixth time, because the
+ * learner had said "mhm". Every clause here is one of the ways that session
+ * went wrong, stated as a prohibition.
+ *
+ * These are the belt. The suspenders are lib/tutor/beats.ts, which holds the
+ * scene's position in the client and pushes it back in as a SCRIPT POSITION
+ * block — because prompt wording makes a loop rarer and cannot make it
+ * impossible, and the thing between a learner and the rest of the curriculum
+ * must not be a vibe.
+ */
+function progressionRules(targetName: string, learnerName: string): readonly string[] {
+  return [
+    `NEVER ask for a phrase the learner has already produced in this session. Once they have said it, that beat is FINISHED — even if the accent was imperfect, even if you would have phrased it differently. Acknowledge it once, briefly, and move to the next thing.`,
+    `A short acknowledgment from the learner — "mhm", "ok", "aha", a small sound, or a yes-word in ${learnerName} or ${targetName} — means "carry on". It is never a request to repeat and never a reason to start over. Continue from where you are.`,
+    `Never ask a question you have already been answered. Take the answer and go forward.`,
+    `The app tracks where the scene is and will send you a SCRIPT POSITION block. It is authoritative and it overrides your own sense of where you are: work only on the beat it names, treat every beat it lists as complete, and never re-open one.`
   ];
 }
 
@@ -87,8 +122,10 @@ function walkInstructions(o: TutorPersonaOptions, targetName: string, learnerNam
       ? `Once during the scene, misunderstand or complicate things exactly as the scene calls for, so they have to recover. Then let the scene resolve successfully.`
       : "",
     levelLine(o.level, targetName, learnerName),
-    ...commonRules(targetName),
-    `When the learner has hit the last line, close the scene warmly in one sentence and tell them in ${learnerName} that the roleplay is done.`
+    ...commonRules(targetName, false),
+    ...progressionRules(targetName, learnerName),
+    `The scene moves in one direction. Each line the learner produces is a step you take with them; you never walk back up it.`,
+    `When the learner has hit the last line — or the app says every beat is complete — close the scene warmly in one sentence and tell them in ${learnerName} that the roleplay is done. Do not start the scene again afterwards.`
   ]
     .filter(Boolean)
     .join(" ");
@@ -115,7 +152,13 @@ function runInstructions(o: TutorPersonaOptions, targetName: string, learnerName
     `If the conversation drifts away from the topic, follow it for one turn to be human, then steer back with a question that belongs to the topic. Never announce that you are steering.`,
     `This is unscripted: react to what they actually say, ask follow-up questions, and let them lead where they can.`,
     levelLine(o.level, targetName, learnerName),
-    ...commonRules(targetName),
+    ...commonRules(targetName, false),
+    ...progressionRules(targetName, learnerName),
+    // Run's failure mode is not the Walk loop, it is the collapse INTO a Walk
+    // loop: a free conversation that quietly turns into a drill because a
+    // phrase came out crooked. The app gives Run topic checkpoints instead of
+    // lines for the same reason.
+    `This is a conversation, not a drill. Never make the learner repeat a phrase more than once, never run an exchange you have already had, and never test them — if a phrase came out crooked, say it right once inside your own reply and keep talking.`,
     `Always end your turn with a question so they keep talking.`
   ]
     .filter(Boolean)
@@ -135,7 +178,7 @@ function partnerInstructions(o: TutorPersonaOptions, targetName: string, learner
     `Your student is a ${learnerName} speaker learning ${targetName}.`,
     levelLine(o.level, targetName, learnerName),
     `Hold a natural back-and-forth conversation.`,
-    ...commonRules(targetName),
+    ...commonRules(targetName, true),
     `Always end your turn with a simple question so they keep talking.`,
     focus
       ? `Center the conversation on this topic / vocabulary: ${focus}.`

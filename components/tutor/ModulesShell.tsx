@@ -66,6 +66,14 @@ import {
   type ConvState,
   type StopReason
 } from "@/lib/tutor/conversation";
+import {
+  beatProgress,
+  currentBeat,
+  initBeatState,
+  onLearnerTurn,
+  onTutorTurn,
+  type BeatState
+} from "@/lib/tutor/beats";
 
 /** Walk is a scene, not a chat: shorter cap than free conversation. */
 const WALK_MAX_MS = 6 * 60 * 1000;
@@ -376,6 +384,15 @@ function ModuleLoop({
               target={target}
               learner={learner}
               level={level}
+              // The scene ran to its last beat. The phase is ticked here and
+              // not on the button, so a learner who finishes the roleplay and
+              // then closes the app has still finished it — but the move to
+              // Run stays theirs to make.
+              onComplete={() => markDone(phase)}
+              // A line the scene moved past unsaid. Same shelf Crawl puts its
+              // capped phrases on: unfinished business, remembered rather than
+              // enforced.
+              onSkipped={(line) => recordAttempt(null, line)}
               onDone={() => {
                 markDone(phase);
                 if (phase === "walk") setPhase("run");
@@ -848,6 +865,8 @@ function RealtimePhase({
   target,
   learner,
   level,
+  onComplete,
+  onSkipped,
   onDone
 }: {
   phase: TutorPhase;
@@ -856,6 +875,10 @@ function RealtimePhase({
   target: string;
   learner: string;
   level: TutorLevel;
+  /** Every beat of the scene finished. Fired once per session. */
+  onComplete: () => void;
+  /** A line the scene moved past without the learner landing it. */
+  onSkipped: (line: string) => void;
   onDone: () => void;
 }): JSX.Element {
   const [state, setState] = useState<ConvState>("idle");
@@ -865,6 +888,16 @@ function RealtimePhase({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+
+  // Where the scene is. The ref is the source of truth because the realtime
+  // callbacks below are captured once, at start(), and would otherwise each
+  // read the beat state as it was in that render; the state mirrors it purely
+  // so the screen re-draws. lib/tutor/beats.ts is the rule itself.
+  const [beats, setBeats] = useState<BeatState>(() =>
+    initBeatState({ phase, lesson, module: mod })
+  );
+  const beatRef = useRef(beats);
+  const completedRef = useRef(false);
 
   const sessRef = useRef<ActiveConversation | null>(null);
   const liveRef = useRef("");
@@ -884,6 +917,24 @@ function RealtimePhase({
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [lines, live]);
 
+  // One transition, applied everywhere: hold it, draw it, and push it into the
+  // live session. The directive is only present when the position actually
+  // moved, so a quiet turn costs nothing.
+  const applyBeats = useCallback(
+    (next: ReturnType<typeof onLearnerTurn>) => {
+      const before = beatRef.current;
+      beatRef.current = next.state;
+      setBeats(next.state);
+      if (next.directive) sessRef.current?.setScriptState(next.directive);
+      for (const line of next.state.left.slice(before.left.length)) onSkipped(line);
+      if (next.state.done && !completedRef.current) {
+        completedRef.current = true;
+        onComplete();
+      }
+    },
+    [onComplete, onSkipped]
+  );
+
   async function start() {
     setError(null);
     setNotice(null);
@@ -892,6 +943,10 @@ function RealtimePhase({
     liveRef.current = "";
     setElapsed(0);
     setMuted(false);
+    const fresh = initBeatState({ phase, lesson, module: mod });
+    beatRef.current = fresh;
+    setBeats(fresh);
+    completedRef.current = false;
     const { data } = await supabase.auth.getSession();
     try {
       sessRef.current = await startConversation(
@@ -908,7 +963,10 @@ function RealtimePhase({
         {
           onState: setState,
           onError: setError,
-          onUserTranscript: (t) => setLines((prev) => [...prev, { role: "user", text: t }]),
+          onUserTranscript: (t) => {
+            setLines((prev) => [...prev, { role: "user", text: t }]);
+            applyBeats(onLearnerTurn(beatRef.current, t));
+          },
           onAssistantDelta: (d) => {
             liveRef.current += d;
             setLive(liveRef.current);
@@ -918,6 +976,10 @@ function RealtimePhase({
             liveRef.current = "";
             setLive("");
             if (text) setLines((prev) => [...prev, { role: "tutor", text }]);
+            // The tutor's own turn moves the position too: its opening line
+            // completes the opening beat, and a re-drill of a finished line is
+            // what the correction path in beats.ts is watching for.
+            if (text) applyBeats(onTutorTurn(beatRef.current, text));
           },
           onTick: setElapsed,
           onStopped: (reason: StopReason) => {
@@ -933,6 +995,8 @@ function RealtimePhase({
   }
 
   const rp = lesson.roleplay;
+  const scene = beatProgress(beats);
+  const beat = currentBeat(beats);
 
   return (
     <section className="flex flex-col gap-3 pb-4">
@@ -943,20 +1007,39 @@ function RealtimePhase({
           <p className="mt-1 text-xs text-amber-100/50">
             The tutor plays {rp.tutorRole}. You are {rp.learnerRole}.
           </p>
-          <p className="mt-3 text-[10px] uppercase tracking-[0.2em] text-emerald-100/50">
-            Your lines
+          <p className="mt-3 flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-emerald-100/50">
+            <span>Your lines</span>
+            {/* The learner's own answer to "am I going in circles?". */}
+            <span className={beats.done ? "text-emerald-300" : ""}>
+              {scene.done} / {scene.total}
+            </span>
           </p>
           <ol className="mt-1 flex flex-col gap-2">
-            {rp.learnerLines.map((l, i) => (
-              <li key={i} className="text-sm">
-                <span className="text-amber-100/40">{l.cue}</span>
-                <p className="text-base text-white">{l.target}</p>
-                {l.romanization ? (
-                  <p className="text-xs text-amber-100/55">{l.romanization}</p>
-                ) : null}
-                <p className="text-xs text-amber-50/60">{l.meaning}</p>
-              </li>
-            ))}
+            {rp.learnerLines.map((l, i) => {
+              const id = `line-${i + 1}`;
+              const said = beats.completed.includes(id);
+              const now = !beats.done && beat?.id === id;
+              return (
+                <li
+                  key={i}
+                  className={`rounded-2xl px-2 py-1.5 text-sm transition ${
+                    now ? "bg-amber-400/10 ring-1 ring-amber-300/30" : ""
+                  } ${said ? "opacity-45" : ""}`}
+                >
+                  <span className="text-amber-100/40">
+                    {said ? "✓ " : now ? "→ " : ""}
+                    {l.cue}
+                  </span>
+                  <p className={`text-base ${said ? "text-white/70 line-through" : "text-white"}`}>
+                    {l.target}
+                  </p>
+                  {l.romanization ? (
+                    <p className="text-xs text-amber-100/55">{l.romanization}</p>
+                  ) : null}
+                  <p className="text-xs text-amber-50/60">{l.meaning}</p>
+                </li>
+              );
+            })}
           </ol>
         </div>
       ) : (
@@ -967,6 +1050,15 @@ function RealtimePhase({
             No script. The tutor stays in character and keeps you inside{" "}
             {mod.title.toLowerCase()} — wander off and it will bring you back.
           </p>
+          {active || beats.done ? (
+            <p className="mt-2 text-xs text-emerald-100/60">
+              {beats.done
+                ? "You covered the whole topic."
+                : `Topic ${Math.min(scene.done + 1, scene.total)} of ${scene.total}: ${
+                    beat?.goal ?? ""
+                  }`}
+            </p>
+          ) : null}
         </div>
       )}
 
@@ -1065,12 +1157,33 @@ function RealtimePhase({
         </p>
       ) : null}
 
+      {beats.done ? (
+        <p className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+          {phase === "walk"
+            ? "Scene complete — you got through every line. · Escena completa."
+            : "You covered the whole topic. · Cubriste todo el tema."}
+        </p>
+      ) : null}
+
+      {/* Pulsed, not auto-tapped: the phase is already ticked (onComplete),
+          so this button only decides WHEN to leave — and a learner mid-goodbye
+          should not be yanked into Run by their own last sentence. */}
       <button
         type="button"
         onClick={onDone}
-        className="self-end text-sm font-medium text-amber-300"
+        className={`self-end rounded-full px-3 py-1.5 text-sm font-medium transition ${
+          beats.done
+            ? "animate-pulse bg-amber-400/15 text-amber-200 ring-1 ring-amber-300/40"
+            : "text-amber-300"
+        }`}
       >
-        {phase === "walk" ? "Mark Walk done · go to Run →" : "Mark Run done →"}
+        {phase === "walk"
+          ? beats.done
+            ? "Go to Run →"
+            : "Mark Walk done · go to Run →"
+          : beats.done
+            ? "Finish this module →"
+            : "Mark Run done →"}
       </button>
     </section>
   );
