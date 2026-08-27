@@ -165,6 +165,24 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- The context cap belongs on the other three realtime screens too — found
+  while costing /call (PR #39, docs/call-cost-model.md). Every Realtime
+  response re-reads the whole session, as audio, at $32/Mtok; measured on a
+  live session, an uncapped one billed **209% of the audio actually spoken and
+  was still climbing turn over turn**, against 66% and flat with
+  `truncation: { type: "retention_ratio", token_limits: { post_instructions:
+  100 } }`. /call has that cap now; `/api/live/realtime`,
+  `/api/tabletop/realtime` and `/api/tutor/realtime` do not, and none of them
+  was written knowing this was happening.
+  /live is the one to look at first: it speaks AUDIO (the expensive
+  modality) and an ambient session is meant to run for a long time, which is
+  exactly the shape that pays for its first minute over and over. The right
+  cap is not necessarily 100 for all three — /tutor is a CONVERSATION and
+  genuinely wants history, so it needs its own number rather than this one
+  copied. Worth measuring each the same way before changing any of them.
+  (added 2026-08-27)
+
+
 - Data-map follow-ups (from the read-only audit, `docs/data-map.md`,
   2026-08-26) — Reflections groundwork turned up four things worth deciding
   before any couple-data plumbing lands. (1) Two backup tables,
