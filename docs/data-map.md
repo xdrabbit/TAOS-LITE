@@ -5,6 +5,18 @@
 the app; the only writes in this PR are this file and one line in the
 Reflections plan.*
 
+> **Since this audit — the hygiene pass, 2026-08-26 (PR #37).** Four of the
+> findings below have been acted on and the rest of this page is now the
+> record of what was true when it was written, not of what is true today.
+> Changed: the two backup tables are **dropped** (§2, §3, Surprise 1);
+> `taos_leads` no longer accepts writes from the internet (§14, Surprise 7);
+> either member of a chat can now delete the whole thread, audio included, and
+> deleting an account takes its threads with it (§4–§6, Surprise 2, Surprise
+> 3). Each affected section carries a **RESOLVED** line. Everything else on
+> this page — including Tom's `bs` language, `tutor_mastery`'s dead
+> two-course ceiling, and the predict-model `direction` ceiling — is
+> unchanged and still open.
+
 **Method.** The repo's `supabase/migrations/` holds four files and covers four
 objects — most of this schema was applied by hand in the SQL editor and exists
 only in the database. So this map was read from the **live schema** of
@@ -84,6 +96,12 @@ is a language, not a person.
 Both backups are flagged in **Surprises** below. They are the single largest
 gap between what the product promises and what the database does.
 
+> **RESOLVED 2026-08-26 (PR #37).** Both tables are dropped —
+> `supabase/migrations/20260826_drop_translation_backups.sql`. Tom's call was a
+> straight drop (he keeps his own backups), so there is no export and no
+> archive: the 3,799 rows are gone, and `public` holds twelve tables now
+> instead of fourteen.
+
 ### 4. `taos_lite_chat_threads` — the couple container
 
 | | |
@@ -132,6 +150,21 @@ Writes go through `/api/chat/send` and `/api/chat/voice` with the service role
 (translation happens between the read and the insert). Reads are live over
 Supabase Realtime `postgres_changes` on `taos-chat-<threadId>`, which is
 RLS-filtered.
+
+> **RESOLVED 2026-08-26 (PR #37).** `20260826_chat_thread_deletion.sql` adds a
+> DELETE policy on `taos_lite_chat_threads` keyed on membership, so **either
+> member may delete the whole thread** — and because every FK into a thread is
+> already `ON DELETE CASCADE`, that takes members, messages (both senders) and
+> invites with it. The user-facing path is `DELETE /api/chat/thread/[id]` plus
+> a bilingual confirm in `/chat`; the route removes the thread's audio through
+> the Storage API **before** it deletes the rows, because Supabase's
+> `protect_objects_delete` trigger means no SQL cascade can ever reach a
+> bucket. A new `BEFORE DELETE` trigger on `auth.users` deletes the threads a
+> departing account belonged to, which ends the stranded-half asymmetry in
+> Surprise 2. Verified on the live schema in a rolled-back transaction: a
+> member's delete removed both senders' messages; a stranger's delete removed
+> nothing; an account deletion removed the whole thread including the
+> survivor's half.
 
 ### 7. `taos_lite_chat_invites` — how the second person arrives
 
@@ -236,6 +269,16 @@ The only table in the schema that holds no user-attributable data at all.
 | **Referenced by code** | **Nowhere** in this repo. |
 | **RLS** | `taos_leads_anon_insert` — `INSERT` for `{anon, authenticated}` with `WITH CHECK (true)`. No SELECT policy. |
 
+> **RESOLVED 2026-08-26 (PR #37).** The policy is dropped
+> (`20260826_leads_server_only.sql`); RLS is on with no policies, so the
+> service role is the only writer. `POST /api/leads` is the replacement path —
+> origin-checked, rate limited, shape-validated (`lib/leads.ts`). Note for
+> anyone re-reading Surprise 7: the "is it really open?" probe is easy to get
+> wrong. A POST with the publishable key and `Prefer: return=representation`
+> answers **401 / RLS violation** — because there is no SELECT policy to read
+> the row back. The same POST with `Prefer: return=minimal` answered **201
+> Created**. It was open.
+
 ---
 
 ## Storage buckets
@@ -251,6 +294,22 @@ The only table in the schema that holds no user-attributable data at all.
 the first path segment, so membership gates the audio the same way it gates the
 text. There is **no DELETE policy and no cleanup path**: voice notes outlive
 everything, including the account that sent them.
+
+> **RESOLVED 2026-08-26 (PR #37).** There is still no DELETE *policy*, and
+> that is now deliberate: a member who could delete an object directly could
+> silence a voice note while leaving its message row, which is a lie in the
+> shape of a broken play button. The cleanup path is the route
+> (`DELETE /api/chat/thread/[id]`), which lists the thread's folder and removes
+> it through the Storage API before the rows go. For the paths a route cannot
+> see — an account deleted in the dashboard, a row deleted straight through
+> RLS — there is `/api/chat/voice/orphans`, founders-only, GET to report and
+> POST to sweep. An object no message row points at is garbage by
+> construction: this bucket has exactly one writer, and it writes the row in
+> the same request. Orphan count at the time of the pass: **0** (27 objects,
+> 27 owning rows) — the "27 orphans" in the original brief was a misreading of
+> §6; those 27 objects each have a message. The path shape now has one owner,
+> `lib/chatVoice.ts`, because the storage policy decides membership from the
+> first path segment and four things depend on that.
 
 ---
 
@@ -287,10 +346,10 @@ progress), `PAIR_STORAGE_KEY` / `RECENT_STORAGE_KEY` (language pair), `STORAGE_K
 | data | kept until | user can delete? | survives account deletion? |
 |---|---|---|---|
 | translate history | deleted by user | **yes** (per-row + clear all) | no (CASCADE) |
-| translate backups (2 tables) | forever | **no — unreachable** | **yes** ⚠️ |
-| chat messages (text + translation) | forever | **no** | **only the other person's half** ⚠️ |
-| chat voice audio | forever | **no** | **yes — orphaned in the bucket** ⚠️ |
-| chat threads / memberships | forever | no | membership: no. thread: yes |
+| translate backups (2 tables) | ~~forever~~ **dropped (PR #37)** | n/a | n/a |
+| chat messages (text + translation) | ~~forever~~ **until either member deletes the thread (PR #37)** | **yes — either member, whole thread** | no — the thread goes with the account |
+| chat voice audio | ~~forever~~ **goes with its thread (PR #37)** | **yes, via the thread** | rows: no. objects: sweep `/api/chat/voice/orphans` ⚠️ |
+| chat threads / memberships | until either member deletes, or either account is | **yes** | **yes — thread and both memberships (PR #37)** |
 | chat invites | until superseded | no | `accepted_by` → NULL, row stays |
 | tutor sessions / attempts | forever | via RLS delete (no UI) | no (CASCADE) |
 | tutor lessons | forever | n/a (no user data) | n/a |
@@ -378,6 +437,9 @@ audio (all below).
    database. Recommend deciding their fate (drop, or move to a documented,
    time-boxed archive) before Reflections work starts.
 
+   **RESOLVED 2026-08-26 (PR #37): dropped.** Straight drop on the owner's
+   explicit instruction — no export, no archive.
+
 2. **Chat deletion is asymmetric.** `taos_lite_chat_messages.sender_id` is
    `ON DELETE CASCADE`. Delete one partner's account and *their* messages
    vanish while the other's remain — leaving half a dialogue, out of context,
@@ -387,10 +449,21 @@ audio (all below).
    damages rather than removes. For a feature whose second principle is "either
    partner can revoke at any time," this is the semantics to settle first.
 
+   **RESOLVED 2026-08-26 (PR #37).** Settled as: the thread belongs to both,
+   so either member deletes all of it, and an account leaving takes its
+   threads with it rather than half-emptying them. See §6.
+
 3. **Voice audio outlives everything.** 27 objects in `chat-voice`, no DELETE
    policy, no cleanup path except the failed-insert rollback. If a sender's
    account is deleted the message row cascades away and the audio file stays —
    an orphan with no row pointing at it and no owner to ask for its removal.
+
+   **RESOLVED 2026-08-26 (PR #37)**, with one honest caveat: the route removes
+   a thread's audio before its rows, but Postgres itself can never reach a
+   bucket (`protect_objects_delete`), so an account deleted in the Supabase
+   dashboard still leaves its audio behind. Running `/api/chat/voice/orphans`
+   afterwards is the manual step that closes that, and it is listed as one
+   wherever an account deletion is.
 
 4. **Tom's chat language is set to `bs` (Bosnian).** In *both* threads,
    including the real Tom & Liz thread. Liz's side is `es`, so
@@ -424,6 +497,12 @@ audio (all below).
    The publishable key is in every browser bundle by design, so this is a
    world-writable table. Low stakes as a table of emails; still an open write
    endpoint that nothing owns.
+
+   **RESOLVED 2026-08-26 (PR #37).** Policy dropped; `POST /api/leads` owns
+   the write now. Flagged consequence: if a page outside this repo still posts
+   here with the publishable key, it is broken as of this change and will fail
+   silently. Nothing on this machine does, and the table has produced no row
+   since June.
 
 8. **Most of the schema is not in `supabase/migrations/`.** Four files cover
    `taos_lite_chat_invites`, the members index, the `lang` CHECK, and

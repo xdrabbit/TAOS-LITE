@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
+import { CHAT_VOICE_BUCKET, voicePath } from "@/lib/chatVoice";
 import { languageLabel } from "@/lib/languages/catalog";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 import { STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
@@ -15,13 +16,6 @@ export const maxDuration = 60;
 // voice note still sends — audio is the payload, text is the bonus.
 
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024; // ~2 min of audio with headroom
-
-function extensionFor(mime: string): string {
-  if (mime.includes("mp4") || mime.includes("aac") || mime.includes("m4a")) return "m4a";
-  if (mime.includes("ogg")) return "ogg";
-  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
-  return "webm";
-}
 
 async function transcribeAudio(
   apiKey: string,
@@ -142,10 +136,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // Store the audio first — it is the message; text enrichment can fail.
   const mime = audio.type || "audio/webm";
-  const audioPath = `${threadId}/${crypto.randomUUID()}.${extensionFor(mime)}`;
+  // Thread id first: that segment is what the storage read policy checks
+  // membership against, and what the thread-delete route lists to take the
+  // audio down with the rows. lib/chatVoice.ts owns the shape.
+  const audioPath = voicePath(threadId, crypto.randomUUID(), mime);
   const bytes = await audio.arrayBuffer();
   const { error: uploadErr } = await supabaseAdmin.storage
-    .from("chat-voice")
+    .from(CHAT_VOICE_BUCKET)
     .upload(audioPath, bytes, { contentType: mime, upsert: false });
   if (uploadErr) {
     return NextResponse.json({ error: "Could not store the voice message." }, { status: 502 });
@@ -181,7 +178,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .single();
   if (insertErr || !inserted) {
     // Best-effort cleanup so a failed insert doesn't strand the audio file.
-    await supabaseAdmin.storage.from("chat-voice").remove([audioPath]);
+    await supabaseAdmin.storage.from(CHAT_VOICE_BUCKET).remove([audioPath]);
     return NextResponse.json({ error: "Could not send the voice message." }, { status: 502 });
   }
 

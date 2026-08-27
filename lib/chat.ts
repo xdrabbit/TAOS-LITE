@@ -1,5 +1,6 @@
 "use client";
 
+import { CHAT_VOICE_BUCKET } from "@/lib/chatVoice";
 import type { ChatThreadSummary } from "@/lib/chatThreads";
 import { readStoredPair } from "@/lib/translate/pair";
 import { supabase } from "@/lib/supabase";
@@ -135,7 +136,7 @@ export async function setMyChatLanguage(threadId: string, lang: string): Promise
 // to members of the thread in the path).
 export async function getVoiceUrl(audioPath: string): Promise<string> {
   const { data, error } = await supabase.storage
-    .from("chat-voice")
+    .from(CHAT_VOICE_BUCKET)
     .createSignedUrl(audioPath, 3600);
   if (error || !data?.signedUrl) throw error ?? new Error("Could not load the audio.");
   return data.signedUrl;
@@ -162,6 +163,33 @@ export function subscribeMessages(
   return () => {
     void supabase.removeChannel(channel);
   };
+}
+
+/**
+ * Delete this chat — all of it, for both people.
+ *
+ * The one destructive call on this screen. It goes through a route rather
+ * than `supabase.from('taos_lite_chat_threads').delete()`, even though the
+ * RLS policy added in 20260826_chat_thread_deletion.sql would allow the
+ * direct call, because a voice note is TWO things: a row, and an object in
+ * the chat-voice bucket. The rows cascade; the audio cannot — Supabase
+ * refuses SQL deletes on storage.objects outright — so only something holding
+ * the Storage API can take a thread down completely, and that is the route.
+ * Deleting from here directly would leave the audio behind, which is the
+ * exact promise this whole path exists to keep.
+ */
+export async function deleteChatThread(threadId: string): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch(`/api/chat/thread/${encodeURIComponent(threadId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const payload = (await res.json().catch(() => ({}))) as { deleted?: boolean; error?: string };
+  if (!res.ok || !payload.deleted) {
+    throw new Error(payload.error || "Could not delete the chat.");
+  }
 }
 
 // Stamp everything the partner sent as read. Best-effort; RLS restricts the

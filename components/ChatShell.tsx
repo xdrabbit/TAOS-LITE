@@ -31,6 +31,7 @@ import {
 } from "@/lib/translate/pinned";
 import {
   createChatInvite,
+  deleteChatThread,
   getVoiceUrl,
   listChatThreads,
   listMessages,
@@ -43,6 +44,10 @@ import {
   type ChatMessageRow
 } from "@/lib/chat";
 import {
+  CHAT_DELETE_BUSY,
+  CHAT_DELETE_CONFIRM,
+  CHAT_DELETE_FAILED,
+  CHAT_DELETE_LABEL,
   CHAT_LIST_BACK,
   initialThreadId,
   type ChatThreadSummary
@@ -134,6 +139,7 @@ export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Elem
   const [invite, setInvite] = useState<ChatInvite | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [messages, setMessages] = useState<ChatMessageRow[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
@@ -571,6 +577,39 @@ export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Elem
     setReloadKey((n) => n + 1);
   }, []);
 
+  /**
+   * Burn this chat — for both people.
+   *
+   * The confirm is window.confirm on purpose, the same as "Clear all" in the
+   * history drawer: it is the one dialog on a phone that cannot be styled into
+   * looking harmless, and it stops the thumb. The sentence it shows says "for
+   * BOTH of you" in both languages, because that is the part of this that
+   * would otherwise be a surprise — deleting here reaches into the other
+   * person's phone (lib/chatThreads.ts).
+   *
+   * After it lands, back to the list with a reload rather than a local splice:
+   * the deleted row and every preview around it are now a round trip out of
+   * date, and the list is cheap.
+   */
+  const deleteThread = useCallback(async () => {
+    if (!thread || deleting) return;
+    if (!window.confirm(CHAT_DELETE_CONFIRM)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteChatThread(thread.threadId);
+      setActiveId(null);
+      setListOpen(false);
+      setMessages([]);
+      setPending([]);
+      setReloadKey((n) => n + 1);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : CHAT_DELETE_FAILED);
+    } finally {
+      setDeleting(false);
+    }
+  }, [thread, deleting]);
+
   // Pick the language I READ. Optimistic: the row moves under the thumb and
   // rolls back if the write fails, because the alternative is a pill that does
   // nothing for a round trip and gets tapped again.
@@ -700,8 +739,24 @@ export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Elem
             only thing it could be when there was one chat; with a list behind
             it, the useful line is who you are talking to — and it is their own
             display name, off their own account. */}
-        <div className="truncate text-xs uppercase tracking-[0.2em] text-amber-100/50">
-          {thread?.partnerName ?? "Private chat · Chat privado"}
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-amber-100/50">
+            {thread?.partnerName ?? "Private chat · Chat privado"}
+          </div>
+          {/* Deliberately the quietest control on the screen: no fill, no
+              amber, and it only exists once there is a thread to delete. It
+              is destructive to somebody ELSE's copy as well as mine, so it
+              should be findable and never reachable by accident. */}
+          {thread ? (
+            <button
+              type="button"
+              onClick={() => void deleteThread()}
+              disabled={deleting}
+              className="shrink-0 rounded-full border border-red-400/20 px-3 py-1 text-[10px] uppercase tracking-wide text-red-200/70 transition active:scale-[0.98] disabled:opacity-50"
+            >
+              {deleting ? CHAT_DELETE_BUSY : CHAT_DELETE_LABEL}
+            </button>
+          ) : null}
         </div>
 
         {/* Whose language is whose, said twice on purpose. The solid pill is
