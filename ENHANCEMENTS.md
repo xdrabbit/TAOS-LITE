@@ -40,6 +40,36 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   → Curriculum plan for bringing it back: `docs/tutor-curriculum-plan.md`
   (14 language-agnostic intent modules, crawl/walk/run loop, engineering
   order — cost guards land before customers). (added 2026-08-19)
+  → PHASE 1 built 2026-08-25, PR #35, open for Tom — steps 1-3 of the plan
+  plus Conversation Partner and the catalog wiring step 4 asked for. The
+  fourteen modules are data (`lib/tutor/modules.ts`), lessons generate per
+  (module × target × learner) with the contrast hook and are cached so repeat
+  visits are free, and crawl/walk/run runs against real Azure and real
+  realtime. **The flag stays off** — phase 2 is the plan-minute metering, and
+  the hook points for it are already emitted (`lib/tutor/meter.ts`: a start
+  line at mint, an end line at hang-up, one session id tying them). Run log
+  and transcripts: `docs/tutor-phase1-verification.md`. What phase 2 owes:
+  debit the minutes in those two functions, move `checkTutorAllowance` behind
+  them, decide whether `tutor_sessions` is written server-side, and put
+  progress somewhere better than localStorage.
+  → PHASE 1 MERGED to main 2026-08-26 (PR #35). **The flag is still OFF in
+  Production** — verified after deploy that /tutor 307s to / and all four
+  /api/tutor routes 404 on taoslite.com, so customers see zero change. The
+  Azure pronunciation leg that phase 1 could not run locally (its key is
+  SENSITIVE in Vercel) was closed by Tom on the branch preview, so crawl
+  scoring is confirmed end-to-end against real Azure. **Phase 2 is the
+  metering** and is the only thing standing between this and the flag going
+  on: debit minutes in `startTutorSession`/`endTutorSession`
+  (`lib/tutor/meter.ts`), move `checkTutorAllowance` behind them, decide
+  whether `tutor_sessions` is written server-side, and move progress off
+  localStorage.
+  → Known state, deliberate: `NEXT_PUBLIC_ENABLE_TUTOR=1` is set in Vercel on
+  the **Preview** environment with no git-branch scope, so EVERY branch
+  preview shows tutor, not just the tutor branch. That is what founders want
+  while phase 2 is built (preview = the place to exercise it), and it is safe
+  because the var is absent from Production. Delete it from Preview, or re-add
+  it with `--git-branch`, when tutor should stop appearing on unrelated
+  preview builds. (noted 2026-08-26)
 - /live "On-device" mode: find out why it never works, or delete it — Tom
   (8/18): it has never once worked for him. Gated off for RC1 behind
   NEXT_PUBLIC_ENABLE_ONDEVICE_STT (lib/release.ts), so /live now has one
@@ -284,6 +314,20 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **Tutor phase 1 — the curriculum engine, merged dark** (PR #35,
+  2026-08-26) — fourteen language-agnostic intent modules as data
+  (`lib/tutor/modules.ts`), lessons generated per (module × target × learner)
+  with the contrast hook and cached in `tutor_lessons` so repeat visits cost
+  nothing, and the crawl/walk/run loop running against real Azure
+  pronunciation scoring and a real GA realtime session. Merged with
+  `NEXT_PUBLIC_ENABLE_TUTOR` still off in Production: /tutor redirects home,
+  every /api/tutor route 404s, and the nav link and tutor wording stay hidden,
+  so nothing customer-facing moved. The point of merging it dark is that phase
+  2 (plan-minute metering) can now be built against main instead of a
+  long-lived branch — the hook points are already emitted in
+  `lib/tutor/meter.ts`. Run log and transcripts:
+  `docs/tutor-phase1-verification.md`.
 
 - **Liz's voice rolled back to the familiar clone, and her ID is config now**
   — the 8/23 swap to `atyoq…` ("lizma5") was the WRONG VOICE, and Tom heard it

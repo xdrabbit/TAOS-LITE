@@ -18,10 +18,13 @@ import {
   startConversation,
   type ActiveConversation,
   type ConvState,
-  type LearnLang,
-  type Level,
   type StopReason
 } from "@/lib/tutor/conversation";
+import type { TutorLevel } from "@/lib/tutor/types";
+import { ModulesShell } from "./tutor/ModulesShell";
+import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { languageNative } from "@/lib/languages/catalog";
 import { requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { Paywall } from "./Paywall";
@@ -58,7 +61,19 @@ interface AssessResult {
 }
 
 type Status = "idle" | "recording" | "scoring";
-type Mode = "drills" | "conversation";
+
+/**
+ * The three things the tutor screen is.
+ *
+ * `modules` is the curriculum (docs/tutor-curriculum-plan.md) and the default
+ * — it is what the tutor is FOR. `partner` is Conversation Partner: no
+ * curriculum, level-matched free talk, the Taiwan use case on its own. And
+ * `drills` is the original 30-day English course parsed out of
+ * content/tutor-course, kept because it works and Liz has been through part of
+ * it; it is EN-only by construction and the modules replace it in every other
+ * language.
+ */
+type Mode = "modules" | "partner" | "drills";
 
 function scoreColor(n: number | null | undefined): string {
   if (typeof n !== "number") return "text-amber-100/60";
@@ -130,7 +145,12 @@ function TutorModes({
   profile: Profile | null;
   email: string;
 }): JSX.Element {
-  const [mode, setMode] = useState<Mode>("drills");
+  const [mode, setMode] = useState<Mode>("modules");
+  if (mode === "modules") {
+    return (
+      <ModulesShell header={<TutorHeader mode={mode} onMode={setMode} />} profile={profile} />
+    );
+  }
   return mode === "drills" ? (
     <Drills mode={mode} onMode={setMode} />
   ) : (
@@ -138,27 +158,27 @@ function TutorModes({
   );
 }
 
+const MODE_LABELS: ReadonlyArray<{ mode: Mode; label: string }> = [
+  { mode: "modules", label: "Modules" },
+  { mode: "partner", label: "Partner" },
+  { mode: "drills", label: "Drills" }
+];
+
 function ModeToggle({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
   return (
     <div className="flex rounded-full border border-white/10 bg-white/5 p-0.5 text-xs">
-      <button
-        type="button"
-        onClick={() => onMode("drills")}
-        className={`rounded-full px-3 py-1.5 transition ${
-          mode === "drills" ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-        }`}
-      >
-        Drills
-      </button>
-      <button
-        type="button"
-        onClick={() => onMode("conversation")}
-        className={`rounded-full px-3 py-1.5 transition ${
-          mode === "conversation" ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-        }`}
-      >
-        Conversation
-      </button>
+      {MODE_LABELS.map((m) => (
+        <button
+          key={m.mode}
+          type="button"
+          onClick={() => onMode(m.mode)}
+          className={`rounded-full px-3 py-1.5 transition ${
+            mode === m.mode ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+          }`}
+        >
+          {m.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -506,8 +526,13 @@ function Conversation({
   const [usageReady, setUsageReady] = useState<boolean>(unlimited);
   const [showPaywall, setShowPaywall] = useState(false);
 
-  const [learn, setLearn] = useState<LearnLang>("es");
-  const [level, setLevel] = useState<Level>("intermediate");
+  // Conversation Partner reaches the whole catalog now, through the same pair
+  // the rest of the app holds (lib/translate/useLanguagePair.ts): `theirs` is
+  // the language being learned, `mine` is the one the learner already speaks.
+  // This was a two-button "Spanish / English" choice until phase 1 — the same
+  // ceiling docs/tutor-curriculum-plan.md step 4 exists to remove.
+  const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
+  const [level, setLevel] = useState<TutorLevel>("intermediate");
   const [focus, setFocus] = useState("");
 
   const [convState, setConvState] = useState<ConvState>("idle");
@@ -581,7 +606,7 @@ function Conversation({
     const authToken = sessionData.session?.access_token;
 
     meterRef.current = await startTutorSession({
-      learn_lang: learn,
+      learn_lang: theirs,
       level,
       focus: focus.trim() || null
     });
@@ -589,8 +614,10 @@ function Conversation({
     try {
       const sess = await startConversation(
         {
-          learn,
+          target: theirs,
+          learner: mine,
           level,
+          phase: "partner",
           focus: focus.trim(),
           maxDurationMs: cap,
           idleTimeoutMs: CONV_IDLE_MS,
@@ -660,7 +687,7 @@ function Conversation({
   }
 
   const remaining = Math.max(0, Math.round(CONV_MAX_MS / 1000) - elapsed);
-  const targetName = learn === "es" ? "Spanish" : "English";
+  const targetName = languageNative(theirs);
 
   if (showPaywall) {
     return (
@@ -688,31 +715,23 @@ function Conversation({
                 pronunciation as you go. Just start talking.
               </p>
 
-              <label className="mt-5 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
-                I want to practice
-              </label>
-              <div className="mt-2 flex gap-2">
-                {(["es", "en"] as LearnLang[]).map((l) => (
-                  <button
-                    key={l}
-                    type="button"
-                    onClick={() => setLearn(l)}
-                    className={`flex-1 rounded-2xl border px-3 py-3 text-sm font-medium transition ${
-                      learn === l
-                        ? "border-amber-300/50 bg-amber-400 text-stone-950"
-                        : "border-white/10 bg-white/5 text-amber-100/80"
-                    }`}
-                  >
-                    {l === "es" ? "Spanish · Español" : "English · Inglés"}
-                  </button>
-                ))}
+              <div className="mt-5">
+                <LanguagePillRow
+                  pills={pills}
+                  selected={theirs}
+                  paired={mine}
+                  caption="I want to practice · Quiero practicar"
+                  sheetOpen={sheetOpen}
+                  onSelect={selectLanguage}
+                  onOpenSheet={() => setSheetOpen(true)}
+                />
               </div>
 
               <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
                 Level
               </label>
               <div className="mt-2 flex gap-2">
-                {(["beginner", "intermediate", "advanced"] as Level[]).map((lv) => (
+                {(["beginner", "intermediate", "advanced"] as TutorLevel[]).map((lv) => (
                   <button
                     key={lv}
                     type="button"
@@ -897,6 +916,15 @@ function Conversation({
           </section>
         )}
       </div>
+
+      <LanguageSheet
+        open={sheetOpen}
+        selected={theirs}
+        paired={mine}
+        caption="I want to practice · Quiero practicar"
+        onSelect={selectLanguage}
+        onClose={() => setSheetOpen(false)}
+      />
     </main>
   );
 }
