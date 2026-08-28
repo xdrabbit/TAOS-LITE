@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildTurnInstructions, type TabletopDirection } from "@/lib/tabletop/instructions";
+import { type TabletopDirection } from "@/lib/tabletop/instructions";
+import {
+  buildTabletopSession,
+  TABLETOP_CONTEXT_TOKEN_LIMIT,
+  TABLETOP_SECRET_TTL_SECONDS
+} from "@/lib/tabletop/session";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 import { guardSpend } from "@/lib/spendGuard";
 
@@ -11,11 +16,20 @@ export const maxDuration = 30;
 // is TEXT ONLY (streams onto the listener's pane; much cheaper than audio
 // output) — the spoken readout happens at turn end via /api/tts with the
 // cloned voices. The session outlives turns: the client swaps direction
-// per turn with session.update and detaches the mic track between turns so
-// idle table time doesn't stream (or bill) silence.
+// per turn with session.update and mutes the mic track between turns so
+// idle table time doesn't stream (or bill) speech.
 //
 // SIGNED-IN ONLY since 8/19 (ship report cdf9f02a): a minted client secret is
 // a live, billing Realtime session, and every cap on it is client-side.
+//
+// ── Where the money goes ───────────────────────────────────────────────────
+// Text output already removes the largest line item a realtime surface can
+// have (the model's own speech, $64/Mtok), which is why a table turn is the
+// cheapest of the three. What was left uncapped until 2026-08-28 is the
+// re-read: ONE session serves the whole party, so by the tenth turn "the
+// conversation so far" is nine other people's turns, re-read as audio at
+// $32/Mtok on every phrase. lib/tabletop/session.ts carries the cap and
+// docs/realtime-cost-model.md carries the measurements.
 
 const CLIENT_SECRETS_URL =
   process.env.OPENAI_REALTIME_CLIENT_SECRETS_URL ??
@@ -60,42 +74,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const session: Record<string, unknown> = {
-    type: "realtime",
-    model,
-    instructions: buildTurnInstructions(direction),
-    // TEXT ONLY: the streamed translation is read off the pane; audio readout
-    // happens at turn end via /api/tts (cloned voices, party-volume mp3).
-    output_modalities: ["text"],
-    // One VAD segment's translation — segments are phrase-sized.
-    max_output_tokens: 300,
-    audio: {
-      input: {
-        // The speaker's own pane shows the running "heard" transcript.
-        transcription: { model: transcribeModel },
-        turn_detection: {
-          type: "server_vad",
-          // Party room: high threshold so clinks and crowd noise don't commit
-          // empty segments (the /live hallucination lesson).
-          threshold: 0.6,
-          prefix_padding_ms: 300,
-          // Phrase-sized chunks: snappy enough to feel live, long enough to
-          // carry meaning.
-          silence_duration_ms: 550,
-          // Text responses can't overlap like audio, so server-created
-          // responses per VAD segment are safe here (unlike /live and /call).
-          create_response: true,
-          interrupt_response: false
-        }
-      }
-    }
-  };
+  const session = buildTabletopSession({ direction, model, transcribeModel });
 
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ session }),
+      body: JSON.stringify({
+        // Same reasoning as /call and /live: a minted secret is spendable, and
+        // the client spends it immediately.
+        expires_after: { anchor: "created_at", seconds: TABLETOP_SECRET_TTL_SECONDS },
+        session
+      }),
       cache: "no-store"
     });
     const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -118,6 +108,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { status: 502 }
       );
     }
+
+    // Greppable as [taos-tabletop-mint] in the Vercel runtime logs. One line
+    // per table, not per turn — the session outlives every turn it serves.
+    console.info(
+      `[taos-tabletop-mint] pair=${source}->${target} model=${model} ` +
+        `context_tokens=${TABLETOP_CONTEXT_TOKEN_LIMIT ?? "off"} ttl=${TABLETOP_SECRET_TTL_SECONDS}s`
+    );
 
     return NextResponse.json({
       clientSecret,

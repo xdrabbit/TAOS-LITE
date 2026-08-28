@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildInterpreterInstructions } from "@/lib/live/instructions";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
+import { buildLiveSession, LIVE_CONTEXT_TOKEN_LIMIT, LIVE_SECRET_TTL_SECONDS } from "@/lib/live/session";
 import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
@@ -19,6 +19,23 @@ export const maxDuration = 30;
 // that goes on billing after the response, and the only cap on it — the
 // session limit and idle auto-off in lib/live/ambient.ts — is client-side,
 // which is the wrong side of the wire from anyone who skipped the client.
+//
+// ── Where the money goes ───────────────────────────────────────────────────
+// This is the most exposed realtime surface in the app: /call is founders-only
+// and /tabletop is push-to-talk, but /live is a customer screen that runs
+// continuously for as long as dinner lasts, and until 2026-08-28 it had no
+// context cap at all. The session object is built by lib/live/session.ts and
+// the measurements are in docs/realtime-cost-model.md. In descending order of
+// what a minute costs:
+//   1. audio OUT — the model speaks every summary, $64/Mtok. Unlike /call
+//      there is no cheaper text mode to fall back to: the whole point of
+//      ambient mode is a voice in an earpiece while you look at the table.
+//   2. re-reading the conversation — audio at $32/Mtok, on EVERY response.
+//      Uncapped this grows for as long as the session is open; the
+//      `truncation` block in the builder is what holds it flat.
+//   3. audio IN — $32/Mtok, but only the segments server VAD commits.
+//      Streamed silence is not billed, which is why there is no client-side
+//      speech gate in lib/live/ambient.ts.
 
 const CLIENT_SECRETS_URL =
   process.env.OPENAI_REALTIME_CLIENT_SECRETS_URL ??
@@ -61,51 +78,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const instructions = buildInterpreterInstructions(target, source);
-
-  const session: Record<string, unknown> = {
-    type: "realtime",
-    model,
-    instructions,
-    output_modalities: ["audio"],
-    // Keep every summary clipped even if the prompt is ignored — a long
-    // response is a stale response.
-    max_output_tokens: 120,
-    audio: {
-      input: {
-        // Input transcription lets the UI show a faint "heard: …" line so the
-        // user can sanity-check what the mic actually picked up.
-        transcription: { model: transcribeModel },
-        turn_detection: {
-          type: "server_vad",
-          // 0.6: fewer false triggers from clinks/coughs/room noise — those
-          // committed empty turns and fed the hallucination problem.
-          threshold: 0.6,
-          prefix_padding_ms: 300,
-          // 600ms: 450 chopped speech into fragments and the summaries came
-          // out disjointed. Still snappier than the tutor's 700ms.
-          silence_duration_ms: 600,
-          // The CLIENT creates responses (lib/live/ambient.ts): auto-created
-          // responses fired at every VAD pause and their audio overlapped when
-          // people talked fast. The client waits until the previous summary
-          // finishes playing, coalescing everything said meanwhile into one
-          // fresh summary — freshness by design.
-          create_response: false,
-          // Never cancel a summary mid-word because someone kept talking
-          // (which is always, at a dinner).
-          interrupt_response: false
-        }
-      },
-      // Slightly fast delivery keeps the earpiece current.
-      output: { voice, speed: 1.15 }
-    }
-  };
+  const session = buildLiveSession({ target, source, model, voice, transcribeModel });
 
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ session }),
+      body: JSON.stringify({
+        // A minted secret is a spendable, billing session. Two minutes is
+        // longer than the client needs (it mints and connects in one breath)
+        // and short enough that one lifted out of a log is already dead.
+        expires_after: { anchor: "created_at", seconds: LIVE_SECRET_TTL_SECONDS },
+        session
+      }),
       cache: "no-store"
     });
     const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -128,6 +113,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { status: 502 }
       );
     }
+
+    // The open bracket of a session that bills until the phone stops it.
+    // /call closes its bracket with a [taos-call-cost] line carrying the
+    // dollars; /live has no usage report to post (its client never sees a
+    // response.done — the summaries arrive as audio), so this line is the
+    // whole record. Greppable as [taos-live-mint] in the Vercel runtime logs,
+    // and the thing worth seeing is the cap: a mint line showing
+    // context_tokens=off is a session that will cost what /live used to.
+    console.info(
+      `[taos-live-mint] pair=${source}->${target} model=${model} ` +
+        `context_tokens=${LIVE_CONTEXT_TOKEN_LIMIT ?? "off"} ttl=${LIVE_SECRET_TTL_SECONDS}s`
+    );
 
     return NextResponse.json({
       clientSecret,

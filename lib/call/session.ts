@@ -136,6 +136,16 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   let otherPeerId: string | null = null;
   let micMuted = false;
   let remoteVolume = 1;
+  // The ducking control's real output stage. See attachRemoteGain() below:
+  // HTMLMediaElement.volume is READ-ONLY on iOS, so on an iPhone the element
+  // alone can only ever be all-or-nothing, and "quiet" did nothing at all.
+  let remoteAudioCtx: AudioContext | null = null;
+  let remoteGain: GainNode | null = null;
+  // Only true once the graph has been SEEN carrying audio. Until then the
+  // element is still the thing making sound and the graph is held at zero, so
+  // a browser that refuses to route a remote WebRTC stream into WebAudio
+  // degrades to today's behaviour instead of to silence.
+  let remoteGainVerified = false;
   let ended = false;
   let myLanguage = config.language;
   // Broadcast has no retention: a language announced before the partner
@@ -186,6 +196,14 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       remoteAudioEl.remove();
       remoteAudioEl = null;
     }
+    if (remoteAudioCtx) {
+      void remoteAudioCtx.close().catch(() => {
+        /* already closed */
+      });
+      remoteAudioCtx = null;
+      remoteGain = null;
+      remoteGainVerified = false;
+    }
     events.onRemoteStream?.(null);
   };
 
@@ -218,6 +236,88 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   };
 
   // Build (or rebuild) the peer connection once a partner is present.
+  /**
+   * Push `remoteVolume` to whichever stage is actually making sound.
+   *
+   * Two stages, because one of them does not work on half the phones this
+   * app runs on. `HTMLMediaElement.volume` is read-only on iOS — WebKit
+   * gives volume to the hardware buttons and silently ignores the
+   * assignment — so on an iPhone the three-step ducking control ("full",
+   * "quiet", "off") did nothing whatsoever, which is exactly the field
+   * report. `muted` IS honoured there, and a WebAudio gain node is honoured
+   * there, so between them the control becomes real on every device.
+   */
+  const applyRemoteVolume = () => {
+    if (remoteGain) remoteGain.gain.value = remoteGainVerified ? remoteVolume : 0;
+    if (!remoteAudioEl) return;
+    if (remoteGainVerified) {
+      // The graph is provably carrying the partner's voice; the element is
+      // now just the sink WebKit requires it to be, and must stay silent or
+      // they are heard twice.
+      remoteAudioEl.muted = true;
+      return;
+    }
+    // No graph, or not proven yet: the element is still the speaker.
+    // `.volume` is honoured on Android and desktop; `.muted` is honoured
+    // everywhere, so "off" is real even where "quiet" cannot be.
+    remoteAudioEl.muted = remoteVolume === 0;
+    remoteAudioEl.volume = remoteVolume;
+  };
+
+  /**
+   * Route the partner's audio through a gain node, and do not trust it until
+   * it has been observed working.
+   *
+   * The analyser sits BEFORE the gain so the check still sees signal while
+   * the gain is held at zero — otherwise the two stages would both be
+   * audible during the trial and the partner would echo.
+   */
+  const attachRemoteGain = (stream: MediaStream) => {
+    if (remoteGain) return;
+    try {
+      const Ctor =
+        window.AudioContext ??
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctor) return;
+      const ctx = new Ctor();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      source.connect(analyser);
+      analyser.connect(gain);
+      gain.connect(ctx.destination);
+      remoteAudioCtx = ctx;
+      remoteGain = gain;
+      void ctx.resume().catch(() => {
+        /* resumes on the next gesture; the element covers the gap */
+      });
+
+      // Watch for the first real sample. Silence proves nothing either way —
+      // nobody may have spoken yet — so this only ever flips to "working",
+      // and gives up quietly after twenty seconds of nothing.
+      const buf = new Uint8Array(analyser.fftSize);
+      let tries = 0;
+      const probe = () => {
+        if (ended || remoteGainVerified || !remoteGain) return;
+        analyser.getByteTimeDomainData(buf);
+        // 128 is the zero line of a byte time-domain buffer.
+        if (buf.some((v) => v > 132 || v < 124)) {
+          remoteGainVerified = true;
+          applyRemoteVolume();
+          return;
+        }
+        if (++tries > 100) return;
+        window.setTimeout(probe, 200);
+      };
+      window.setTimeout(probe, 200);
+    } catch {
+      // No WebAudio here. The element keeps the job it already had.
+      remoteAudioCtx = null;
+      remoteGain = null;
+    }
+  };
+
   const buildPeer = () => {
     teardownPeer();
     if (ended || !localStream) return;
@@ -243,10 +343,13 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       events.onRemoteStream?.(stream);
       if (ev.track.kind === "audio") {
         if (remoteAudioEl) {
-          remoteAudioEl.srcObject = new MediaStream([ev.track]);
+          const audioOnly = new MediaStream([ev.track]);
+          remoteAudioEl.srcObject = audioOnly;
           remoteAudioEl.play().catch(() => {
             /* user gesture already happened on join */
           });
+          attachRemoteGain(audioOnly);
+          applyRemoteVolume();
         }
         events.onRemoteAudioTrack?.(ev.track);
       }
@@ -493,7 +596,7 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       },
       setRemoteVolume: (volume: number) => {
         remoteVolume = Math.min(1, Math.max(0, volume));
-        if (remoteAudioEl) remoteAudioEl.volume = remoteVolume;
+        applyRemoteVolume();
       },
       sendInterpreterSpeaking: (speaking: boolean) => {
         if (!ended && otherPeerId) sendSignal({ kind: "interpreter", data: { speaking } });

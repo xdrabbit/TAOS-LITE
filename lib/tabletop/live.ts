@@ -58,6 +58,18 @@ const ENDTURN_DRAIN_TIMEOUT_MS = 8000;
 // Auto-disconnect after this long with no turn — caps cost if the phone is
 // left on the table. The next tap reconnects transparently.
 const IDLE_DISCONNECT_MS = 5 * 60 * 1000;
+/**
+ * Hard ceiling on one session, matching /live's. The table had no such cap
+ * until 2026-08-28: the idle disconnect bounds a FORGOTTEN table well (five
+ * quiet minutes and it hangs up), but nothing bounded a table that keeps
+ * getting tapped, and one Realtime session that lives all night is exactly the
+ * shape of bill this pass exists to stop.
+ *
+ * Nobody is told about it and nobody needs to be — TabletopShell mints a new
+ * session on the next tap when it finds the old one idle (`onState`), so the
+ * cap costs a party one imperceptible reconnect somewhere after two hours.
+ */
+const MAX_SESSION_MS = 2 * 60 * 60 * 1000;
 
 export async function startTabletopLive(
   events: TabletopLiveEvents,
@@ -68,6 +80,12 @@ export async function startTabletopLive(
   let micStream: MediaStream | null = null;
   let stopped = false;
   let idleTimer: number | null = null;
+  let capTimer: number | null = null;
+  // Set when the hard cap lands mid-turn. A cap must never cut somebody off
+  // in the middle of a sentence they are speaking to a person across a table,
+  // so it waits for endTurn.
+  let capReached = false;
+  const startMs = Date.now();
 
   // Per-turn accumulators.
   let heardParts: string[] = [];
@@ -85,10 +103,16 @@ export async function startTabletopLive(
     idleTimer = null;
   };
 
+  const clearCap = () => {
+    if (capTimer !== null) window.clearTimeout(capTimer);
+    capTimer = null;
+  };
+
   const stop = () => {
     if (stopped) return;
     stopped = true;
     clearIdle();
+    clearCap();
     try {
       if (dc && dc.readyState !== "closed") dc.close();
     } catch {
@@ -105,11 +129,24 @@ export async function startTabletopLive(
   };
 
   const bumpIdle = () => {
+    // A stopped session must not re-arm its own timers: stop() clears them,
+    // and TabletopShell has already moved on to minting a fresh one.
+    if (stopped) return;
     clearIdle();
     idleTimer = window.setTimeout(() => {
       // Only auto-disconnect between turns, never mid-turn.
       if (!turnOpen) stop();
     }, IDLE_DISCONNECT_MS);
+    // Arm the hard cap once, on the first turn boundary after connecting.
+    if (capTimer === null && !capReached) {
+      capTimer = window.setTimeout(
+        () => {
+          capReached = true;
+          if (!turnOpen) stop();
+        },
+        Math.max(0, MAX_SESSION_MS - (Date.now() - startMs))
+      );
+    }
   };
 
   const maybeResolveDrain = () => {
@@ -316,6 +353,20 @@ export async function startTabletopLive(
           new Promise<void>((r) => setTimeout(r, ENDTURN_DRAIN_TIMEOUT_MS))
         ]);
         drainResolve = null;
+      }
+      // A cap that landed while this turn was open takes effect now that it
+      // is closed — the sentence finishes, the session does not linger.
+      if (capReached) {
+        const result: TurnResult = {
+          heard: heardParts.join(" "),
+          translation: (currentDelta.trim()
+            ? [...translationParts, currentDelta.trim()]
+            : translationParts
+          ).join(" ")
+        };
+        currentDelta = "";
+        stop();
+        return result;
       }
       bumpIdle();
       const result: TurnResult = {
