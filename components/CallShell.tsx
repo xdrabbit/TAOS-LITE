@@ -62,7 +62,6 @@ interface CaptionLine {
 
 const MAX_FEED = 100;
 
-// Original-voice volume steps the ducking button cycles through.
 /**
  * How loud the partner's OWN voice plays, under the interpreter's translation
  * of it. Three steps rather than a slider because a slider is unusable on a
