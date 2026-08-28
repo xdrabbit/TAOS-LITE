@@ -404,6 +404,19 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **The Finish button, 2026-08-28** — PR #TBD. Tom's field report: Module 1,
+  all three phases ticked, "You covered the whole topic · Cubriste todo el
+  tema" on screen, and **"Finish this module →" did nothing**. Not a missing
+  handler — Run marks itself done on its last beat (`onComplete`), so by the
+  time the button appeared the only thing it did was re-write a timestamp that
+  was already there: no state change, no render, no way off the screen.
+  Finishing is its own act now (`finishModule` stamps `completedAt`), it takes
+  the learner back to the picker, and the picker checks the module off, dims
+  it, names what is next, and says so once in both languages. Re-entry is
+  untouched: a finished module opens at Crawl, because review is a feature.
+  Verified as a real render — the arc walked in headless Chrome against the
+  shipped component, not a fixture of it.
+
 - **Merge train, 2026-08-28** — PR #41 (tutor phase 2 metering) and PR #42
   (realtime cost caps) shipped back to back in that order; #42 was rebased onto
   the post-#41 `main` because both edited this file. The caps take effect on

@@ -34,6 +34,7 @@ import { blobToWav16k } from "@/lib/tutor/wav";
 import { supabase, isSubscriber, saveTutorAttempt, type Profile } from "@/lib/supabase";
 import {
   TUTOR_MODULES,
+  TUTOR_MODULE_IDS,
   getTutorModule,
   tutorModuleNumber,
   type TutorModule
@@ -42,8 +43,11 @@ import type { Lesson, LessonPronunciationItem } from "@/lib/tutor/lesson";
 import type { TutorLevel, TutorPhase } from "@/lib/tutor/types";
 import {
   completedPhases,
+  finishModule,
+  isModuleComplete,
   markForReview,
   markPhaseDone,
+  nextModuleId,
   nextPhase,
   progressKey,
   readStoredProgress,
@@ -80,6 +84,15 @@ import {
 const WALK_MAX_MS = 6 * 60 * 1000;
 const RUN_MAX_MS = 8 * 60 * 1000;
 const IDLE_MS = 25 * 1000;
+
+/**
+ * How long the "module done" note stays up on the picker.
+ *
+ * Long enough to read twice in two languages, short enough that it is gone by
+ * the time the learner has picked their next module. It is a confirmation
+ * that the button worked, not an achievement to dismiss.
+ */
+const FINISHED_NOTE_MS = 8000;
 
 interface LessonResponse {
   lesson?: Lesson;
@@ -136,10 +149,18 @@ export function ModulesShell({
   const [moduleId, setModuleId] = useState<string | null>(null);
   const [level, setLevel] = useState<TutorLevel>("beginner");
   const [progress, setProgress] = useState<TutorProgress>({});
+  /** The module just finished, for the note on the picker. Cleared on a timer. */
+  const [finished, setFinished] = useState<string | null>(null);
 
   useEffect(() => {
     setProgress(readStoredProgress());
   }, []);
+
+  useEffect(() => {
+    if (!finished) return;
+    const t = setTimeout(() => setFinished(null), FINISHED_NOTE_MS);
+    return () => clearTimeout(t);
+  }, [finished]);
 
   const saveProgress = useCallback((next: TutorProgress) => {
     setProgress(next);
@@ -147,6 +168,9 @@ export function ModulesShell({
   }, []);
 
   const mod = moduleId ? getTutorModule(moduleId) : undefined;
+  const upNext = nextModuleId(progress, TUTOR_MODULE_IDS, theirs, mine);
+  const finishedModule = finished ? getTutorModule(finished) : undefined;
+  const upNextModule = upNext ? getTutorModule(upNext) : undefined;
 
   if (mod) {
     return (
@@ -160,6 +184,13 @@ export function ModulesShell({
         progress={progress}
         onProgress={saveProgress}
         onBack={() => setModuleId(null)}
+        // The whole module is done. Back to the picker, which is where the
+        // next decision gets made — leaving the learner parked on a finished
+        // Run screen was the bug this replaces.
+        onFinish={() => {
+          setFinished(mod.id);
+          setModuleId(null);
+        }}
         onBalance={onBalance}
       />
     );
@@ -201,23 +232,70 @@ export function ModulesShell({
           ))}
         </div>
 
+        {/* Said once, in both languages, and then it goes away on its own —
+            the same register as the phase notes inside the loop. */}
+        {finishedModule ? (
+          <div
+            role="status"
+            className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100"
+          >
+            <span className="font-semibold">
+              Module {tutorModuleNumber(finishedModule.id)} complete · Módulo{" "}
+              {tutorModuleNumber(finishedModule.id)} completado
+            </span>
+            <span className="mt-0.5 block text-xs text-emerald-100/70">
+              {upNextModule
+                ? `Next: ${upNextModule.title} · Sigue: ${upNextModule.titleEs}`
+                : "That is all fourteen. · Eso es todo — los catorce."}
+            </span>
+          </div>
+        ) : null}
+
         <ul className="flex flex-col gap-2 pb-4">
           {TUTOR_MODULES.map((m) => {
-            const done = completedPhases(progress[progressKey(m.id, theirs, mine)]);
+            const entry = progress[progressKey(m.id, theirs, mine)];
+            const done = completedPhases(entry);
+            const complete = isModuleComplete(entry);
+            // Finished modules step back; the next one steps forward. Both are
+            // a shade of the same border the row already has — a completed
+            // module is still a button, because re-reading one is the point.
+            const isNext = !complete && m.id === upNext;
             return (
               <li key={m.id}>
                 <button
                   type="button"
-                  onClick={() => setModuleId(m.id)}
-                  className="flex w-full items-center gap-3 rounded-2xl border border-white/10 bg-[rgba(18,44,36,0.6)] px-4 py-3 text-left transition active:scale-[0.99]"
+                  onClick={() => {
+                    setFinished(null);
+                    setModuleId(m.id);
+                  }}
+                  className={`flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition active:scale-[0.99] ${
+                    complete
+                      ? "border-emerald-400/20 bg-[rgba(18,44,36,0.45)] opacity-70"
+                      : isNext
+                        ? "border-amber-300/35 bg-[rgba(28,52,36,0.7)]"
+                        : "border-white/10 bg-[rgba(18,44,36,0.6)]"
+                  }`}
                 >
-                  <span className="w-6 shrink-0 text-sm font-mono text-amber-100/40">
-                    {tutorModuleNumber(m.id)}
+                  {/* The number checks itself off. The Spanish title stays put:
+                      it is the line Liz reads, and a finished module is still
+                      a module she has to be able to find. */}
+                  <span
+                    className={`w-6 shrink-0 text-sm ${
+                      complete ? "text-emerald-400" : "font-mono text-amber-100/40"
+                    }`}
+                    aria-label={
+                      complete
+                        ? `Module ${tutorModuleNumber(m.id)} completed · Módulo ${tutorModuleNumber(m.id)} completado`
+                        : undefined
+                    }
+                  >
+                    {complete ? "✓" : tutorModuleNumber(m.id)}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-semibold text-white">{m.title}</span>
                     <span className="block truncate text-xs text-amber-50/50">{m.titleEs}</span>
                   </span>
+                  {isNext ? <span className="sr-only">Next up · Sigue</span> : null}
                   <span className="flex shrink-0 gap-1" aria-label={`${done} of 3 done`}>
                     {[0, 1, 2].map((i) => (
                       <span
@@ -259,6 +337,7 @@ function ModuleLoop({
   progress,
   onProgress,
   onBack,
+  onFinish,
   onBalance
 }: {
   header: JSX.Element;
@@ -270,6 +349,8 @@ function ModuleLoop({
   progress: TutorProgress;
   onProgress: (next: TutorProgress) => void;
   onBack: () => void;
+  /** The module is done: stamp it and leave. */
+  onFinish: () => void;
   onBalance?: () => Promise<void>;
 }): JSX.Element {
   const key = progressKey(mod.id, target, learner);
@@ -408,9 +489,22 @@ function ModuleLoop({
               // capped phrases on: unfinished business, remembered rather than
               // enforced.
               onSkipped={(line) => recordAttempt(null, line)}
+              // Walk hands off to Run; Run hands off to the picker.
+              //
+              // The Run half is the bug this replaces: it marked the phase and
+              // stopped there, and since the scene had ALREADY marked Run done
+              // on its last beat (onComplete), the write changed nothing and
+              // "Finish this module →" was a button that did nothing at all.
+              // Finishing is now its own act — a stamp the picker can read,
+              // and a way out of the screen.
               onDone={() => {
-                markDone(phase);
-                if (phase === "walk") setPhase("run");
+                if (phase !== "run") {
+                  markDone(phase);
+                  if (phase === "walk") setPhase("run");
+                  return;
+                }
+                onProgress(finishModule(progress, key, new Date().toISOString()));
+                onFinish();
               }}
             />
           )
