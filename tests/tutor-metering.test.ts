@@ -391,7 +391,9 @@ describe("what the learner is told", () => {
 
   it("is bilingual", () => {
     expect(minutesLabel(59).es).toBe("Menos de un minuto");
-    expect(chipLabel(Infinity, true)).toContain("sin límite");
+    // "Unlimited", not "Founder": a comped account is unlimited too, and
+    // calling it a founder would be a small lie shown on every screen.
+    expect(chipLabel(Infinity, true)).toBe("Unlimited · sin límite");
     expect(chipLabel(12 * MIN, false)).toContain("restantes");
   });
 

@@ -299,10 +299,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       instructions,
       expiresAt,
       // What the meter actually granted. The client caps the session to this
-      // (not to its own preferred 10 minutes), warns this far in, and shows
-      // the remainder in the header chip.
+      // (not to its own preferred 10 minutes), warns this many seconds BEFORE
+      // the end, and shows the remainder in the header chip.
       grantedSeconds,
-      warnAtSeconds: TUTOR_WARN_SECONDS,
+      warnLeadSeconds: TUTOR_WARN_SECONDS,
       balance: balancePayload(reservation.balance)
     });
   } catch (error) {

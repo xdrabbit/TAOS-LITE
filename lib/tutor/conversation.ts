@@ -101,8 +101,8 @@ interface MintResponse {
   lessonAvailable?: boolean;
   /** What the meter reserved, in seconds. The session's real cap. */
   grantedSeconds?: number;
-  /** Seconds before the end to warn. The server owns this number. */
-  warnAtSeconds?: number;
+  /** How long BEFORE the end to warn, in seconds. The server owns this. */
+  warnLeadSeconds?: number;
   balance?: {
     unlimited?: boolean;
     tier?: string;
@@ -376,7 +376,7 @@ export async function startConversation(
       typeof mint.grantedSeconds === "number" && mint.grantedSeconds > 0
         ? mint.grantedSeconds
         : Math.round(maxMs / 1000);
-    clock = planSessionClock(granted, mint.warnAtSeconds);
+    clock = planSessionClock(granted, mint.warnLeadSeconds);
     const unlimited = mint.balance?.unlimited === true;
     const remaining = mint.balance?.remainingSeconds;
     events.onGrant?.({

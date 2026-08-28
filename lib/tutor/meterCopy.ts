@@ -45,9 +45,16 @@ export function minutesLabel(seconds: number): Bilingual {
   return { en: `${m} min`, es: `${m} min` };
 }
 
-/** The header chip: what is left, at a glance, in both languages. */
+/**
+ * The header chip: what is left, at a glance, in both languages.
+ *
+ * `unlimited` covers two different people — a founder (the email, via
+ * isFounder) and a comped account — so the chip says the thing that is true of
+ * both rather than guessing. Calling a comped account "Founder" would be a
+ * small lie shown on every screen.
+ */
 export function chipLabel(seconds: number, unlimited: boolean): string {
-  if (unlimited) return "Founder · sin límite";
+  if (unlimited) return "Unlimited · sin límite";
   const m = minutesLabel(seconds);
   // "12 min" reads the same in both languages, so it takes the suffix pair
   // instead of being printed twice. "Under a minute" does not, so it gets the
