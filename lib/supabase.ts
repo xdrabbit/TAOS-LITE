@@ -83,8 +83,21 @@ export interface Profile {
   trial_ends_at: string;
   current_period_end: string | null;
   tier: string | null; // 'basic' | 'premium' | null (set by the Stripe webhook)
-  bonus_seconds: number | null; // add-on pack balance for bonus_period
-  bonus_period: string | null; // 'YYYY-MM' the bonus applies to
+  /**
+   * Persistent add-on tutor-minute pack balance, in seconds.
+   *
+   * PERSISTENT is the whole point: a pack is a one-time purchase, so it rolls
+   * over month to month while the plan's minutes reset. Credited by the Stripe
+   * webhook, spent only after the month's plan minutes are gone
+   * (lib/tutor/meter.ts). Read here for display; the balance the tutor
+   * actually enforces comes from GET /api/tutor/balance, which can also see
+   * open reservations and the founder bypass.
+   */
+  pack_seconds: number | null;
+  /** @deprecated 2026-08-28 — month-scoped predecessor of pack_seconds. */
+  bonus_seconds: number | null;
+  /** @deprecated 2026-08-28 — see bonus_seconds. */
+  bonus_period: string | null;
 }
 
 export async function getProfile(): Promise<Profile | null> {
@@ -92,7 +105,7 @@ export async function getProfile(): Promise<Profile | null> {
   const { data, error } = await supabase
     .from("profiles")
     .select(
-      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end, tier, bonus_seconds, bonus_period"
+      "id, email, plan, subscription_status, stripe_customer_id, trial_ends_at, current_period_end, tier, pack_seconds, bonus_seconds, bonus_period"
     )
     .maybeSingle();
   if (error) return null;
@@ -159,26 +172,27 @@ export function monthKey(d = new Date()): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-// Add-on pack minutes only count if they were bought for the current month.
-export function bonusSeconds(p: Profile | null): number {
-  if (!p || p.bonus_period !== monthKey()) return 0;
-  return typeof p.bonus_seconds === "number" ? p.bonus_seconds : 0;
+// The persistent add-on pack balance. Rolls over: no period to check any more.
+export function packSeconds(p: Profile | null): number {
+  return typeof p?.pack_seconds === "number" ? Math.max(0, p.pack_seconds) : 0;
 }
 
 // Usage within the current calendar month (RLS scopes to the signed-in user).
+//
+// Tutor seconds come from the LEDGER (`tutor_usage`) rather than by summing
+// `tutor_sessions`, which is what this did before phase 2. The ledger is the
+// number the server enforces against, it already excludes founder sessions,
+// and summing the session rows would double-count a period the reaper has
+// since settled. Note this figure still cannot see open reservations — for
+// anything that gates a session, ask GET /api/tutor/balance.
 export async function getMonthlyUsage(): Promise<MonthlyUsage> {
   const since = startOfMonthISO();
   const [tx, ts] = await Promise.all([
     supabase.from(TABLE).select("id", { count: "exact", head: true }).gte("created_at", since),
-    supabase
-      .from("tutor_sessions")
-      .select("seconds")
-      .eq("mode", "conversation")
-      .gte("created_at", since)
+    supabase.from("tutor_usage").select("seconds_used").eq("period", monthKey()).maybeSingle()
   ]);
   const translations = tx.count ?? 0;
-  const rows = (ts.data ?? []) as Array<{ seconds?: number | null }>;
-  const tutorSeconds = rows.reduce((a, r) => a + (typeof r.seconds === "number" ? r.seconds : 0), 0);
+  const tutorSeconds = (ts.data as { seconds_used?: number } | null)?.seconds_used ?? 0;
   return { translations, tutorSeconds };
 }
 
@@ -192,11 +206,22 @@ export function translationsLeft(p: Profile | null, u: MonthlyUsage | null): num
   return Math.max(0, cap - (u?.translations ?? 0));
 }
 
+/**
+ * An APPROXIMATION of the tutor minutes left, for display only.
+ *
+ * The authoritative answer is GET /api/tutor/balance (lib/tutor/balanceClient.ts),
+ * because only the server can see open reservations from another tab and the
+ * founder bypass — and because the number shown has to be the number the mint
+ * enforces, or the UI cheerfully offers a session the server then refuses.
+ *
+ * This one survives for the places that already hold a profile and a usage
+ * count and just want a figure on screen before the balance call returns.
+ */
 export function tutorSecondsLeft(p: Profile | null, u: MonthlyUsage | null): number {
   const cap = QUOTAS[getTier(p)].tutorSeconds;
   if (!Number.isFinite(cap)) return Infinity;
-  // Monthly quota + any add-on pack minutes bought this month.
-  return Math.max(0, cap + bonusSeconds(p) - (u?.tutorSeconds ?? 0));
+  // Plan minutes for the month, plus the persistent pack balance.
+  return Math.max(0, cap + packSeconds(p) - (u?.tutorSeconds ?? 0));
 }
 
 // Launch Stripe Checkout for a chosen plan; redirects the browser on success.
@@ -249,30 +274,18 @@ export async function saveTutorAttempt(input: TutorAttemptInput): Promise<void> 
   if (error) throw error;
 }
 
-export interface TutorSessionStart {
-  mode?: string;
-  learn_lang?: string;
-  level?: string;
-  focus?: string | null;
-  model?: string | null;
-}
-
-// Conversation-tutor metering. Realtime is the priciest path, so we log a row at
-// start and stamp the duration at end for cost visibility. RLS keeps it private.
-export async function startTutorSession(input: TutorSessionStart): Promise<string | null> {
-  const { data, error } = await supabase
-    .from("tutor_sessions")
-    .insert({ ...input, mode: input.mode ?? "conversation" })
-    .select("id")
-    .single();
-  if (error) return null;
-  return (data as { id: string } | null)?.id ?? null;
-}
-
-export async function endTutorSession(id: string, seconds: number): Promise<void> {
-  // Best-effort; never block the UI on metering.
-  await supabase
-    .from("tutor_sessions")
-    .update({ seconds: Math.max(0, Math.round(seconds)), ended_at: new Date().toISOString() })
-    .eq("id", id);
-}
+// ── Where the tutor-session writes went ─────────────────────────────────────
+//
+// `startTutorSession` and `endTutorSession` used to live here: the browser
+// inserted a `tutor_sessions` row when a conversation began and stamped a
+// duration on it when it ended, under RLS. That is the open question phase 1
+// wrote down in lib/tutor/meter.ts — "the duration currently comes from a
+// number the client chose" — and phase 2 answered it by moving the whole
+// lifecycle server-side.
+//
+// The row is now written by POST /api/tutor/realtime with the service role and
+// closed by POST /api/tutor/session against the SERVER's clock. The table's
+// insert and update RLS policies were dropped in the same migration
+// (supabase/migrations/20260828_tutor_metering.sql), so these functions could
+// not work any more even if something still called them — which is the point:
+// a quota the metered party can write is not a quota.

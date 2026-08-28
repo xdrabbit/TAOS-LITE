@@ -1,18 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
-  endTutorSession,
-  getMonthlyUsage,
   getProfile,
   getTier,
   saveTutorAttempt,
-  startTutorSession,
+  startPackCheckout,
   supabase,
-  tutorSecondsLeft,
   type Profile
 } from "@/lib/supabase";
+import { fetchTutorBalance, type TutorBalanceView } from "@/lib/tutor/balanceClient";
+import { ENDED_NOTICE, WARN_NOTICE, joinBilingual, minutesLabel } from "@/lib/tutor/meterCopy";
+import { MinutesChip } from "./tutor/MinutesChip";
+import { OutOfMinutes } from "./tutor/OutOfMinutes";
 import { blobToWav16k } from "@/lib/tutor/wav";
 import {
   startConversation,
@@ -108,8 +109,24 @@ export function TutorShell(): JSX.Element {
     };
   }, []);
 
-  // Returning from a pack purchase: the webhook credits minutes a moment later,
-  // so re-poll the profile briefly to pick up the new bonus balance.
+  // The meter's answer, held at the top so Modules, Partner and Drills all show
+  // the SAME number in the same chip — and so it survives switching between
+  // them, which re-mounts everything below.
+  const [balance, setBalance] = useState<TutorBalanceView | null>(null);
+  const refreshBalance = useCallback(async () => {
+    setBalance(await fetchTutorBalance());
+  }, []);
+
+  useEffect(() => {
+    if (session) void refreshBalance();
+    else setBalance(null);
+  }, [session, refreshBalance]);
+
+  // Returning from a pack purchase: the webhook credits the minutes a moment
+  // later, so re-poll briefly to pick up the new balance. Polling rather than
+  // waiting once, because the round trip Stripe → webhook → Supabase is not
+  // instant and landing on "0 min left" straight after paying $9.99 is the
+  // worst possible first impression of a purchase that did work.
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!new URLSearchParams(window.location.search).has("pack")) return;
@@ -117,13 +134,14 @@ export function TutorShell(): JSX.Element {
     const id = window.setInterval(() => {
       n += 1;
       void getProfile().then(setProfile);
+      void refreshBalance();
       if (n >= 5) {
         window.clearInterval(id);
         window.history.replaceState({}, "", window.location.pathname);
       }
     }, 1500);
     return () => window.clearInterval(id);
-  }, []);
+  }, [refreshBalance]);
 
   if (!ready) {
     return (
@@ -135,26 +153,43 @@ export function TutorShell(): JSX.Element {
   if (!session) return <SignIn />;
   // Everyone signed in gets in at their tier; the conversation tab shows upgrade
   // prompts inline when this month's tutor minutes run out.
-  return <TutorModes profile={profile} email={session.user.email ?? ""} />;
+  return (
+    <TutorModes
+      profile={profile}
+      email={session.user.email ?? ""}
+      balance={balance}
+      onBalance={refreshBalance}
+    />
+  );
 }
 
 function TutorModes({
   profile,
-  email
+  email,
+  balance,
+  onBalance
 }: {
   profile: Profile | null;
   email: string;
+  balance: TutorBalanceView | null;
+  onBalance: () => Promise<void>;
 }): JSX.Element {
   const [mode, setMode] = useState<Mode>("modules");
+  const header = <TutorHeader mode={mode} onMode={setMode} balance={balance} />;
   if (mode === "modules") {
-    return (
-      <ModulesShell header={<TutorHeader mode={mode} onMode={setMode} />} profile={profile} />
-    );
+    return <ModulesShell header={header} profile={profile} onBalance={onBalance} />;
   }
   return mode === "drills" ? (
-    <Drills mode={mode} onMode={setMode} />
+    <Drills mode={mode} onMode={setMode} balance={balance} />
   ) : (
-    <Conversation mode={mode} onMode={setMode} profile={profile} email={email} />
+    <Conversation
+      mode={mode}
+      onMode={setMode}
+      profile={profile}
+      email={email}
+      balance={balance}
+      onBalance={onBalance}
+    />
   );
 }
 
@@ -183,11 +218,21 @@ function ModeToggle({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void })
   );
 }
 
-function TutorHeader({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
+function TutorHeader({
+  mode,
+  onMode,
+  balance
+}: {
+  mode: Mode;
+  onMode: (m: Mode) => void;
+  /** null while unknown — the chip renders nothing rather than a wrong zero. */
+  balance?: TutorBalanceView | null;
+}): JSX.Element {
   return (
     <header className="flex items-center justify-between gap-2">
       <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·TUTOR</h1>
       <div className="flex items-center gap-2">
+        <MinutesChip balance={balance ?? null} />
         <ModeToggle mode={mode} onMode={onMode} />
         <a
           href="/"
@@ -200,7 +245,15 @@ function TutorHeader({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }
   );
 }
 
-function Drills({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JSX.Element {
+function Drills({
+  mode,
+  onMode,
+  balance
+}: {
+  mode: Mode;
+  onMode: (m: Mode) => void;
+  balance: TutorBalanceView | null;
+}): JSX.Element {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [lessonIdx, setLessonIdx] = useState(0);
   const [drillIdx, setDrillIdx] = useState(0);
@@ -370,7 +423,7 @@ function Drills({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void }): JS
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <TutorHeader mode={mode} onMode={onMode} />
+        <TutorHeader mode={mode} onMode={onMode} balance={balance} />
 
         {/* Lesson picker */}
         {lessons.length > 0 ? (
@@ -511,20 +564,27 @@ function Conversation({
   mode,
   onMode,
   profile,
-  email
+  email,
+  balance,
+  onBalance
 }: {
   mode: Mode;
   onMode: (m: Mode) => void;
   profile: Profile | null;
   email: string;
+  balance: TutorBalanceView | null;
+  onBalance: () => Promise<void>;
 }): JSX.Element {
-  // Only comp is truly unlimited; Free/Basic/Premium all have a monthly minute
-  // quota (15 / 45 / 200), so we meter everyone except comp.
+  // The tier is still read for the Paywall's "you're on X" line, but WHAT MAY
+  // BE SPENT is no longer worked out here. It comes from the server
+  // (GET /api/tutor/balance, lib/tutor/meter.ts), because the browser cannot
+  // see another tab's open reservation or the founder bypass — and a screen
+  // that computes its own allowance is a screen that offers a session the mint
+  // then refuses.
   const tier = getTier(profile);
-  const unlimited = tier === "comp";
-  const [secsLeft, setSecsLeft] = useState<number>(unlimited ? Infinity : 0);
-  const [usageReady, setUsageReady] = useState<boolean>(unlimited);
+  const unlimited = balance?.unlimited ?? false;
   const [showPaywall, setShowPaywall] = useState(false);
+  const [packBusy, setPackBusy] = useState<string | null>(null);
 
   // Conversation Partner reaches the whole catalog now, through the same pair
   // the rest of the app holds (lib/translate/useLanguagePair.ts): `theirs` is
@@ -545,9 +605,11 @@ function Conversation({
   const [steerText, setSteerText] = useState("");
 
   const sessRef = useRef<ActiveConversation | null>(null);
-  const meterRef = useRef<string | null>(null);
   const liveRef = useRef("");
   const feedRef = useRef<HTMLDivElement | null>(null);
+  // What the meter granted THIS session, so the on-screen clock counts down
+  // the real cap rather than a 10 minutes the server never agreed to.
+  const [grantedSec, setGrantedSec] = useState<number>(Math.round(CONV_MAX_MS / 1000));
 
   useEffect(() => {
     return () => {
@@ -555,34 +617,15 @@ function Conversation({
     };
   }, []);
 
-  // Load this month's remaining tutor minutes for the user's tier.
-  const refreshUsage = async () => {
-    if (unlimited) {
-      setSecsLeft(Infinity);
-      setUsageReady(true);
-      return;
-    }
-    try {
-      const u = await getMonthlyUsage();
-      setSecsLeft(tutorSecondsLeft(profile, u));
-    } catch {
-      setSecsLeft(0);
-    } finally {
-      setUsageReady(true);
-    }
-  };
-
-  useEffect(() => {
-    void refreshUsage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile, unlimited]);
-
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [lines, live]);
 
-  const quotaBlocked = !unlimited && usageReady && secsLeft <= 0;
-  const minLeft = Number.isFinite(secsLeft) ? Math.ceil(secsLeft / 60) : Infinity;
+  // Not known yet ≠ nothing left. A null balance renders "checking", never a
+  // paywall — telling a paying customer they are out of minutes because a
+  // fetch was slow is the one failure mode worth designing around here.
+  const usageReady = balance !== null;
+  const quotaBlocked = usageReady && !unlimited && !balance.canStart;
 
   const active = convState === "connected";
   const connecting =
@@ -600,16 +643,13 @@ function Conversation({
     if (!usageReady) return; // wait until we know the remaining allowance
     if (quotaBlocked) return; // minutes used up — UI shows upgrade instead
 
-    // Cap the session to whatever minutes remain this month (comp: full 10).
-    const cap = unlimited ? CONV_MAX_MS : Math.min(CONV_MAX_MS, Math.max(0, secsLeft) * 1000);
+    // The client asks for its preferred ten minutes and the SERVER decides.
+    // Trimming the request to the remaining balance here would be a second
+    // implementation of the allowance rule, in the one place that has the
+    // least right to hold it.
+    const cap = CONV_MAX_MS;
     const { data: sessionData } = await supabase.auth.getSession();
     const authToken = sessionData.session?.access_token;
-
-    meterRef.current = await startTutorSession({
-      learn_lang: theirs,
-      level,
-      focus: focus.trim() || null
-    });
 
     try {
       const sess = await startConversation(
@@ -638,21 +678,25 @@ function Conversation({
             if (text) setLines((prev) => [...prev, { role: "tutor", text }]);
           },
           onTick: (e) => setElapsed(e),
-          onStopped: (reason: StopReason, secs: number) => {
-            sessRef.current = null;
-            if (meterRef.current) {
-              void endTutorSession(meterRef.current, secs);
-              meterRef.current = null;
+          // The meter granted this much — which may be less than the ten
+          // minutes asked for. Shown before it matters, so the session being
+          // short is something the learner knows rather than discovers.
+          onGrant: (g) => {
+            setGrantedSec(g.grantedSeconds);
+            if (!g.unlimited && g.grantedSeconds < Math.round(CONV_MAX_MS / 1000)) {
+              const m = minutesLabel(g.grantedSeconds);
+              setNotice(`This session is ${m.en.toLowerCase()} — that's what's left this month.`);
             }
-            // Re-read this month's remaining minutes after the session is logged.
-            void refreshUsage();
-            // secsLeft here is the pre-session remaining (closure); if this turn
-            // consumed the rest, they're out for the month.
-            const outOfMinutes = !unlimited && secsLeft - secs <= 1;
-            if (outOfMinutes) {
-              setNotice("That used your tutor minutes for this month. Upgrade to keep talking.");
-            } else if (reason === "cap") {
-              setNotice("Session ended at the 10-minute limit.");
+          },
+          onWarning: () => setNotice(joinBilingual(WARN_NOTICE)),
+          onStopped: (reason: StopReason) => {
+            sessRef.current = null;
+            // The server already debited this session (POST /api/tutor/session,
+            // from the server's own clock). All that is left here is to ask it
+            // what the balance says now.
+            void onBalance();
+            if (reason === "cap") {
+              setNotice(joinBilingual(ENDED_NOTICE));
             } else if (reason === "idle") {
               setNotice("Paused after a quiet stretch. Tap Start to keep going.");
             }
@@ -686,7 +730,7 @@ function Conversation({
     sessRef.current?.setMicEnabled(!next);
   }
 
-  const remaining = Math.max(0, Math.round(CONV_MAX_MS / 1000) - elapsed);
+  const remaining = Math.max(0, grantedSec - elapsed);
   const targetName = languageNative(theirs);
 
   if (showPaywall) {
@@ -703,7 +747,7 @@ function Conversation({
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <TutorHeader mode={mode} onMode={onMode} />
+        <TutorHeader mode={mode} onMode={onMode} balance={balance} />
 
         {!active && !connecting ? (
           // ── Setup ──
@@ -769,21 +813,23 @@ function Conversation({
               </p>
             ) : null}
 
-            {quotaBlocked ? (
-              <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-center">
-                <p className="text-sm text-rose-100">
-                  {tier === "free"
-                    ? "Your free tutor minutes for this month are used up."
-                    : "You've used this month's tutor minutes."}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowPaywall(true)}
-                  className="mt-3 w-full rounded-2xl bg-amber-400 px-5 py-3 text-lg font-semibold text-stone-950 transition hover:bg-amber-300"
-                >
-                  {tier === "free" ? "See plans" : "Upgrade for more"}
-                </button>
-              </div>
+            {quotaBlocked && balance ? (
+              <OutOfMinutes
+                balance={balance}
+                busy={packBusy}
+                onSeePlans={() => setShowPaywall(true)}
+                onBuyPack={
+                  tier === "basic" || tier === "premium" || tier === "comp"
+                    ? (pack) => {
+                        setPackBusy(`pack-${pack}`);
+                        startPackCheckout(pack).catch((e) => {
+                          setError(e instanceof Error ? e.message : "Could not start checkout.");
+                          setPackBusy(null);
+                        });
+                      }
+                    : undefined
+                }
+              />
             ) : (
               <>
                 <button
@@ -797,9 +843,9 @@ function Conversation({
                 <p className="text-center text-xs text-amber-100/40">
                   {unlimited
                     ? "Hands-free · auto-pauses after 20s of silence · 10-min sessions"
-                    : !usageReady
+                    : !usageReady || !balance
                       ? "Checking your minutes…"
-                      : `${minLeft} tutor min left this month · auto-pauses after 20s of silence`}
+                      : `${joinBilingual(minutesLabel(balance.remainingSeconds))} left · auto-pauses after 20s of silence`}
                 </p>
               </>
             )}

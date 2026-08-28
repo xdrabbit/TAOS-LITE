@@ -60,6 +60,7 @@ import {
   crawlScore,
   type CrawlOutcome
 } from "@/lib/tutor/crawl";
+import { ENDED_NOTICE, WARN_NOTICE, joinBilingual, minutesLabel } from "@/lib/tutor/meterCopy";
 import {
   startConversation,
   type ActiveConversation,
@@ -100,6 +101,8 @@ interface AssessResult {
   fluency?: number | null;
   words?: Array<{ word: string; accuracy: number | null }>;
   coaching?: string;
+  /** Set on a 402 from the meter: the sentence to show instead of a score. */
+  details?: string;
 }
 
 // Green means "this passed", not "this was excellent".
@@ -117,10 +120,17 @@ function scoreColor(n: number | null | undefined, pass: number = CRAWL_PASS_SCOR
 
 export function ModulesShell({
   header,
-  profile
+  profile,
+  onBalance
 }: {
   header: JSX.Element;
   profile: Profile | null;
+  /**
+   * Ask the meter for a fresh balance. Called after anything that spends
+   * minutes — a scored Crawl attempt, a finished Walk or Run — so the header
+   * chip is current without polling.
+   */
+  onBalance?: () => Promise<void>;
 }): JSX.Element {
   const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
   const [moduleId, setModuleId] = useState<string | null>(null);
@@ -150,6 +160,7 @@ export function ModulesShell({
         progress={progress}
         onProgress={saveProgress}
         onBack={() => setModuleId(null)}
+        onBalance={onBalance}
       />
     );
   }
@@ -247,7 +258,8 @@ function ModuleLoop({
   profile,
   progress,
   onProgress,
-  onBack
+  onBack,
+  onBalance
 }: {
   header: JSX.Element;
   module: TutorModule;
@@ -258,6 +270,7 @@ function ModuleLoop({
   progress: TutorProgress;
   onProgress: (next: TutorProgress) => void;
   onBack: () => void;
+  onBalance?: () => Promise<void>;
 }): JSX.Element {
   const key = progressKey(mod.id, target, learner);
   const [phase, setPhase] = useState<TutorPhase>(() => nextPhase(progress[key]) ?? "crawl");
@@ -370,6 +383,7 @@ function ModuleLoop({
               scoringAvailable={capabilities?.pronunciationScoring !== false}
               bestScore={progress[key]?.bestScore}
               onAttempt={recordAttempt}
+              onBalance={onBalance}
               onDone={() => {
                 markDone("crawl");
                 setPhase("walk");
@@ -384,6 +398,7 @@ function ModuleLoop({
               target={target}
               learner={learner}
               level={level}
+              onBalance={onBalance}
               // The scene ran to its last beat. The phase is ticked here and
               // not on the button, so a learner who finishes the roleplay and
               // then closes the app has still finished it — but the move to
@@ -422,7 +437,8 @@ function Crawl({
   scoringAvailable,
   bestScore,
   onAttempt,
-  onDone
+  onDone,
+  onBalance
 }: {
   lesson: Lesson;
   module: TutorModule;
@@ -435,6 +451,7 @@ function Crawl({
   /** One scored attempt: the score to keep, and the phrase to revisit (or null). */
   onAttempt: (score: number | null, reviewPhrase: string | null) => void;
   onDone: () => void;
+  onBalance?: () => Promise<void>;
 }): JSX.Element {
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<"idle" | "recording" | "scoring">("idle");
@@ -580,7 +597,17 @@ function Crawl({
         body: form
       });
       const payload = (await res.json().catch(() => ({}))) as AssessResult;
+      // Crawl accrues too — the assessed audio's own length (lib/tutor/meter.ts).
+      // A 402 here is the meter, not a broken microphone, so it gets the
+      // meter's sentence rather than "Scoring failed".
+      if (res.status === 402) {
+        setStatus("idle");
+        setError(payload.details || "You've used this month's tutor minutes.");
+        void onBalance?.();
+        return;
+      }
       if (!res.ok && !payload.configured) throw new Error(payload.error || "Scoring failed.");
+      void onBalance?.();
       setResult(payload);
       const number = payload.configured ? crawlScore(payload) : null;
       if (typeof number === "number") {
@@ -867,7 +894,8 @@ function RealtimePhase({
   level,
   onComplete,
   onSkipped,
-  onDone
+  onDone,
+  onBalance
 }: {
   phase: TutorPhase;
   lesson: Lesson;
@@ -875,6 +903,7 @@ function RealtimePhase({
   target: string;
   learner: string;
   level: TutorLevel;
+  onBalance?: () => Promise<void>;
   /** Every beat of the scene finished. Fired once per session. */
   onComplete: () => void;
   /** A line the scene moved past without the learner landing it. */
@@ -904,6 +933,9 @@ function RealtimePhase({
   const feedRef = useRef<HTMLDivElement | null>(null);
 
   const maxMs = phase === "walk" ? WALK_MAX_MS : RUN_MAX_MS;
+  // What the meter actually granted, once the mint answers. Until then the
+  // scene's own limit, which is a request rather than a promise.
+  const [grantedSec, setGrantedSec] = useState(Math.round(maxMs / 1000));
   const active = state === "connected";
   const connecting = state === "requesting_mic" || state === "minting" || state === "connecting";
 
@@ -982,15 +1014,30 @@ function RealtimePhase({
             if (text) applyBeats(onTutorTurn(beatRef.current, text));
           },
           onTick: setElapsed,
+          // The meter granted this much — possibly less than the scene's own
+          // limit. Held so the on-screen clock counts the real cap down, and
+          // said out loud when it is short, because a scene that ends early
+          // for a reason the learner was never told reads as a bug.
+          onGrant: (g) => {
+            setGrantedSec(g.grantedSeconds);
+            if (!g.unlimited && g.grantedSeconds < Math.round(maxMs / 1000)) {
+              const m = minutesLabel(g.grantedSeconds);
+              setNotice(`This scene is ${m.en.toLowerCase()} — that's what's left this month.`);
+            }
+          },
+          onWarning: () => setNotice(joinBilingual(WARN_NOTICE)),
           onStopped: (reason: StopReason) => {
             sessRef.current = null;
-            if (reason === "cap") setNotice("That's the time limit for this scene.");
+            void onBalance?.();
+            if (reason === "cap") setNotice(joinBilingual(ENDED_NOTICE));
             else if (reason === "idle") setNotice("Paused after a quiet stretch. Tap Start to keep going.");
           }
         }
       );
     } catch {
-      /* onError/onStopped already fired */
+      // onError/onStopped already fired. Refresh the chip anyway: the most
+      // likely reason a mint threw is the meter refusing it.
+      void onBalance?.();
     }
   }
 
