@@ -152,7 +152,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 - Call cost guards — SHIPPED 2026-08-27 (PR #39, see Shipped). /call is
   founders-only again, catalog-wired, and its per-minute cost is measured
   rather than guessed: ~$0.123/min → **~$0.058/min** for a two-phone call,
-  with the numbers and the method in docs/call-cost-model.md.
+  with the numbers and the method in docs/realtime-cost-model.md.
   (added 2026-08-03, from the July 14/22 OpenAI bill spikes)
   → Still open, and deliberately: /call has never been walked on two real
   phones on two real networks. Everything below the transport was verified
@@ -179,7 +179,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 ## Ideas
 
 - The context cap belongs on the other three realtime screens too — found
-  while costing /call (PR #39, docs/call-cost-model.md). Every Realtime
+  while costing /call (PR #39, docs/realtime-cost-model.md). Every Realtime
   response re-reads the whole session, as audio, at $32/Mtok; measured on a
   live session, an uncapped one billed **209% of the audio actually spoken and
   was still climbing turn over turn**, against 66% and flat with
@@ -194,6 +194,15 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   genuinely wants history, so it needs its own number rather than this one
   copied. Worth measuring each the same way before changing any of them.
   (added 2026-08-27)
+  → SHIPPED for /live and /tabletop 2026-08-28 (see Shipped). "Worth measuring
+  each the same way" turned out to be the whole job: the guess that 100 would
+  do everywhere was wrong in both directions. /live needs **150** (at 100 it
+  repeated a summary verbatim, having lost the audio it was meant to be
+  summarising — it coalesces, so it holds more than one segment at a time);
+  /tabletop is fine at **100** and breaks at 75 (it invented a sentence). The
+  exposure was far worse than /call's 209%: **/live billed 460% of the audio
+  spoken and /tabletop 400%**, both still climbing. /tutor is deliberately
+  untouched, exactly as this entry said it should be.
 
 
 - Data-map follow-ups (from the read-only audit, `docs/data-map.md`,
@@ -395,7 +404,45 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **Tutor phase 2 — the cash register** (PR #TBD, 2026-08-28) — the last gate
+- **Merge train, 2026-08-28** — PR #41 (tutor phase 2 metering) and PR #42
+  (realtime cost caps) shipped back to back in that order; #42 was rebased onto
+  the post-#41 `main` because both edited this file. Neither changes what a
+  customer sees today: tutor stays dark behind `NEXT_PUBLIC_ENABLE_TUTOR`, and
+  the caps take effect on the next mint. The flip checklist below is still
+  Tom's to walk.
+
+- **Cost caps on the public realtime screens, and a toggle that obeys** —
+  2026-08-28, PR #42. The exposure flagged while costing /call turned out to
+  be worse on the two screens customers can actually reach. Measured against
+  live `gpt-realtime` sessions: **/live billed 460% of the audio actually
+  spoken** (per-turn re-read climbing 51→180→267→326→398→447 and still going)
+  and **/tabletop 400%** (39→…→255). Capped at 150 and 100 respectively, both
+  go flat: /live 110%, /tabletop 115%. Per minute, **/live $0.074 → $0.049**
+  and **/tabletop $0.032 → $0.022**, with no quality change — and the caps are
+  floors, not guesses: at 100 /live repeats a summary verbatim, at 75
+  /tabletop invents a sentence nobody said. Both numbers, both cliffs and a
+  three-surface $/min table are in `docs/realtime-cost-model.md`.
+  Also: `/live` and `/tabletop` now expire their minted secrets after 120s
+  like /call does, `/tabletop` gained the hard session ceiling it never had,
+  and `/live` **warns before it stops** instead of going quiet mid-dinner and
+  explaining afterwards.
+  The measurement rig is committed this time (`tests/live-fire/`,
+  `npx vitest run --config vitest.measure.config.ts`) and it drives the same
+  session builders the mint routes use, so the numbers describe what ships.
+  It earned its keep immediately: its first tabletop run reported a quality
+  cliff at 100 that was the harness failing to re-point the session per turn
+  the way the real client does, not the cap.
+  And Tom's /call field report — the output settings "appeared not to work or
+  lagged" — was two separate bugs. (1) The translated-voice toggle only
+  changed what the NEXT sentence did, so a tap during a six-second translation
+  did nothing visible; it now stops the sentence in the air, and a muted call
+  no longer pays ElevenLabs for a voice nobody can hear. (2) The three-step
+  "their real voice" ducking was a **no-op on iPhone** —
+  `HTMLMediaElement.volume` is read-only on WebKit — so it now runs through a
+  WebAudio gain node, and only switches to it once the graph has been observed
+  working. The two controls also say whose voice each one is now.
+
+- **Tutor phase 2 — the cash register** (PR #41, 2026-08-28) — the last gate
   before /tutor can go public. Minutes are metered SERVER-side and RESERVED at
   mint: `POST /api/tutor/realtime` asks `lib/tutor/meter.ts` for a grant before
   it spends a cent, and the grant is held in full until the session settles, so
@@ -501,7 +548,7 @@ is not a prerequisite for using it.
   lists /call now, so it keeps passing the same rules as everyone else.
 
   **The money.** The guards asked for on 8/03 are in, and the per-minute cost
-  is measured rather than estimated — `docs/call-cost-model.md` has the runs.
+  is measured rather than estimated — `docs/realtime-cost-model.md` has the runs.
   Two findings changed the design:
   - The obvious saving wasn't there. Server VAD already filters silence out of
     the bill (34.1 s streamed, 22.7 s billed), so there is no client-side

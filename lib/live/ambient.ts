@@ -51,6 +51,17 @@ export interface AmbientEvents {
   /** The micro-summary finished; `text` is the full transcript of it. */
   onSummaryDone?: (text: string) => void;
   onTick?: (elapsedSec: number) => void;
+  /**
+   * The session is about to close itself. `secondsLeft` counts down; null
+   * clears a warning that no longer applies (somebody spoke).
+   *
+   * /live used to explain the idle stop and the 2-hour cap only AFTER they
+   * happened — the earpiece simply went quiet mid-dinner and the screen said
+   * so afterwards. /call has warned for 30 seconds since it shipped; this is
+   * the same courtesy on the surface that actually runs for two hours.
+   */
+  onEndingSoon?: (reason: "idle" | "cap", secondsLeft: number) => void;
+  onWarningCleared?: () => void;
   onStopped?: (reason: AmbientStopReason, elapsedSec: number) => void;
 }
 
@@ -61,6 +72,15 @@ export interface ActiveAmbientSession {
 
 const DEFAULT_MAX_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_IDLE_MS = 5 * 60 * 1000;
+/** How long before an idle stop the earpiece says so. Matches /call. */
+const IDLE_WARNING_MS = 30 * 1000;
+/**
+ * How long before the hard cap the screen says so. Two minutes rather than
+ * /call's thirty seconds because this cap arrives after two HOURS — long
+ * enough that nobody is watching the timer, and a dinner is a bad place to
+ * find out you have half a minute to react.
+ */
+const CAP_WARNING_MS = 2 * 60 * 1000;
 
 interface MintResponse {
   clientSecret: string;
@@ -101,6 +121,11 @@ export async function startAmbientLive(
   let responseActive = false;
   let audioPlaying = false;
   let audioStuckTimer: number | null = null;
+  let idleWarnTimer: number | null = null;
+  // Latches so each warning is announced once per approach rather than every
+  // second the tick timer fires.
+  let idleWarned = false;
+  let capWarned = false;
   const startMs = Date.now();
 
   const setState = (s: AmbientState) => events.onState?.(s);
@@ -109,9 +134,11 @@ export async function startAmbientLive(
   const clearTimers = () => {
     if (tickTimer !== null) window.clearInterval(tickTimer);
     if (idleTimer !== null) window.clearTimeout(idleTimer);
+    if (idleWarnTimer !== null) window.clearTimeout(idleWarnTimer);
     if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
     tickTimer = null;
     idleTimer = null;
+    idleWarnTimer = null;
     audioStuckTimer = null;
   };
 
@@ -143,8 +170,23 @@ export async function startAmbientLive(
     events.onStopped?.(reason, elapsedSec());
   };
 
+  // Any real speech means the room is still alive. Resets the countdown and
+  // takes the warning back down if one was showing.
   const bumpIdle = () => {
+    if (stopped) return;
     if (idleTimer !== null) window.clearTimeout(idleTimer);
+    if (idleWarnTimer !== null) window.clearTimeout(idleWarnTimer);
+    if (idleWarned) {
+      idleWarned = false;
+      events.onWarningCleared?.();
+    }
+    idleWarnTimer = window.setTimeout(
+      () => {
+        idleWarned = true;
+        events.onEndingSoon?.("idle", Math.round(IDLE_WARNING_MS / 1000));
+      },
+      Math.max(0, idleMs - IDLE_WARNING_MS)
+    );
     idleTimer = window.setTimeout(() => void stop("idle"), idleMs);
   };
 
@@ -231,7 +273,15 @@ export async function startAmbientLive(
         if (tickTimer === null) {
           tickTimer = window.setInterval(() => {
             events.onTick?.(elapsedSec());
-            if (Date.now() - startMs >= maxMs) void stop("cap");
+            const remainingMs = maxMs - (Date.now() - startMs);
+            if (remainingMs <= 0) {
+              void stop("cap");
+              return;
+            }
+            if (!capWarned && remainingMs <= CAP_WARNING_MS) {
+              capWarned = true;
+              events.onEndingSoon?.("cap", Math.round(remainingMs / 1000));
+            }
           }, 1000);
         }
         bumpIdle();

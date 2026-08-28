@@ -126,6 +126,12 @@ export function LiveShell(): JSX.Element {
   const [interim, setInterim] = useState("");
   const [feed, setFeed] = useState<ConceptEntry[]>([]);
   const [error, setError] = useState<LiveError | null>(null);
+  // "This is about to stop" — shown BEFORE it stops, so a quiet stretch at
+  // dinner is something the listener can head off by saying anything, rather
+  // than something they discover from a message after the earpiece went dead.
+  const [endingSoon, setEndingSoon] = useState<{ reason: "idle" | "cap"; seconds: number } | null>(
+    null
+  );
   // Voice defaults ON — the whole point is the earpiece. START is a user
   // gesture, so autoplay is unlocked in both engines.
   const [voiceOn, setVoiceOn] = useState(true);
@@ -560,11 +566,13 @@ export function LiveShell(): JSX.Element {
     const session = ambientRef.current;
     ambientRef.current = null;
     setDraft("");
+    setEndingSoon(null);
     if (session) await session.stop("user");
   }, []);
 
   const startAmbient = useCallback(async () => {
     setError(null);
+    setEndingSoon(null);
     setDraft("");
     setLastHeard("");
     try {
@@ -586,10 +594,13 @@ export function LiveShell(): JSX.Element {
             pushFeed(t, false);
           },
           onTick: setElapsed,
+          onEndingSoon: (reason, seconds) => setEndingSoon({ reason, seconds }),
+          onWarningCleared: () => setEndingSoon(null),
           onStopped: (reason) => {
             ambientRef.current = null;
             setDraft("");
             setElapsed(0);
+            setEndingSoon(null);
             if (reason === "idle") {
               setError({
                 message: "Stopped after a long quiet stretch. Tap START to keep going.",
@@ -855,6 +866,18 @@ export function LiveShell(): JSX.Element {
         ) : null}
 
         {/* Error banner */}
+        {endingSoon ? (
+          <p
+            role="status"
+            aria-live="polite"
+            className="rounded-2xl border border-amber-300/40 bg-amber-300/10 px-4 py-3 text-sm text-amber-200"
+          >
+            {endingSoon.reason === "idle"
+              ? `Quiet for a while — listening stops in about ${endingSoon.seconds}s to save money. Say anything to keep it going.`
+              : `This session hits its 2-hour limit in about ${Math.round(endingSoon.seconds / 60)} min. Tap START again for a fresh one.`}
+          </p>
+        ) : null}
+
         {error ? (
           <p
             role="status"

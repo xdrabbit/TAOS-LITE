@@ -62,11 +62,25 @@ interface CaptionLine {
 
 const MAX_FEED = 100;
 
-// Original-voice volume steps the ducking button cycles through.
+/**
+ * How loud the partner's OWN voice plays, under the interpreter's translation
+ * of it. Three steps rather than a slider because a slider is unusable on a
+ * phone held to a face.
+ *
+ * "Quiet" is the default and the reason this control exists: hearing the
+ * partner's real voice underneath tells you they are still there and still
+ * talking, which a translation alone does not — but at full volume it fights
+ * the translation for the same ear. It is a duck, not a mute.
+ *
+ * This is a DIFFERENT voice from the "Translation / Captions only" button
+ * next to it, which governs the interpreter. The labels say whose voice each
+ * one is, because "voice off" appearing twice on one screen with two meanings
+ * is how a control ends up reported as broken when it is merely the other one.
+ */
 const VOLUME_STEPS: Array<{ value: number; label: string }> = [
-  { value: 1, label: "Original voice: full" },
-  { value: 0.25, label: "Original voice: quiet" },
-  { value: 0, label: "Original voice: off" }
+  { value: 1, label: "🔊 Their real voice: full" },
+  { value: 0.25, label: "🔉 Their real voice: quiet" },
+  { value: 0, label: "🔈 Their real voice: off" }
 ];
 
 function formatElapsed(sec: number): string {
@@ -129,6 +143,9 @@ export function CallShell(): JSX.Element {
   const wakeHoldRef = useRef<WakeLockHold | null>(null);
   const inCallRef = useRef(false);
   const voiceOnRef = useRef(true);
+  const micMutedRef = useRef(false);
+  const cameraOnRef = useRef(true);
+  const volumeStepRef = useRef(1);
   const voiceModeRef = useRef<InterpreterVoiceMode>("clone");
   const remoteTrackRef = useRef<MediaStreamTrack | null>(null);
   const nextIdRef = useRef(1);
@@ -410,7 +427,13 @@ export function CallShell(): JSX.Element {
     inCallRef.current = true;
     setPhase("call");
     setCameraOn(withVideo);
+    cameraOnRef.current = withVideo;
     setMicMuted(false);
+    micMutedRef.current = false;
+    // Every call opens with the partner's own voice ducked under the
+    // interpreter — the same value join() pushes into the call below.
+    setVolumeStep(1);
+    volumeStepRef.current = 1;
 
     // Acquire inside the Join tap (a user gesture — best context if a prior
     // request was denied).
@@ -488,33 +511,46 @@ export function CallShell(): JSX.Element {
     }
   }, [room]);
 
+  // Every control below reads the current value from a ref and does its work
+  // OUTSIDE the state updater.
+  //
+  // They used to reach into the call and the interpreter from inside
+  // `setState(prev => …)`, which React is allowed to invoke more than once for
+  // a single tap — it does so in StrictMode, and may under concurrent
+  // rendering. A pure updater survives that; one that hangs up a track, starts
+  // a camera renegotiation, or clears an audio buffer does not. The bug this
+  // fixes is not theoretical for the camera in particular: two renegotiations
+  // for one tap is a visibly stuck video tile.
   const toggleMic = useCallback(() => {
-    setMicMuted((m) => {
-      callRef.current?.setMicMuted(!m);
-      return !m;
-    });
+    const next = !micMutedRef.current;
+    micMutedRef.current = next;
+    setMicMuted(next);
+    callRef.current?.setMicMuted(next);
   }, []);
 
   const toggleCamera = useCallback(() => {
-    setCameraOn((on) => {
-      void callRef.current?.setVideo(!on).catch(() => setNotice("Could not switch the camera."));
-      return !on;
-    });
+    const next = !cameraOnRef.current;
+    cameraOnRef.current = next;
+    setCameraOn(next);
+    void callRef.current?.setVideo(next).catch(() => setNotice("Could not switch the camera."));
   }, []);
 
   const toggleVoice = useCallback(() => {
-    setVoiceOn((v) => {
-      interpreterRef.current?.setMuted(v);
-      return !v;
-    });
+    const next = !voiceOnRef.current;
+    voiceOnRef.current = next;
+    setVoiceOn(next);
+    // Immediately: lib/call/interpreter.ts stops the sentence in the air
+    // rather than letting it finish. Tom's report was that this control
+    // "appeared not to work or lagged", and finishing the current utterance is
+    // most of that — six seconds is a long time to watch a button you pressed.
+    interpreterRef.current?.setMuted(!next);
   }, []);
 
   const cycleVolume = useCallback(() => {
-    setVolumeStep((s) => {
-      const next = (s + 1) % VOLUME_STEPS.length;
-      callRef.current?.setRemoteVolume(VOLUME_STEPS[next].value);
-      return next;
-    });
+    const next = (volumeStepRef.current + 1) % VOLUME_STEPS.length;
+    volumeStepRef.current = next;
+    setVolumeStep(next);
+    callRef.current?.setRemoteVolume(VOLUME_STEPS[next].value);
   }, []);
 
   // Clean up everything if the component unmounts mid-call.
@@ -794,7 +830,7 @@ export function CallShell(): JSX.Element {
                 {cameraOn ? "📹 Cam on" : "📷 Cam off"}
               </button>
               <button type="button" onClick={toggleVoice} className={btn(voiceOn)}>
-                {voiceOn ? "🗣️ Voice on" : "💬 Text only"}
+                {voiceOn ? "🗣️ Translation" : "💬 Captions only"}
               </button>
               <button type="button" onClick={() => setCaptionsOn((c) => !c)} className={btn(captionsOn)}>
                 {captionsOn ? "💬 Captions" : "💬 Hidden"}
@@ -803,6 +839,18 @@ export function CallShell(): JSX.Element {
                 {VOLUME_STEPS[volumeStep].label}
               </button>
             </div>
+            {/* Two voices, two controls, and until 8/28 nothing on the screen
+                said which was which. */}
+            <p className="text-[11px] leading-snug text-amber-100/40">
+              {voiceOn
+                ? "You hear the interpreter speaking their words in your language."
+                : "The interpreter is silent — the captions below are still running."}{" "}
+              {VOLUME_STEPS[volumeStep].value === 0
+                ? "Their own voice is muted underneath."
+                : VOLUME_STEPS[volumeStep].value < 1
+                  ? "Their own voice plays quietly underneath, so you can hear them talking."
+                  : "Their own voice plays at full volume underneath."}
+            </p>
 
             {/* Mid-call language change: re-points the live session and tells
                 the partner's phone, without either of you rejoining. */}

@@ -27,7 +27,7 @@
 // an interpreter never needed, and it climbs with every turn until the cap
 // stops it. The 100-token cap is what makes per-turn cost flat instead of
 // linear, and the Italian translations at 100 were word-for-word as good as
-// at 200 — see docs/call-cost-model.md for the full run.
+// at 200 — see docs/realtime-cost-model.md for the full run.
 
 /** Dollars per 1M tokens. OpenAI pricing, read 2026-08-27. */
 export const REALTIME_RATES_USD_PER_MTOK = {

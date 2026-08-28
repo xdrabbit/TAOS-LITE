@@ -170,6 +170,19 @@ export async function startCallInterpreter(
   let responseActive = false;
   let audioPlaying = false;
   let audioStuckTimer: number | null = null;
+  // The object URL of the readout currently loaded into the audio element, and
+  // the settle function of the promise waiting on it. Both exist so that
+  // silencing the phone can tear down a readout mid-sentence WITHOUT leaving
+  // speakTranslation's promise unresolved — an unresolved one never reaches
+  // its `finally`, and the response gate it is holding stays held for the rest
+  // of the call.
+  let currentReadoutUrl: string | null = null;
+  let readoutDone: (() => void) | null = null;
+  // Bumped by every change to the output mode. A readout that was already
+  // being synthesised when the listener tapped carries the generation it
+  // started in; if that no longer matches, it drops itself instead of
+  // arriving a second after the tap that cancelled it.
+  let outputGeneration = 0;
   // Speech segment timing, for the transcription half of the bill. The API
   // reports these in milliseconds against the session's own audio clock.
   let speechStartedMs: number | null = null;
@@ -220,6 +233,10 @@ export async function startCallInterpreter(
     }
     if (audioEl) {
       audioEl.pause();
+      // Settle a readout that is still in the air, for the same reason
+      // stopSpokenAudio does: an unresolved promise never reaches its
+      // `finally`, and hang-up should not leave one pending.
+      readoutDone?.();
       audioEl.srcObject = null;
       audioEl.src = "";
       audioEl.remove();
@@ -242,9 +259,62 @@ export async function startCallInterpreter(
     }, idleMs);
   };
 
+  /**
+   * Silence whatever this phone is saying RIGHT NOW.
+   *
+   * Muting the element is not enough on its own, and that was the field
+   * report: in clone mode the element goes on playing the mp3 inaudibly for
+   * its full length, holding the response gate behind a sentence nobody can
+   * hear; in instant mode the model's speech is already sitting in the
+   * session's output buffer, where an element property cannot reach it.
+   */
+  const stopSpokenAudio = () => {
+    // Clone mode: an mp3 blob is loaded in the element. Settle the waiting
+    // promise BEFORE tearing the element down, then drop the blob.
+    if (audioEl && currentReadoutUrl) {
+      audioEl.pause();
+      readoutDone?.();
+      audioEl.removeAttribute("src");
+      // Abandon the blob load before its URL is revoked; without this WebKit
+      // holds the reference and reports a media error against the next src.
+      audioEl.load();
+    }
+    // Instant mode: the element is rendering a live WebRTC track, so it must
+    // NOT be torn down (there would be nothing to restore it with). The queued
+    // speech lives on the server; only the server can drop it. This is what
+    // makes "instant" stop mid-word rather than finish the sentence.
+    if (voiceMode === "instant" && audioPlaying && dc && dc.readyState === "open") {
+      try {
+        dc.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+      } catch {
+        /* the channel is already closing, which silences it anyway */
+      }
+    }
+  };
+
+  /**
+   * Turn the translated voice off or on, effective immediately.
+   *
+   * "Immediately" is the whole point. This used to set two flags and leave the
+   * sentence in the air to finish on its own, so a tap during a six-second
+   * translation looked like a control that did nothing — and a tap back the
+   * other way did nothing either, because the readout it would have restored
+   * had already decided not to play. Both directions now take effect on the
+   * sentence in front of the listener, not the one after it.
+   */
   const setMuted = (next: boolean) => {
+    if (muted === next) return;
     muted = next;
+    // Everything already in flight belongs to the mode just left.
+    outputGeneration += 1;
     if (audioEl) audioEl.muted = next;
+    if (next) {
+      stopSpokenAudio();
+      // Release the gate the abandoned readout was holding, or the next
+      // translation politely waits out a sentence that is no longer playing.
+      setAudioPlaying(false);
+      maybeRespond();
+    }
   };
 
   const setDirection = (next: CallDirection) => {
@@ -286,6 +356,13 @@ export async function startCallInterpreter(
    */
   const speakTranslation = async (text: string) => {
     if (stopped || !text.trim()) return;
+    // Voice off means NO SYNTHESIS, not synthesis nobody hears. This check
+    // used to sit after the request came back, so a call with the voice turned
+    // off went on paying ElevenLabs $0.05 per 1,000 characters for every
+    // translation, for as long as the call lasted. What "text only" leaves the
+    // listener is the captions, and the captions are free.
+    if (muted) return;
+    const generation = outputGeneration;
     setAudioPlaying(true);
     try {
       const blob = await requestSpeech(
@@ -302,18 +379,33 @@ export async function startCallInterpreter(
       spend = addTtsCharacters(spend, text.length);
       publishSpend();
       // null is "this language has no voice" (tier 2, lib/languages/catalog.ts)
-      // — the captions already said everything there is to say.
-      if (!blob || stopped || muted) return;
+      // — the captions already said everything there is to say. The generation
+      // check is the toggle: a sentence synthesised under the old mode must
+      // not start playing under the new one, a second after the tap.
+      if (!blob || stopped || muted || generation !== outputGeneration) return;
       await new Promise<void>((resolve) => {
         if (!audioEl) {
           resolve();
           return;
         }
         const url = URL.createObjectURL(blob);
+        currentReadoutUrl = url;
         const done = () => {
-          URL.revokeObjectURL(url);
+          // Idempotent: `ended`, `error` and a mid-sentence silence can all
+          // reach it, and only the first may settle the promise.
+          if (readoutDone !== done) return;
+          readoutDone = null;
+          if (audioEl) {
+            audioEl.onended = null;
+            audioEl.onerror = null;
+          }
+          if (currentReadoutUrl === url) {
+            URL.revokeObjectURL(url);
+            currentReadoutUrl = null;
+          }
           resolve();
         };
+        readoutDone = done;
         audioEl.onended = done;
         audioEl.onerror = done;
         audioEl.srcObject = null;
