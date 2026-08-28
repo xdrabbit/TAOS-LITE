@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { tutorEnabled } from "@/lib/release";
-import { guardSpend } from "@/lib/spendGuard";
+import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 import { languageLabel } from "@/lib/languages/catalog";
 import { resolveAssessmentLocale } from "@/lib/tutor/pronunciation";
 import { parseAzureAssessment, type AssessmentWord } from "@/lib/tutor/assessment";
+import {
+  beginTutorSession,
+  settleTutorSession,
+  TutorMeterUnavailableError,
+  wavSeconds
+} from "@/lib/tutor/meter";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -80,6 +86,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // this one is the same feature and was not checking. Now it matches.
   const guard = await guardSpend(req);
   if (!guard.ok) return guard.response;
+  // guardSpend without allowAnonymous never returns ok with a null user, but
+  // the type says it can — and the meter needs someone to charge.
+  const user = guard.user;
+  if (!user) return NextResponse.json({ error: SIGN_IN_REQUIRED }, { status: 401 });
 
   const key = process.env.AZURE_SPEECH_KEY;
   const region = process.env.AZURE_SPEECH_REGION;
@@ -137,6 +147,78 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1` +
     `?language=${encodeURIComponent(locale)}&format=detailed`;
 
+  // ── Crawl's share of the meter ───────────────────────────────────────────
+  // Crawl has no session to time, so the unit is the DURATION OF THE AUDIO
+  // being assessed — which is what Azure charges for and what the learner
+  // actually spent talking. Reserved before the provider is called, for the
+  // same reason every other spend on this route is: the refusal has to cost
+  // nothing. A repeat-after-me attempt is a few seconds, so a free learner
+  // will not lose their month to drills; a script hammering the endpoint with
+  // long audio will.
+  //
+  // `audio.size` rather than the decoded buffer: lib/tutor/wav.ts produces
+  // 16 kHz mono 16-bit WAV for exactly this endpoint, and reading the length
+  // off the byte count means the reservation happens before anything is read
+  // into memory.
+  const attemptSeconds = Math.max(1, wavSeconds(audio.size));
+  let reservation;
+  try {
+    reservation = await beginTutorSession({
+      user: { id: user.id, email: user.email },
+      phase: "crawl",
+      requestedSeconds: attemptSeconds,
+      moduleId: (form.get("moduleId") as string | null) ?? null,
+      target: languageRaw.split("-")[0],
+      learner: learnerRaw.split("-")[0],
+      level: String(form.get("level") ?? "beginner")
+    });
+  } catch (error) {
+    if (error instanceof TutorMeterUnavailableError) {
+      // eslint-disable-next-line no-console
+      console.error(error.message);
+      return NextResponse.json(
+        { configured: true, error: "Tutor is temporarily unavailable." },
+        { status: 503 }
+      );
+    }
+    throw error;
+  }
+
+  if (!reservation.ok) {
+    return NextResponse.json(
+      {
+        configured: true,
+        error: "quota_exhausted",
+        details:
+          reservation.balance.tier === "free"
+            ? "Your free tutor minutes for this month are used up."
+            : "You've used this month's tutor minutes.",
+        balance: {
+          unlimited: reservation.balance.unlimited,
+          tier: reservation.balance.tier,
+          remainingSeconds: reservation.balance.unlimited
+            ? -1
+            : reservation.balance.remainingSeconds,
+          packSeconds: reservation.balance.packSeconds
+        }
+      },
+      { status: 402 }
+    );
+  }
+
+  // Whatever happens below — a score, a 502, a thrown fetch — the attempt is
+  // settled at the audio's own length. Azure was paid for the audio it was
+  // sent, not for whether we liked the answer.
+  const settle = async (reason: "user" | "error") => {
+    await settleTutorSession({
+      user: { id: user.id, email: user.email },
+      sessionId: reservation.ok ? reservation.sessionId : "",
+      serverSeconds: attemptSeconds,
+      reason,
+      phase: "crawl"
+    }).catch(() => undefined);
+  };
+
   try {
     const audioBuffer = Buffer.from(await audio.arrayBuffer());
     const res = await fetch(url, {
@@ -153,6 +235,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok || !data) {
+      await settle("error");
       return NextResponse.json(
         { configured: true, error: "Azure assessment failed.", details: data ?? `HTTP ${res.status}` },
         { status: 502 }
@@ -184,8 +267,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       learnerName: languageLabel(learnerRaw.split("-")[0])
     });
 
+    await settle("user");
     return NextResponse.json({ ...result, coaching });
   } catch (error) {
+    await settle("error");
     const message = error instanceof Error ? error.message : "Assessment failed.";
     return NextResponse.json({ configured: true, error: message }, { status: 500 });
   }

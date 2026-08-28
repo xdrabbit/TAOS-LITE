@@ -12,10 +12,17 @@ Reflections plan.*
 > `taos_leads` no longer accepts writes from the internet (§14, Surprise 7);
 > either member of a chat can now delete the whole thread, audio included, and
 > deleting an account takes its threads with it (§4–§6, Surprise 2, Surprise
-> 3). Each affected section carries a **RESOLVED** line. Everything else on
-> this page — including Tom's `bs` language, `tutor_mastery`'s dead
-> two-course ceiling, and the predict-model `direction` ceiling — is
-> unchanged and still open.
+> 3). Each affected section carries a **RESOLVED** line.
+>
+> **Updated again 2026-08-28 by tutor phase 2** (the minute metering):
+> `tutor_mastery` is **dropped** (§11, Finding 5); `tutor_sessions` is
+> server-owned, with its insert and update policies gone and its roles narrowed
+> to `{authenticated}` (§9, Finding 10 — for the tutor half); two new tables
+> exist, `tutor_usage` (§9b) and `stripe_pack_credits` (§9c); and
+> `profiles.bonus_seconds` / `bonus_period` are superseded by the persistent
+> `profiles.pack_seconds` (§8). Everything else on this page — including Tom's
+> `bs` language and the predict-model `direction` ceiling — is unchanged and
+> still open.
 
 **Method.** The repo's `supabase/migrations/` holds four files and covers four
 objects — most of this schema was applied by hand in the SQL editor and exists
@@ -182,7 +189,7 @@ RLS-filtered.
 | | |
 |---|---|
 | **Rows** | 17 (= `auth.users`; created by the `handle_new_user` trigger) |
-| **Content** | `email`, `plan`, `tier`, `subscription_status`, `stripe_customer_id`, `stripe_subscription_id`, `trial_ends_at`, `current_period_end`, `usage_chars`, `usage_period_start`, `bonus_seconds`, `bonus_period`. |
+| **Content** | `email`, `plan`, `tier`, `subscription_status`, `stripe_customer_id`, `stripe_subscription_id`, `trial_ends_at`, `current_period_end`, `usage_chars`, `usage_period_start`, **`pack_seconds`**, ~~`bonus_seconds`, `bonus_period`~~. |
 | **User ids** | `id` = `auth.users.id`. |
 | **Second party** | None. No partner column, no household, no shared plan. |
 | **Retention** | CASCADE from `auth.users`. |
@@ -192,21 +199,71 @@ Distribution: 12 free/trialing, 2 basic active, 1 premium active, 1 comp, 1
 canceled-with-Stripe-ids. No stale *test-mode* customer ids remain — every
 `stripe_customer_id` present belongs to a live-mode row.
 
+**`pack_seconds` (added 2026-08-28, tutor phase 2)** is the persistent add-on
+minute balance: a pack is a one-time purchase, so it rolls over month to month
+and is only spent once the month's plan minutes are gone. It replaces
+`bonus_seconds` + `bonus_period`, which scoped a bought pack to the calendar
+month it landed in — a pack bought on the 30th was mostly a donation. The two
+old columns are **dead but not dropped for one release**: a browser tab still
+holding the previously deployed bundle selects them by name in `getProfile()`,
+and dropping them would make that select error, return null, and show a
+signed-in user a sign-in screen. Drop them once Production has cycled.
+
 ### 9. `tutor_sessions` — tutor minutes
 
 | | |
 |---|---|
 | **Rows** | 15, **2 distinct users** (both founders) |
-| **Content** | `mode`, `learn_lang`, `focus`, `level`, `model`, `seconds`, `started_at`, `ended_at`. **No transcript, no audio, no utterances.** |
+| **Content** | `mode`, `phase`, `module_id`, `learn_lang`, `learner_lang`, `focus`, `level`, `model`, `seconds`, `granted_seconds`, `cap_plan_seconds`, `client_seconds`, `plan_seconds`, `pack_seconds`, `metered`, `end_reason`, `started_at`, `ended_at`, `settled_at`. **No transcript, no audio, no utterances.** |
 | **User ids** | `user_id`, default `auth.uid()`. Single-account by nature. |
 | **Retention** | Indefinite; CASCADE from `auth.users`. |
-| **RLS** | own select/insert/update/delete, all `auth.uid() = user_id`. Note the roles are `{public}` rather than `{authenticated}` — harmless, since `auth.uid()` is null for `anon`, but inconsistent with the `taos_*` tables. |
+| **RLS** | own **select/delete** only, `{authenticated}`. 2026-08-28: insert and update were dropped and the roles narrowed from `{public}` (finding 10). |
 
-**Written from the browser today** (`lib/supabase.ts:262`/`275`, called by
-`components/TutorShell.tsx:608`), which is exactly the open phase-2 question in
-`lib/tutor/meter.ts`: the duration currently comes from a number the client
-chose to report. `getMonthlyUsage()` sums `seconds` from this table for the
-quota meter.
+**Server-owned since 2026-08-28 (tutor phase 2).** It used to be written FROM
+THE BROWSER under RLS, which is exactly the open question `lib/tutor/meter.ts`
+left for phase 2: the duration came from a number the client chose to report.
+The row is now inserted by `POST /api/tutor/realtime` with the service role and
+closed by `POST /api/tutor/session` against the SERVER's clock, and the insert
+and update policies are gone — so the old path could not work even if something
+still called it. A quota the metered party can write is not a quota.
+
+`granted_seconds` is a **reservation**: while `settled_at` is null it is held
+in full against the balance, so two tabs cannot spend the same minutes and an
+end that never arrives cannot become free ones (`tutor_reap_open_sessions`
+collects those at the full grant). `client_seconds` is what the browser
+claimed, kept only to measure drift against the server's clock. `metered =
+false` marks founder sessions, which are a real OpenAI bill and stay visible
+here while being deliberately absent from the ledger.
+
+### 9b. `tutor_usage` — the minute ledger *(new 2026-08-28)*
+
+| | |
+|---|---|
+| **Rows** | 0 at time of writing — tutor is still flag-off in Production |
+| **Content** | `period` (`YYYY-MM`, calendar month **UTC**), `seconds_used`, the source breakdown `crawl_seconds` / `walk_seconds` / `run_seconds` / `partner_seconds`, and `pack_seconds_used` — how much of the total came off the persistent pack balance rather than the month's plan allowance. |
+| **User ids** | `user_id`; PK is `(user_id, period)`. |
+| **Second party** | None. Learner and meter. |
+| **Retention** | Indefinite; CASCADE from `auth.users`. |
+| **RLS** | own select only. **No write policy of any kind** — every write is `public.tutor_accrue()` under the service role. |
+
+This is the number the allowance is computed from. `getMonthlyUsage()` reads it
+instead of summing `tutor_sessions`, which is what it did before: the ledger
+already excludes founder sessions and cannot double-count a period the reaper
+has settled. The four source columns sum to `seconds_used`.
+
+### 9c. `stripe_pack_credits` — pack idempotency *(new 2026-08-28)*
+
+| | |
+|---|---|
+| **Rows** | 0 |
+| **Content** | `checkout_session_id` (PK), `user_id`, `seconds`. |
+| **Retention** | CASCADE from `auth.users`. |
+| **RLS** | Enabled, **no policies** — service role only. |
+
+The Stripe webhook claims a row here BEFORE crediting `profiles.pack_seconds`.
+A primary-key conflict means the purchase was already paid out, which is what
+makes a redelivered `checkout.session.completed` credit once rather than twice.
+
 
 ### 10. `tutor_attempts` — pronunciation scoring
 
@@ -224,18 +281,19 @@ Azure and writes only on the client paths in `TutorShell.tsx:348` /
 `tutor/ModulesShell.tsx:495`. This will start holding learner speech
 transcripts the moment the flag goes on.
 
-### 11. `tutor_mastery` — dead table ⚠️
+### 11. `tutor_mastery` — DROPPED 2026-08-28 ✅
 
-| | |
-|---|---|
-| **Rows** | 0 |
-| **Referenced by code** | **Nowhere.** Zero call sites in the repo. |
-| **Constraint** | `course_id = ANY (ARRAY['tom-spanish-1', 'liz-english-1'])` — a hardcoded two-course ceiling from a tutor design that no longer exists. The shipped curriculum is fourteen language-agnostic modules (`lib/tutor/modules.ts`). |
-| **RLS** | Full own-row CRUD, roles `{public}`. |
+Zero rows, zero call sites in the repo, and a CHECK pinning `course_id` to
+`('tom-spanish-1', 'liz-english-1')` — a two-course ceiling from a tutor design
+that no longer exists, so every id from the shipped fourteen modules
+(`lib/tutor/modules.ts`) would have been REJECTED. It was not a head start on
+server-side progress; it was a trap shaped like one.
 
-Phase 1 keeps progress in `localStorage` (`TUTOR_PROGRESS_KEY`) and the backlog
-lists "move progress off localStorage" as phase-2 work. This table is a
-plausible-looking destination that would reject every real `course_id`.
+Dropped in `supabase/migrations/20260828_tutor_metering.sql`. Progress is still
+`localStorage` (`TUTOR_PROGRESS_KEY`, keyed module × target × learner) and
+moving it server-side is still on the backlog — when it lands it wants a table
+keyed the way the code is keyed, which is not what this was.
+
 
 ### 12. `tutor_lessons` — generated course content
 
@@ -482,6 +540,9 @@ audio (all below).
    right home for the phase-2 "move progress off localStorage" work, and it
    would fail on first insert. Same failure mode as the `lang` CHECK that
    `20260819_chat_members_lang_catalog.sql` cleaned up.
+   → **RESOLVED 2026-08-28** (`20260828_tutor_metering.sql`): dropped rather
+   than rebuilt. Progress did not land in phase 2, and removing the trap beats
+   pre-building a table nothing is ready to use — see §11.
 
 6. **`taos_lite_predict_models` still carries `direction in ('en-es','es-en')`.**
    A third language ceiling living in Postgres. Not currently breaking anything
@@ -525,6 +586,11 @@ audio (all below).
     the two halves of this schema were written by different hands at different
     times, and a future policy written by copy-paste could inherit the looser
     role without the `auth.uid()` test that saves it.
+    → **PARTLY RESOLVED 2026-08-28**: `tutor_sessions` was being rewritten for
+    metering anyway, so its two surviving policies were re-created against
+    `{authenticated}`, and the new `tutor_usage` and `stripe_pack_credits`
+    follow the stricter convention. `tutor_attempts` was already
+    `{authenticated}`. Nothing tutor-shaped grants to `{public}` any more.
 
 ---
 

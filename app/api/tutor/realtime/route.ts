@@ -1,101 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { tutorEnabled } from "@/lib/release";
 import { isLanguageCode } from "@/lib/languages/catalog";
 import { buildTutorInstructions } from "@/lib/tutor/instructions";
 import { getTutorModule } from "@/lib/tutor/modules";
 import { lessonCacheKey } from "@/lib/tutor/lesson";
 import { readCachedLesson } from "@/lib/tutor/lessonStore";
-import { logTutorSessionEvent, newTutorSessionId } from "@/lib/tutor/meter";
+import {
+  beginTutorSession,
+  settleTutorSession,
+  TutorMeterUnavailableError,
+  TUTOR_WARN_SECONDS,
+  type TutorBalance
+} from "@/lib/tutor/meter";
 import { toTutorLevel, toTutorPhase } from "@/lib/tutor/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-// Monthly tutor-minute quota per tier — enforced here so a user can't bypass the
-// UI cap and run unlimited (expensive) realtime minutes. Mirror of lib/supabase.
-const TUTOR_SECONDS_BY_TIER: Record<string, number> = {
-  free: 15 * 60,
-  basic: 45 * 60,
-  premium: 200 * 60
-};
-
-function startOfMonthISO(): string {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
-}
-
-function monthKey(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-// Returns an error response if the caller has used up this month's tutor minutes
-// for their tier; otherwise the caller's user id (allowed). Comp/unlimited pass.
-//
-// Phase 2 (docs/tutor-curriculum-plan.md step 5) moves this behind
-// lib/tutor/meter.ts, so Walk, Run and Partner cannot grow three copies of the
-// allowance rule between them. It stays here meanwhile because it is the only
-// thing standing between a flag flip and an unmetered realtime session.
-async function checkTutorAllowance(
-  req: NextRequest
-): Promise<{ ok: true; userId: string } | { ok: false; response: NextResponse }> {
-  const user = await getUserFromRequest(req);
-  if (!user) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: "Please sign in to use the tutor." }, { status: 401 })
-    };
-  }
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("subscription_status, tier, bonus_seconds, bonus_period")
-    .eq("id", user.id)
-    .maybeSingle();
-  const status = (profile?.subscription_status as string | undefined) ?? "free";
-  if (status === "comp") return { ok: true, userId: user.id }; // unlimited
-
-  // Effective tier: active subscribers use their tier; everyone else is free.
-  const tier =
-    status === "active"
-      ? (profile?.tier as string | undefined) === "premium"
-        ? "premium"
-        : "basic"
-      : "free";
-  // Monthly quota + any add-on pack minutes bought this month.
-  const bonus =
-    (profile?.bonus_period as string | undefined) === monthKey()
-      ? ((profile?.bonus_seconds as number | undefined) ?? 0)
-      : 0;
-  const cap = (TUTOR_SECONDS_BY_TIER[tier] ?? TUTOR_SECONDS_BY_TIER.free) + bonus;
-
-  const { data: rows } = await supabaseAdmin
-    .from("tutor_sessions")
-    .select("seconds")
-    .eq("user_id", user.id)
-    .eq("mode", "conversation")
-    .gte("created_at", startOfMonthISO());
-  const used = ((rows ?? []) as Array<{ seconds?: number | null }>).reduce(
-    (a, r) => a + (typeof r.seconds === "number" ? r.seconds : 0),
-    0
-  );
-  if (used >= cap) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        {
-          error: "quota_exhausted",
-          details:
-            tier === "free"
-              ? "Your free tutor minutes for this month are used up."
-              : "You've used this month's tutor minutes. Upgrade for more."
-        },
-        { status: 402 }
-      )
-    };
-  }
-  return { ok: true, userId: user.id };
+/**
+ * The balance, as the browser is allowed to see it.
+ *
+ * `-1` rather than `Infinity` for founders and comp: JSON has no infinity, and
+ * `null` there would be indistinguishable from "we could not work it out",
+ * which is exactly the ambiguity that makes a UI show a plausible wrong
+ * number. lib/tutor/meterCopy.ts reads -1 as unlimited.
+ */
+function balancePayload(balance: TutorBalance): Record<string, unknown> {
+  return {
+    unlimited: balance.unlimited,
+    tier: balance.tier,
+    period: balance.period,
+    remainingSeconds: balance.unlimited ? -1 : balance.remainingSeconds,
+    planSeconds: Number.isFinite(balance.planSeconds) ? balance.planSeconds : -1,
+    planLeft: Number.isFinite(balance.planLeft) ? balance.planLeft : -1,
+    packSeconds: balance.packSeconds
+  };
 }
 
 // GA Realtime endpoints. Overridable via env in case OpenAI moves them.
@@ -151,9 +91,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Enforce the monthly minute cap before spending on a realtime session.
-  const allowance = await checkTutorAllowance(req);
-  if (!allowance.ok) return allowance.response;
+  const user = await getUserFromRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Please sign in to use the tutor." }, { status: 401 });
+  }
 
   const body = (await req.json().catch(() => ({}))) as {
     target?: string;
@@ -195,6 +136,66 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
+  // ── The cash register ────────────────────────────────────────────────────
+  // Phase 1 had the tier check inline here, with a note saying phase 2 would
+  // move it behind lib/tutor/meter.ts so Walk, Run and Partner could not grow
+  // three copies of the rule. This is that move: one call, which reads the
+  // balance, refuses when it cannot fund a session, and RESERVES what it grants
+  // so a second tab cannot spend the same minutes.
+  //
+  // It runs after the body is parsed (a 400 should not burn a reservation) and
+  // before the mint (a refusal must cost nothing). The requested cap is the
+  // client's — it is a ceiling the browser asks for, never a floor, and the
+  // grant below is what actually governs.
+  const requested =
+    typeof body.capSeconds === "number" && Number.isFinite(body.capSeconds)
+      ? Math.min(60 * 60, Math.max(0, Math.round(body.capSeconds)))
+      : 10 * 60;
+
+  let reservation;
+  try {
+    reservation = await beginTutorSession({
+      user: { id: user.id, email: user.email },
+      phase,
+      requestedSeconds: requested,
+      moduleId: mod?.id ?? null,
+      target: pair.target,
+      learner: pair.learner,
+      level,
+      model,
+      focus: focus || null
+    });
+  } catch (error) {
+    if (error instanceof TutorMeterUnavailableError) {
+      // Production without the service-role key. Refusing is the only honest
+      // answer: minting here would be an unmetered realtime session on the
+      // exact deploy that opened the tutor to customers.
+      // eslint-disable-next-line no-console
+      console.error(error.message);
+      return NextResponse.json(
+        { error: "Tutor is temporarily unavailable.", details: "metering_unavailable" },
+        { status: 503 }
+      );
+    }
+    throw error;
+  }
+
+  if (!reservation.ok) {
+    return NextResponse.json(
+      {
+        error: "quota_exhausted",
+        details:
+          reservation.balance.tier === "free"
+            ? "Your free tutor minutes for this month are used up."
+            : "You've used this month's tutor minutes.",
+        balance: balancePayload(reservation.balance)
+      },
+      { status: 402 }
+    );
+  }
+
+  const { sessionId, grantedSeconds } = reservation;
+
   const instructions = buildTutorInstructions({
     target: pair.target,
     learner: pair.learner,
@@ -231,6 +232,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   };
 
+  // A reservation that is never settled holds its full grant until the reaper
+  // collects it, which for a mint that never happened would lock a free user
+  // out of ten of their fifteen minutes for two minutes at a time. Every exit
+  // below this point releases it.
+  const release = async (reason: "error") => {
+    await settleTutorSession({
+      user: { id: user.id, email: user.email },
+      sessionId,
+      serverSeconds: 0,
+      reason,
+      phase,
+      moduleId: mod?.id ?? null
+    }).catch(() => undefined);
+  };
+
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
       method: "POST",
@@ -240,6 +256,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     });
     const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok) {
+      await release("error");
       const detail = payload ? JSON.stringify(payload) : `HTTP ${res.status}`;
       return NextResponse.json(
         { error: "Failed to mint realtime session.", details: detail },
@@ -253,6 +270,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       (nested && typeof nested.value === "string" && nested.value) ||
       "";
     if (!clientSecret) {
+      await release("error");
       return NextResponse.json(
         { error: "No client secret in OpenAI response.", details: JSON.stringify(payload) },
         { status: 502 }
@@ -262,23 +280,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       (typeof payload?.expires_at === "number" && payload.expires_at) ||
       (nested && typeof nested.expires_at === "number" && nested.expires_at) ||
       undefined;
-
-    // The metering seam (lib/tutor/meter.ts). Emitted only once the session
-    // actually exists — a start line for a mint that failed would overstate
-    // every cost report built on this log.
-    const sessionId = newTutorSessionId();
-    logTutorSessionEvent({
-      event: "start",
-      sessionId,
-      userId: allowance.userId,
-      phase,
-      moduleId: mod?.id ?? null,
-      target: pair.target,
-      learner: pair.learner,
-      level,
-      model,
-      capSeconds: typeof body.capSeconds === "number" ? Math.round(body.capSeconds) : undefined
-    });
 
     return NextResponse.json({
       sessionId,
@@ -296,9 +297,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       lessonAvailable: Boolean(lesson),
       focus,
       instructions,
-      expiresAt
+      expiresAt,
+      // What the meter actually granted. The client caps the session to this
+      // (not to its own preferred 10 minutes), warns this far in, and shows
+      // the remainder in the header chip.
+      grantedSeconds,
+      warnAtSeconds: TUTOR_WARN_SECONDS,
+      balance: balancePayload(reservation.balance)
     });
   } catch (error) {
+    await release("error");
     const message = error instanceof Error ? error.message : "Unexpected error.";
     return NextResponse.json({ error: "Realtime session error.", details: message }, { status: 502 });
   }

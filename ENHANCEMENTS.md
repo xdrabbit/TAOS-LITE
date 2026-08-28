@@ -97,6 +97,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   because the var is absent from Production. Delete it from Preview, or re-add
   it with `--git-branch`, when tutor should stop appearing on unrelated
   preview builds. (noted 2026-08-26)
+  → PHASE 2 BUILT 2026-08-28 (see Shipped) — the metering. Minutes are
+  server-authoritative and reserved at mint, plan-then-pack, founders bypass,
+  and pack purchases credit a PERSISTENT balance through a replay-safe
+  webhook. `tutor_mastery` is dropped rather than reused. **Tutor is now one
+  environment variable from public**: the flip checklist is in the PR body and
+  in Shipped below, and flipping it stays Tom's ceremony, not a merge.
 - /live "On-device" mode: find out why it never works, or delete it — Tom
   (8/18): it has never once worked for him. Gated off for RC1 behind
   NEXT_PUBLIC_ENABLE_ONDEVICE_STT (lib/release.ts), so /live now has one
@@ -134,6 +140,13 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   priced around tutor, so this unblocks charging **for translation** — the
   question of whether the prices themselves are right once tutor returns is
   still Tom's to make. (2026-08-19)
+  → Fully answered 2026-08-28 by tutor phase 2: the minutes the page sells are
+  real now, metered against the exact numbers printed on it (a test reads
+  Paywall.tsx and fails if 45/200 and the enforced allowance ever disagree).
+  The one line that was actively FALSE — "Packs add minutes for the rest of
+  this month" — is fixed: packs credit a persistent balance that rolls over
+  and never expires, while plan minutes reset monthly, and both halves of that
+  are now said on the page before the charge. (2026-08-28)
 - Chat push notifications (tier 2) — phones buzz when a message lands while
   the app is closed. Planned since chat tier 1 shipped. (added 2026-08-03)
 - Call cost guards — SHIPPED 2026-08-27 (PR #39, see Shipped). /call is
@@ -199,7 +212,13 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   deletion. (4) `tutor_mastery` is dead (0 rows, no code refs) with a stale
   `course_id in ('tom-spanish-1','liz-english-1')` CHECK — it looks like the
   right home for phase 2's "progress off localStorage" and would reject every
-  real module id. Also noted: `taos_lite_predict_models` still carries
+  real module id. **Dropped 2026-08-28** in
+  `supabase/migrations/20260828_tutor_metering.sql` with the reasoning in the
+  migration: progress is NOT landing in phase 2, so the honest move was to
+  remove the trap rather than rebuild a table nothing is ready to use. When
+  server-side progress does land it wants a table keyed the way
+  `lib/tutor/progress.ts` is keyed — module × target × learner — which is not
+  what this was. Also noted: `taos_lite_predict_models` still carries
   `direction in ('en-es','es-en')`, and ten of the fourteen tables exist only
   in the database, not in `supabase/migrations/`. (added 2026-08-26)
 - /chat: Tom's member language reads `bs` (Bosnian) in BOTH threads, including
@@ -375,6 +394,68 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **Tutor phase 2 — the cash register** (PR #TBD, 2026-08-28) — the last gate
+  before /tutor can go public. Minutes are metered SERVER-side and RESERVED at
+  mint: `POST /api/tutor/realtime` asks `lib/tutor/meter.ts` for a grant before
+  it spends a cent, and the grant is held in full until the session settles, so
+  two tabs cannot spend the same fifteen minutes and closing a tab is not how
+  you get free ones (`tutor_reap_open_sessions` collects an end that never
+  arrived, at the full grant). The duration billed is the SERVER's clock capped
+  at the grant; the number the browser reports is recorded beside it as
+  `client_seconds` and never billed — which is the open question phase 1 wrote
+  into `lib/tutor/meter.ts` and left for phase 2, answered by moving the whole
+  `tutor_sessions` lifecycle server-side and dropping the table's insert and
+  update RLS policies.
+  → **Plan first, then pack.** Plan minutes (15 / 45 / 200, the numbers on the
+  pricing page, now pinned by a test that reads Paywall.tsx) reset on the
+  calendar month in UTC; pack minutes are a PURCHASE and roll over forever on
+  `profiles.pack_seconds`. That is a change: packs used to credit
+  `bonus_seconds` scoped to `bonus_period`, so a $9.99 pack bought on the 30th
+  was mostly a donation. The webhook is replay-safe now too —
+  `stripe_pack_credits` makes the checkout session id an idempotency key, and
+  the PR #29 "re-read from Stripe" rule applies, so an event snapshot saying
+  `paid` for a session Stripe currently calls `unpaid` credits nothing.
+  → **Warm, not abrupt.** A session that will run out warns at T-2 minutes and
+  then ends at a TURN BOUNDARY, never mid-sentence — with a hard stop 30s later
+  so a stalled turn cannot hold a microphone open. A refusal is a bilingual
+  card that shows where the learner stands before it offers anything, and
+  offers a subscriber PACKS rather than the subscription they already bought.
+  The header chip shows what is left, in both languages, on every tutor screen.
+  → **Founders bypass entirely** (`isFounder`, so it is the email and not the
+  plan): unlimited grant, session row still written with `metered = false` so
+  the minutes stay visible to a cost query, ledger untouched. Tom and Liz keep
+  testing free without making the cost reports lie.
+  → **Crawl is metered too**, in the duration of the audio Azure assessed —
+  server-measured off the WAV, a few seconds an attempt, so fifty drills cost a
+  free learner under three minutes of fifteen. Without it, the one tutor phase
+  a free account could grind forever was the one that calls a paid API on every
+  tap.
+  → `tutor_mastery` dropped (audit finding 4). Progress stays in localStorage
+  and stays on the backlog.
+  → Verification: `docs/tutor-metering-verification.md`. The plpgsql that
+  actually moves money was walked against the real database — accrual, replay,
+  the plan/pack boundary, founder exclusion, the reaper — and every synthetic
+  row cleaned up after. 786 tests green.
+  → **The flip checklist** (Tom's ceremony, not a merge):
+    1. `vercel env add NEXT_PUBLIC_ENABLE_TUTOR production` → `1`.
+    2. Redeploy Production. The badges vanish on their own — `tutorComingSoon()`
+       is just `!tutorEnabled()`, so the paywall's ✓s, the pack buy buttons and
+       the nav link all come back with no copy edit.
+    3. Walk one real session as a founder on the deployment, then one on a
+       non-founder account: confirm the chip drops by about what was spoken and
+       that `tutor_usage.partner_seconds` agrees. This is the one thing the
+       verification could not do from a laptop — `SUPABASE_SERVICE_ROLE_KEY` is
+       sensitive, so `vercel env pull` cannot fetch it.
+    4. Delete `NEXT_PUBLIC_ENABLE_TUTOR` from **Preview**, or re-add it with
+       `--git-branch`: it is currently unscoped, so every branch preview shows
+       tutor.
+    5. One live pack purchase, per the `stripe-live-fire` runbook, then refund.
+  → **Known gap, deliberate:** a Stripe REFUND does not claw pack minutes back.
+  `charge.refunded` is not handled, so a refunded pack leaves its seconds on
+  the balance and has to be zeroed by hand. Worth wiring before packs are sold
+  at any volume; not worth blocking the flip on, since the refund is a human
+  action in the dashboard today anyway. (added 2026-08-28)
 
 - **Walk and Run cannot circle one phrase — the client owns the script
   position** (PR #TBD, 2026-08-27) — Tom's field test, screenshot-verified: the

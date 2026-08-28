@@ -6,6 +6,15 @@
 // session cap and a silence auto-off keep realtime spend predictable.
 
 import type { TutorLevel, TutorPhase } from "./types";
+import {
+  clockEventsBetween,
+  newTurnGate,
+  planSessionClock,
+  requestEnd,
+  turnEnded,
+  turnStarted,
+  type SessionClock
+} from "./sessionClock";
 
 export type ConvState =
   | "idle"
@@ -17,6 +26,17 @@ export type ConvState =
   | "error";
 
 export type StopReason = "user" | "cap" | "idle" | "error";
+
+/** What the server granted this session, and what is left after it. */
+export interface SessionGrant {
+  /** Seconds the meter reserved. The session's real cap, whatever was asked. */
+  grantedSeconds: number;
+  /** Seconds left on the balance AFTER this reservation. Infinity if unlimited. */
+  remainingSeconds: number;
+  unlimited: boolean;
+  tier: string;
+  packSeconds: number;
+}
 
 export interface ConversationConfig {
   /** Catalog code of the language being learned (lib/languages/catalog.ts). */
@@ -41,6 +61,14 @@ export interface ConversationEvents {
   onAssistantDelta?: (text: string) => void; // streaming tutor text chunk
   onAssistantDone?: () => void; // tutor finished a turn
   onTick?: (elapsedSec: number) => void;
+  /**
+   * The meter granted this much. Fired once, right after the mint, so the UI
+   * can show a session that is shorter than the 10 minutes it asked for
+   * WITHOUT the learner discovering it by being cut off.
+   */
+  onGrant?: (grant: SessionGrant) => void;
+  /** Two minutes from the end. Fired once, never repeated (see the clock). */
+  onWarning?: (secondsLeft: number) => void;
   onStopped?: (reason: StopReason, elapsedSec: number) => void;
   onDebug?: (line: string) => void; // raw diagnostics for the on-screen log
 }
@@ -71,6 +99,16 @@ interface MintResponse {
   instructions: string;
   /** False when Walk asked for a lesson the server had no cached copy of. */
   lessonAvailable?: boolean;
+  /** What the meter reserved, in seconds. The session's real cap. */
+  grantedSeconds?: number;
+  /** Seconds before the end to warn. The server owns this number. */
+  warnAtSeconds?: number;
+  balance?: {
+    unlimited?: boolean;
+    tier?: string;
+    remainingSeconds?: number;
+    packSeconds?: number;
+  };
   error?: string;
   details?: string;
 }
@@ -98,6 +136,12 @@ export async function startConversation(
   // the call can be reported against the same id the mint was logged under —
   // phase 2 reconciles the two lines into billed minutes.
   let sessionId = "";
+  // The meter's clock, replaced once the mint says what it actually granted.
+  // Until then it is the client's own preference, which is a CEILING the
+  // server may lower and never a floor it must honour.
+  let clock: SessionClock = planSessionClock(Math.round(maxMs / 1000));
+  let gate = newTurnGate();
+  let lastTickSec = 0;
   const steerNotes: string[] = [];
   const startMs = Date.now();
 
@@ -168,6 +212,23 @@ export async function startConversation(
       /* ignore */
     }
     sessionId = "";
+  };
+
+  /**
+   * The cap arrived. End at a TURN BOUNDARY, not mid-sentence.
+   *
+   * The thing being interrupted is a conversation in a language the learner is
+   * bad at, and cutting the tutor off mid-word to save four seconds of a
+   * ten-minute session is not a saving worth making. So: if the tutor is
+   * speaking, hold and stop when the turn lands; if it is not, stop now,
+   * because waiting would leave a paid session open until the learner happens
+   * to say something. The clock's hard stop (30s later) is the backstop for a
+   * turn that never finishes.
+   */
+  const requestCapStop = () => {
+    const next = requestEnd(gate);
+    gate = next.gate;
+    if (next.stopNow) void stop("cap");
   };
 
   const bumpIdle = () => {
@@ -306,6 +367,26 @@ export async function startConversation(
     }
     baseInstructions = mint.instructions ?? "";
     sessionId = mint.sessionId ?? "";
+
+    // What the meter actually reserved. A free learner with four minutes left
+    // gets a four-minute session, not a ten-minute one that dies at four —
+    // and the clock, the warning and the header chip all follow from this one
+    // number rather than from what the client asked for.
+    const granted =
+      typeof mint.grantedSeconds === "number" && mint.grantedSeconds > 0
+        ? mint.grantedSeconds
+        : Math.round(maxMs / 1000);
+    clock = planSessionClock(granted, mint.warnAtSeconds);
+    const unlimited = mint.balance?.unlimited === true;
+    const remaining = mint.balance?.remainingSeconds;
+    events.onGrant?.({
+      grantedSeconds: granted,
+      remainingSeconds:
+        unlimited || typeof remaining !== "number" || remaining < 0 ? Infinity : remaining,
+      unlimited,
+      tier: mint.balance?.tier ?? "free",
+      packSeconds: mint.balance?.packSeconds ?? 0
+    });
     dbg(`mint ok · model=${mint.model} voice=${mint.voice} phase=${config.phase}`);
     if (config.phase === "walk" && mint.lessonAvailable === false) {
       // The scene still runs off the module's seed; it just isn't following
@@ -349,7 +430,16 @@ export async function startConversation(
           tickTimer = window.setInterval(() => {
             const e = elapsedSec();
             events.onTick?.(e);
-            if (Date.now() - startMs >= maxMs) void stop("cap");
+            // Threshold CROSSINGS rather than equality: a backgrounded tab on
+            // iOS fires its interval whenever the OS feels like it, and a
+            // warning that only fires on the exact second is a warning that
+            // does not fire.
+            for (const event of clockEventsBetween(lastTickSec, e, clock)) {
+              if (event === "warn") events.onWarning?.(Math.max(0, clock.endAtSeconds - e));
+              else if (event === "end") requestCapStop();
+              else if (event === "hard-stop") void stop("cap");
+            }
+            lastTickSec = e;
           }, 1000);
         }
         bumpIdle();
@@ -398,12 +488,20 @@ export async function startConversation(
         bumpIdle();
         return;
       }
+      // The tutor started producing a turn. Tracked so the cap can wait for it
+      // to land instead of cutting it off (see requestCapStop).
+      if (type === "response.created") {
+        gate = turnStarted(gate);
+        bumpIdle();
+        return;
+      }
       if (
         type === "response.output_audio_transcript.delta" ||
         type === "response.audio_transcript.delta"
       ) {
         const d = typeof ev.delta === "string" ? ev.delta : "";
         if (d) events.onAssistantDelta?.(d);
+        gate = turnStarted(gate);
         bumpIdle();
         return;
       }
@@ -413,6 +511,14 @@ export async function startConversation(
         type === "response.done"
       ) {
         events.onAssistantDone?.();
+        // The turn landed. If the cap arrived while the tutor was talking,
+        // THIS is the moment the session was waiting for.
+        const ended = turnEnded(gate);
+        gate = ended.gate;
+        if (ended.stopNow) {
+          void stop("cap");
+          return;
+        }
         bumpIdle();
         return;
       }

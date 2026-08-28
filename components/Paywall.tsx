@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { COMING_SOON, tutorComingSoon } from "@/lib/release";
+import { ROLLOVER_NOTE } from "@/lib/tutor/meterCopy";
 import { startCheckout, startPackCheckout, supabase, type Tier } from "@/lib/supabase";
 
 interface Plan {
@@ -203,7 +204,8 @@ export function Paywall({
               </span>
             </p>
             <p className="mt-2 text-xs text-amber-100/40">
-              The +100 and +200 minute packs go on sale when the tutor arrives. Your plan&apos;s
+              The +100 and +200 minute packs go on sale when the tutor arrives. They never expire —
+              pack minutes roll over, while a plan&apos;s minutes reset monthly. Your plan&apos;s
               unlimited translation is unaffected.
             </p>
           </div>
@@ -230,9 +232,15 @@ export function Paywall({
                 {busy === "pack-200" ? "Opening…" : "+200 min · $17.99"}
               </button>
             </div>
-            <p className="mt-2 text-xs text-amber-100/40">
-              Packs add minutes for the rest of this month.
-            </p>
+            {/* This sentence was "Packs add minutes for the rest of this
+                month", which was true of the month-scoped `bonus_seconds` the
+                packs used to credit and is false now. Tutor phase 2 made a
+                pack a real purchase: it credits `profiles.pack_seconds`, which
+                rolls over and never expires, and the meter spends the plan's
+                rented minutes before it touches it. Saying so BEFORE the
+                charge is cheaper than saying it after. */}
+            <p className="mt-2 text-xs text-amber-100/40">{ROLLOVER_NOTE.en}</p>
+            <p className="text-xs text-amber-100/30">{ROLLOVER_NOTE.es}</p>
           </div>
         ) : null}
 

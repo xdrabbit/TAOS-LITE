@@ -61,29 +61,92 @@ async function reReadSubscription(snapshot: Stripe.Subscription): Promise<Stripe
   }
 }
 
-function monthKey(d = new Date()): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
+// ── Add-on minute packs ─────────────────────────────────────────────────────
+//
+// Two things changed here in tutor phase 2, and both of them are about a pack
+// being a PURCHASE rather than a subscription:
+//
+//   1. The credit is PERSISTENT. It used to land on `bonus_seconds` +
+//      `bonus_period`, scoped to the calendar month it was bought in — which
+//      meant a $9.99 pack bought on the 30th was mostly a donation. It now
+//      lands on `profiles.pack_seconds`, which rolls over and never expires.
+//      Plan minutes still reset monthly; lib/tutor/meter.ts spends the plan
+//      first so the rented minutes go before the bought ones.
+//
+//   2. It is REPLAY-SAFE. Stripe redelivers `checkout.session.completed` on
+//      any non-2xx, on a manual resend from the dashboard, and after a timeout
+//      it decided about on its own — and this handler already answers
+//      `{ received: true, handled: false }` (a 200) on a processing hiccup,
+//      which means a retry that succeeds the second time would have credited
+//      twice under a read-add-write. `stripe_pack_credits` makes the checkout
+//      session id the idempotency key: the insert is attempted FIRST, and a
+//      primary-key conflict means these minutes are already on the balance.
+//
+// The PR #29 rule applies as it does everywhere else on this route: never bill
+// off the event's snapshot. The session is re-read from Stripe, and the credit
+// only happens if Stripe currently says it was paid.
 
-// Credit add-on pack minutes to the current month's bonus balance (month-scoped:
-// a pack tops up the current month and is superseded next month).
-async function creditBonus(userId: string, seconds: number) {
-  const period = monthKey();
+async function creditPack(
+  checkoutSessionId: string,
+  userId: string,
+  seconds: number
+): Promise<boolean> {
+  // Claim first. If this conflicts, another delivery of the same event already
+  // paid these minutes out and there is nothing to do.
+  const { error } = await supabaseAdmin
+    .from("stripe_pack_credits")
+    .insert({ checkout_session_id: checkoutSessionId, user_id: userId, seconds });
+  if (error) {
+    // 23505 = unique_violation: the expected, boring case on a redelivery.
+    // Anything else means the claim itself failed, and crediting without a
+    // claim is how a $9.99 pack becomes an unbounded one.
+    // eslint-disable-next-line no-console
+    console.log(`taos.stripe.pack skip · ${checkoutSessionId} · ${error.code ?? "?"}`);
+    return false;
+  }
+
   const { data: p } = await supabaseAdmin
     .from("profiles")
-    .select("bonus_seconds, bonus_period")
+    .select("pack_seconds")
     .eq("id", userId)
     .maybeSingle();
-  const cur =
-    (p?.bonus_period as string | null) === period ? ((p?.bonus_seconds as number | null) ?? 0) : 0;
+  const current = (p?.pack_seconds as number | null) ?? 0;
   await supabaseAdmin
     .from("profiles")
-    .update({
-      bonus_seconds: cur + seconds,
-      bonus_period: period,
-      updated_at: new Date().toISOString()
-    })
+    .update({ pack_seconds: current + seconds, updated_at: new Date().toISOString() })
     .eq("id", userId);
+  // eslint-disable-next-line no-console
+  console.log(
+    `taos.stripe.pack credit · ${checkoutSessionId} · user=${userId} · +${seconds}s · balance=${current + seconds}s`
+  );
+  return true;
+}
+
+// Never trust the event's snapshot — same rule as reReadSubscription. A
+// checkout session's `payment_status` at event time can still be `unpaid` for
+// the asynchronous payment methods, and a pack credited off that snapshot is
+// minutes given away for a charge that never landed.
+async function reReadCheckoutSession(
+  snapshot: Stripe.Checkout.Session
+): Promise<Stripe.Checkout.Session> {
+  try {
+    return await stripe.checkout.sessions.retrieve(snapshot.id);
+  } catch {
+    return snapshot;
+  }
+}
+
+async function handlePackPurchase(snapshot: Stripe.Checkout.Session): Promise<void> {
+  const session = await reReadCheckoutSession(snapshot);
+  if (session.payment_status !== "paid") {
+    // eslint-disable-next-line no-console
+    console.log(`taos.stripe.pack unpaid · ${session.id} · ${session.payment_status}`);
+    return;
+  }
+  const minutes = parseInt(session.metadata?.pack_minutes ?? "0", 10);
+  const userId = (session.client_reference_id ?? session.metadata?.user_id) as string | null;
+  if (!(minutes > 0) || !userId) return;
+  await creditPack(session.id, userId, minutes * 60);
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -106,11 +169,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        // One-time add-on pack purchase → credit bonus minutes.
+        // One-time add-on pack purchase → credit persistent pack minutes.
         if (session.mode === "payment" && session.metadata?.kind === "pack") {
-          const minutes = parseInt(session.metadata.pack_minutes ?? "0", 10);
-          const userId = (session.client_reference_id ?? session.metadata.user_id) as string | null;
-          if (minutes > 0 && userId) await creditBonus(userId, minutes * 60);
+          await handlePackPurchase(session);
           break;
         }
         const subId =

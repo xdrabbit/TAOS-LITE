@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { progressKey, markPhaseDone, nextPhase, completedPhases, recordScore, parseStoredProgress } from "@/lib/tutor/progress";
 
 const API_DIR = new URL("../app/api/tutor/", import.meta.url);
+const METER = new URL("../lib/tutor/meter.ts", import.meta.url);
 
 function routeFiles(): string[] {
   const out: string[] = [];
@@ -43,30 +44,64 @@ describe("every tutor route is behind the flag", () => {
 
   it("guards the spending routes with a session too", () => {
     // The 404 is the flag; the guard is what stands there once the flag is on.
-    // Realtime does it with its own tutor-minute allowance check, which needs
-    // the user id anyway.
+    // Realtime asks for the user directly because the meter needs a user id to
+    // charge, not just permission to proceed.
     const lesson = readFileSync(new URL("lesson/route.ts", API_DIR), "utf8");
     const assess = readFileSync(new URL("assess/route.ts", API_DIR), "utf8");
     const realtime = readFileSync(new URL("realtime/route.ts", API_DIR), "utf8");
     expect(lesson).toContain("guardSpend");
     expect(assess).toContain("guardSpend");
-    expect(realtime).toContain("checkTutorAllowance");
+    expect(realtime).toContain("getUserFromRequest");
+    expect(realtime).toContain('{ status: 401 }');
   });
 });
 
-describe("the metering seam phase 2 hooks into", () => {
+// ── The metering seam, phase 2 ─────────────────────────────────────────────
+// Phase 1 promised two things and delivered the first: a start line and an end
+// line sharing one id, with the debit to follow. Both halves are pinned now —
+// the log lines (still the only way a production cost question has ever been
+// answered) AND the money, which is the part the log cannot prove.
+describe("the metering seam", () => {
   it("emits a start line when a session is minted, and an end line when it stops", () => {
     const realtime = readFileSync(new URL("realtime/route.ts", API_DIR), "utf8");
     const session = readFileSync(new URL("session/route.ts", API_DIR), "utf8");
-    expect(realtime).toContain("logTutorSessionEvent");
-    expect(realtime).toContain('event: "start"');
-    expect(session).toContain('event: "end"');
+    const meter = readFileSync(METER, "utf8");
+    // The lines moved INTO the meter in phase 2 — one place that knows a
+    // session started, one that knows it ended, which is what the seam was
+    // for. The routes reach it through beginTutorSession / settleTutorSession.
+    expect(meter).toContain("logTutorSessionEvent");
+    expect(meter).toContain('event: "start"');
+    expect(meter).toContain('event: "end"');
+    expect(realtime).toContain("beginTutorSession");
+    expect(session).toContain("settleTutorSession");
   });
 
   it("ties the two lines together with one id", () => {
+    const meter = readFileSync(METER, "utf8");
     const realtime = readFileSync(new URL("realtime/route.ts", API_DIR), "utf8");
-    expect(realtime).toContain("newTutorSessionId");
+    expect(meter).toContain("newTutorSessionId");
     expect(realtime).toContain("sessionId");
+  });
+
+  it("keeps the allowance rule in one place", () => {
+    // Phase 1 carried `checkTutorAllowance` inline in the realtime route with
+    // a note saying phase 2 would move it behind the meter, so Walk, Run and
+    // Partner could not grow three copies of the rule between them. Four
+    // routes spend tutor minutes now; none of them may re-derive what is left.
+    for (const file of ["realtime/route.ts", "assess/route.ts", "session/route.ts"]) {
+      const src = readFileSync(new URL(file, API_DIR), "utf8");
+      expect(src, file).not.toContain("TUTOR_SECONDS_BY_TIER");
+      expect(src, file).not.toContain("checkTutorAllowance");
+    }
+  });
+
+  it("never bills the number the browser sent", () => {
+    // The end route takes `seconds` from a client that has an interest in it
+    // being small. It is recorded as client_seconds and reconciled against the
+    // server's own clock; it is never the figure that is debited.
+    const session = readFileSync(new URL("session/route.ts", API_DIR), "utf8");
+    expect(session).toContain("clientSeconds");
+    expect(session).not.toMatch(/p_billed_seconds|serverSeconds:\s*clientSeconds/);
   });
 });
 
