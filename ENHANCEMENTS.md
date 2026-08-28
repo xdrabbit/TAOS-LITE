@@ -406,10 +406,20 @@ is not a prerequisite for using it.
 
 - **Merge train, 2026-08-28** — PR #41 (tutor phase 2 metering) and PR #42
   (realtime cost caps) shipped back to back in that order; #42 was rebased onto
-  the post-#41 `main` because both edited this file. Neither changes what a
-  customer sees today: tutor stays dark behind `NEXT_PUBLIC_ENABLE_TUTOR`, and
-  the caps take effect on the next mint. The flip checklist below is still
-  Tom's to walk.
+  the post-#41 `main` because both edited this file. The caps take effect on
+  the next mint.
+  → **Correction, same day:** the sentence that stood here said tutor stays
+  dark. It does not. Verifying the merge against production turned up
+  `NEXT_PUBLIC_ENABLE_TUTOR=1` scoped to **Production and Preview**, added
+  2026-08-26 alongside phase 1 — so `/tutor` has been serving 200 and the
+  storefront has been selling packs unlabelled since then, and the phase-1
+  note's "flag off in Production, Preview is unscoped" read one half of the
+  mistake and missed the other. Nobody appears to have walked in: the last
+  `tutor_sessions` row is 2026-07-27 and both users on the table are founders.
+  Phase 2 landing is what put a meter under it. The flip checklist below is
+  still Tom's to walk — steps 1 and 2 are, accidentally, already done, so what
+  is left is deciding whether to take tutor back down until step 3 is walked,
+  or to walk step 3 now on a feature that is already public.
 
 - **Cost caps on the public realtime screens, and a toggle that obeys** —
   2026-08-28, PR #42. The exposure flagged while costing /call turned out to
@@ -505,7 +515,7 @@ is not a prerequisite for using it.
   action in the dashboard today anyway. (added 2026-08-28)
 
 - **Walk and Run cannot circle one phrase — the client owns the script
-  position** (PR #TBD, 2026-08-27) — Tom's field test, screenshot-verified: the
+  position** (PR #40, 2026-08-27) — Tom's field test, screenshot-verified: the
   Walk agent took "Buenos días" correctly five times, said "Ahora es perfecto.
   Gracias." and then asked for it again after a "mhm". The second line of the
   scene never arrived. The cause is structural — a realtime model holds no
