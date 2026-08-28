@@ -25,6 +25,18 @@ export interface ModuleProgress {
   crawl?: string;
   walk?: string;
   run?: string;
+  /**
+   * ISO timestamp of the moment the learner pressed "Finish this module".
+   *
+   * Distinct from having all three phases ticked, which happens on its own:
+   * Run marks itself done when the scene reaches its last beat, so a learner
+   * who never presses the button still ends up with three timestamps. This
+   * field is the deliberate act — "I'm done with this one" — and it is what
+   * the picker badges. Reading treats three ticked phases as complete anyway
+   * (isModuleComplete), because a learner who did all the work before this
+   * field existed did finish the module.
+   */
+  completedAt?: string;
   /** Best Azure pronunciation score seen in Crawl, 0-100. */
   bestScore?: number;
   /**
@@ -68,6 +80,51 @@ export function completedPhases(progress: ModuleProgress | undefined): number {
   return (progress.crawl ? 1 : 0) + (progress.walk ? 1 : 0) + (progress.run ? 1 : 0);
 }
 
+/**
+ * Has this module been finished?
+ *
+ * Either the learner pressed the button, or they walked all three phases —
+ * the second half is not a fallback so much as the honest reading: the phases
+ * ARE the module, and progress written before `completedAt` existed is still
+ * a finished module.
+ */
+export function isModuleComplete(progress: ModuleProgress | undefined): boolean {
+  if (!progress) return false;
+  return Boolean(progress.completedAt) || completedPhases(progress) === 3;
+}
+
+/**
+ * "Finish this module" was pressed.
+ *
+ * Ticks Run as well as stamping the finish, because the button is reachable
+ * before the scene reaches its last beat ("Mark Run done →") and a module
+ * cannot be complete with a phase still open. Returns a NEW object for the
+ * same reason markPhaseDone does.
+ */
+export function finishModule(progress: TutorProgress, key: string, at: string): TutorProgress {
+  return { ...progress, [key]: { ...progress[key], run: at, completedAt: at } };
+}
+
+/**
+ * The module to nudge next: the first one not yet finished.
+ *
+ * In curriculum order rather than "the one after the one you just did" — the
+ * fourteen build on each other (docs/tutor-curriculum-plan.md), so a learner
+ * who skipped ahead to Trouble should still be pointed back at the first gap.
+ * `null` once every module is done; there is nothing left to point at.
+ */
+export function nextModuleId(
+  progress: TutorProgress,
+  moduleIds: readonly string[],
+  target: string,
+  learner: string
+): string | null {
+  for (const id of moduleIds) {
+    if (!isModuleComplete(progress[progressKey(id, target, learner)])) return id;
+  }
+  return null;
+}
+
 export function parseStoredProgress(raw: string | null): TutorProgress {
   if (!raw) return {};
   try {
@@ -81,6 +138,7 @@ export function parseStoredProgress(raw: string | null): TutorProgress {
       if (typeof v.crawl === "string") entry.crawl = v.crawl;
       if (typeof v.walk === "string") entry.walk = v.walk;
       if (typeof v.run === "string") entry.run = v.run;
+      if (typeof v.completedAt === "string") entry.completedAt = v.completedAt;
       if (typeof v.bestScore === "number" && Number.isFinite(v.bestScore)) {
         entry.bestScore = Math.max(0, Math.min(100, v.bestScore));
       }
