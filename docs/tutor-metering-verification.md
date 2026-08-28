@@ -86,7 +86,27 @@ that closing a tab is how you get free minutes. The live session was left
 alone — a reaper that collected in-flight sessions would end real
 conversations.
 
-### 4. Cleanup
+### 4. The routes deploy and answer (branch preview, 2026-08-28)
+
+`NEXT_PUBLIC_ENABLE_TUTOR=1` is set on the Preview environment unscoped, so the
+branch deployment has the tutor on. Probed unauthenticated:
+
+| route | expected | actual |
+|---|---|---|
+| `GET /api/tutor/balance` | 401 (new route, must exist and be reachable) | **401** `Please sign in to use the tutor.` |
+| `POST /api/tutor/realtime` | 401 | **401** |
+| `POST /api/tutor/session` | 401 | **401** |
+
+The previous branch preview 404s `/api/tutor/balance`, which is the control:
+the route is genuinely new and genuinely deployed rather than being answered by
+a stale build.
+
+Modest but not nothing. A 401 rather than a 500 means `lib/tutor/meter.ts` —
+which now imports `supabaseAdmin` and `lib/release` at module scope — loads
+without throwing under the real bundler and the real runtime. It does NOT prove
+the meter works: the auth check runs before the meter is touched.
+
+### 5. Cleanup
 
 Every row created above was deleted and the pack balance reset. Final state of
 the database: `tutor_usage` 0 rows, `tutor_sessions` 0 open, every
