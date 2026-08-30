@@ -16,6 +16,18 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- The header slides sideways on every phone — measured 2026-08-30 while
+  swapping the menu icon (PR #TBD): the signed-in header's content is 406 px
+  wide at 390, 360 and 320 px viewports, so `document.scrollWidth` exceeds the
+  viewport and the whole page can be dragged horizontally. Pre-existing, not
+  new. `Live` + `Together ▾` + `Translate` + share + the More button no longer
+  fit, which is the same overflow the Together menu was created to fix on
+  8/19 — it has simply grown back. Options, cheapest first: fold `Translate`
+  into the More menu (it is a screen, and the menu already holds screens);
+  drop the header to icons-only below ~380 px; or let the row wrap. Worth
+  doing before the wave, since it is a worse first impression than the X was.
+  (added 2026-08-30)
+
 - Chat delete, one real tap — the hygiene pass (PR #37) shipped
   "either partner can burn the chat" and proved the semantics against the
   live schema in a rolled-back transaction, but nobody has yet tapped Delete
@@ -403,6 +415,36 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **The X that meant "more", 2026-08-30** — PR #TBD. Liz, taking the app to
+  strangers ahead of the launch wave: the round button in the header that
+  opens Tutor / Video / Photo / History / the guide / About reads as
+  **delete-or-close**, and people will not tap it. It was not a stray icon —
+  the trigger drew the first letter of the signed-in email, and on the account
+  Liz was demoing from (`xdrabbit@`) that letter is **X**. So the control that
+  OPENS the menu was wearing the universal symbol for dismissing things, and
+  which glyph a stranger met depended on whose phone it was: an `x` email drew
+  an X, an email starting with a digit drew a number, an email with no
+  alphanumeric at all drew a person icon.
+  The closed state is the nine-dot apps grid now — the affordance every phone
+  already teaches — and the OPEN state is an X, which finally means what it
+  looks like. Labelled `More · Más` closed and `Close menu · Cerrar menú`
+  open, on both `aria-label` and `title`. Both glyphs sit in one 16px box and
+  cross-fade, so the header cannot reflow mid-tap (measured: the button and
+  both glyphs hold the same rect across closed → open → closed).
+  The email did not just disappear: it was only ever the trigger's `title`,
+  which needs a mouse and so had never rendered on a phone at all. It is a
+  line at the top of the menu now, above the Sign out it belongs to.
+  Fenced by `tests/nav-menu-trigger.test.ts`, and walked in headless Chrome at
+  390 / 360 / 320 px against the shipped component.
+  → **Found while measuring, not fixed here:** the signed-in header
+  **overflows every phone width** — content runs to 406 px against a 390, 360
+  or 320 px viewport, so the whole page slides sideways. Identical on `main`
+  before this change (406 / 406 / 407), so it is pre-existing and not from the
+  icon swap. This is the exact failure the "Together ▾" collapse was built to
+  cure in the first place; `Live` + `Together ▾` + `Translate` + two icons has
+  grown back past the fence. Needs a layout decision, not a one-liner — see
+  **Up next**.
 
 - **The Finish button, 2026-08-28** — PR #TBD. Tom's field report: Module 1,
   all three phases ticked, "You covered the whole topic · Cubriste todo el
