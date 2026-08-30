@@ -351,10 +351,6 @@ export function TranslatorShell({
   const [personalVoiceOpen, setPersonalVoiceOpen] = useState(false);
   const personalVoiceTap = useSecretTaps(() => setPersonalVoiceOpen(true));
 
-  // Avatar initial derived from the signed-in email (the only identity the
-  // component receives — Profile has no name field). Falls back to a generic
-  // user icon when the email yields no alphanumeric character.
-  const avatarInitial = (email.match(/[a-z0-9]/i)?.[0] ?? "").toUpperCase();
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const togetherMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -974,44 +970,88 @@ export function TranslatorShell({
                 <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
               </svg>
             </button>
-            {/* Tutor lives in the avatar menu (with History) — Tom, 7/27:
-                one fewer pill keeps the header from crowding phone widths.
-                Hidden entirely for RC1 (lib/release.ts). */}
+            {/* Tutor lives in this menu (with History) — Tom, 7/27: one fewer
+                pill keeps the header from crowding phone widths. Hidden
+                entirely for RC1 (lib/release.ts).
+
+                The trigger used to be the signed-in email's first letter, and
+                on Tom's account (xdrabbit@) that letter is X — so the button
+                that OPENS the menu was drawn as the universal symbol for
+                close/delete. Liz, launching the wave on 8/30: strangers read
+                it as "remove" and would not tap it. Any account whose email
+                starts with x, or with no letter at all, had the same problem.
+
+                So the closed state is the nine-dot apps grid every phone
+                already teaches — "there is more in here" — and the open state
+                is an X, which now genuinely means close. Both glyphs are
+                stacked in the same 16px box and cross-faded, so the header
+                never reflows on the swap. */}
             <div ref={accountMenuRef} className="relative">
               <button
                 type="button"
                 onClick={() => setAccountMenuOpen((o) => !o)}
-                aria-label="Account menu"
+                aria-label={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
                 aria-haspopup="menu"
                 aria-expanded={accountMenuOpen}
-                title={email}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-xs font-semibold text-amber-200 transition active:scale-95"
+                title={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
               >
-                {avatarInitial || (
+                <span className="relative block h-4 w-4">
+                  {/* Nine dots, filled rather than stroked: at 16px a 2px
+                      stroke on a 3px circle fills it in anyway, and dots read
+                      as "apps" where nine tiny rings read as noise. */}
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
+                      accountMenuOpen ? "opacity-0" : "opacity-100"
+                    }`}
+                  >
+                    <circle cx="5" cy="5" r="2" />
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="19" cy="5" r="2" />
+                    <circle cx="5" cy="12" r="2" />
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="19" cy="12" r="2" />
+                    <circle cx="5" cy="19" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                    <circle cx="19" cy="19" r="2" />
+                  </svg>
                   <svg
                     aria-hidden="true"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2"
-                    className="h-4 w-4"
+                    strokeLinecap="round"
+                    className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
+                      accountMenuOpen ? "opacity-100" : "opacity-0"
+                    }`}
                   >
-                    <circle cx="12" cy="8" r="4" />
-                    <path d="M4 21c0-4 3.5-6 8-6s8 2 8 6" strokeLinecap="round" />
+                    <path d="M6 6l12 12M18 6L6 18" />
                   </svg>
-                )}
+                </span>
               </button>
               {accountMenuOpen ? (
                 <div
                   role="menu"
-                  aria-label="Account"
+                  aria-label="More · Más"
                   className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
+                  {/* Who you are signed in as. This used to be the trigger's
+                      `title`, which no phone has ever rendered — a tooltip
+                      needs a mouse. Sign out sits at the bottom of this same
+                      menu, so the account it signs out of belongs at the top
+                      of it. */}
+                  <p className="truncate px-4 py-2 text-[11px] text-amber-100/50">
+                    {email}
+                  </p>
                   {tutorEnabled() ? (
                     <a
                       href="/tutor"
                       role="menuitem"
-                      className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
                       Tutor
                     </a>
@@ -1023,7 +1063,7 @@ export function TranslatorShell({
                     <a
                       href="/video"
                       role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition first:border-t-0 hover:bg-amber-400/10"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
                       Video captions · Subtítulos
                     </a>
@@ -1031,7 +1071,7 @@ export function TranslatorShell({
                   <a
                     href="/vision"
                     role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition first:border-t-0 hover:bg-amber-400/10"
+                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                   >
                     Photo translator · Fotos
                   </a>
