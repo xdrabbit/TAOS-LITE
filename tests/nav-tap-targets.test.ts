@@ -128,7 +128,34 @@ describe("nothing in the nav is smaller than a fingertip", () => {
     const h = header();
     const items = h.match(/role="menuitem"/g) ?? [];
     expect(items.length).toBeGreaterThan(4);
-    expect(h.match(/min-h-\[44px\]/g) ?? []).toHaveLength(items.length);
+    // Every menu item, plus every pill in the row below (see the next test).
+    const nav = h.slice(h.indexOf("<nav"));
+    const pills = nav.match(/rounded-full border border-amber-300\/30/g) ?? [];
+    expect(h.match(/min-h-\[44px\]/g) ?? []).toHaveLength(items.length + pills.length);
+  });
+
+  it("gives the SCREEN PILLS 44px too, which #53 claimed and did not do", () => {
+    // The residual from that PR, and the one that mattered most on a phone.
+    // It raised the two icon triggers to 44x44 and floored every menu item,
+    // and its description said "every control ... ≥44 px" — but the pills
+    // stayed at px-3 py-1.5 on a text-xs line, which lays out 28px tall. They
+    // are the row a thumb reaches for most, and 28px means the touch has to
+    // land within 14px vertically of centre; #53's own rig measured a
+    // reaching thumb drifting 12-20px.
+    //
+    // It was invisible because the browser rig was passed `min: 0` for these
+    // four and 44 for everything else. It asks for 44 across the board now.
+    const nav = header().slice(header().indexOf("<nav"));
+    const pills = nav.match(/className="[^"]*rounded-full border border-amber-300\/30[^"]*"/g) ?? [];
+    // Live, Call, Together ▾, Translate.
+    expect(pills.length).toBeGreaterThanOrEqual(4);
+    for (const pill of pills) {
+      expect(pill).toContain("min-h-[44px]");
+      // min-height does nothing to an inline element, and centres nothing
+      // without it: the floor has to come with a box that can grow.
+      expect(pill).toContain("inline-flex");
+      expect(pill).toContain("items-center");
+    }
   });
 });
 

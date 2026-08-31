@@ -56,14 +56,30 @@
 // then DELETE THEM — tests/nav-completeness.test.ts fails on an unclassified
 // route if one is left behind, which is that fence working.
 //
-// ── The trap in writing this check ─────────────────────────────────────────
-// Emulate with `mobile: true` and Chrome grows the layout viewport to the
-// CONTENT width when the content overflows — innerWidth came back 406 on a
-// 390 px override, which hides the very overflow being measured and makes the
-// page look unpannable. `mobile: false` plus touch emulation keeps the
-// viewport honest at the width asked for. It costs a classic scrollbar (~15
-// px), which a phone does not have, so the widths below are pessimistic by
-// that much rather than flattering.
+// ── The trap in writing this check, and the correction ─────────────────────
+// This ran `mobile: false` for its first day, on the grounds that emulating
+// with `mobile: true` grew the viewport to the CONTENT width and hid the
+// overflow being measured: innerWidth came back 406 on a 390 px override.
+//
+// That observation was right and the conclusion drawn from it was wrong. It
+// is `window.innerWidth` that mobile emulation reports as the wider number;
+// `document.documentElement.clientWidth` — which is what every check below
+// actually reads — stays at the width asked for. Measured 8/31 against a page
+// holding one deliberately 406 px-wide row inside a 390 px viewport:
+//
+//                  innerWidth   clientWidth   scrollWidth   pannable?
+//   mobile: false      390          390           406        yes, seen
+//   mobile: true       406          390           406        yes, seen
+//
+// So the overflow is visible either way, and `mobile: true` is the profile a
+// phone actually has: no classic scrollbar eating 15 px of layout (under
+// `mobile: false` the fixed header measured `clientWidth` 375 on a 390 px
+// device — every width below was quietly 15 px pessimistic), a mobile user
+// agent, and the mobile compositor's own touch handling. It is what this rig
+// runs now.
+//
+// The one thing NOT to do is assert on `window.innerWidth`. Nothing here
+// does, and this note is why.
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -159,7 +175,8 @@ async function open(url, width) {
     width,
     height: 844,
     deviceScaleFactor: 3,
-    mobile: false
+    // A real phone profile: see the header note. clientWidth stays honest.
+    mobile: true
   });
   await send("Page.navigate", { url });
   for (let i = 0; i < 40; i += 1) {
@@ -211,11 +228,20 @@ for (const width of WIDTHS) {
     "the page cannot be panned sideways",
     `scrollWidth ${geo.scrollWidth} vs layout ${geo.layout}`
   );
+  // 44 for everything, 8/31. The four pills used to be passed `min: 0` while
+  // the two icon triggers were held to 44 — so this rig reported "ALL CHECKS
+  // PASSED" over a pill row that measured 48x30, and #53's description went
+  // out claiming every control was ≥44 px. A floor that is only applied to
+  // the controls somebody remembered is not a floor. The pills are the row a
+  // thumb reaches for most; they are 48x44 now.
+  //
+  // Width is deliberately part of it too: 44x44 is the whole target, and a
+  // pill that is tall enough and 30 px wide is still a miss waiting to happen.
   for (const [label, sel, min] of [
-    ["Live", `document.querySelector('header a[href="/live"]')`, 0],
-    ["Call pill", CALL_PILL, 0],
-    ["Together ▾", TOGETHER, 0],
-    ["Translate", `document.querySelector('header a[href="/translate"]')`, 0],
+    ["Live", `document.querySelector('header a[href="/live"]')`, 44],
+    ["Call pill", CALL_PILL, 44],
+    ["Together ▾", TOGETHER, 44],
+    ["Translate", `document.querySelector('header a[href="/translate"]')`, 44],
     ["Share", SHARE, 44],
     ["More · Más", GRID, 44]
   ]) {

@@ -516,6 +516,42 @@ is not a prerequisite for using it.
   read: the wrapping, the anchoring, the 44 px floors, the containment checks,
   and Call's single guarded entry.
 
+  **Two residuals from it, closed the same day** — PR #54, and both of them
+  are about a fence that only fenced what somebody remembered:
+
+  1. **The pills were never 44 px.** #53 raised the two icon triggers and
+     floored every menu item, and its description said "every control ...
+     ≥44 px". The four screen pills stayed at `px-3 py-1.5` on a `text-xs`
+     line, which lays out **48×30** — the row a thumb reaches for most, 14 px
+     under the floor, on the phone the whole PR was about. It was invisible
+     because the rig was passed `min: 0` for exactly those four and `44` for
+     everything else, so it printed ALL CHECKS PASSED over them. They are
+     48×44 now (`inline-flex min-h-[44px] items-center`), the header goes
+     82 px → 96 px at 390 px, and the rig asks 44 of every control. Held
+     against the old markup it now fails 12 checks, four per phone width.
+  2. **The rig ran `mobile: false`.** Deliberately, and on a real
+     observation — under `mobile: true` `window.innerWidth` came back 406 on
+     a 390 px override, which looked like the emulator hiding the overflow
+     being measured. Measured properly this time, against a page holding one
+     deliberately 406 px-wide row:
+
+     | | `innerWidth` | `documentElement.clientWidth` | `scrollWidth` |
+     |---|---|---|---|
+     | `mobile: false` | 390 | 390 | 406 |
+     | `mobile: true` | **406** | 390 | 406 |
+
+     Only `innerWidth` moves, and no check reads it — the pannability test
+     compares `scrollWidth` against `clientWidth`, which is honest in both.
+     Meanwhile `mobile: false` costs a classic scrollbar a phone does not
+     have: the fixed header measured `clientWidth` **375** on a 390 px
+     device, so every width the rig printed was quietly 15 px pessimistic.
+     It runs `mobile: true` now, and the header note says why rather than
+     leaving the next person to rediscover the innerWidth trap.
+
+  The **Call-as-a-founder-pill** change from #53 is left exactly as it is.
+  It is a product decision Tom asked for and approved — one touch to the
+  screen he and Liz use daily — not a bug this pass is second-guessing.
+
 - **The /call relay, and two silences around it, 2026-08-31** — PR #52.
   Tom and Liz, both founders, both seeing /call, the call initiating and
   never connecting. The field report named TURN as the suspect and TURN was
