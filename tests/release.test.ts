@@ -280,6 +280,26 @@ describe("callVisibleTo (founders now, everyone only when the flag ships)", () =
     expect(read("app/call/page.tsx")).toContain('deny="home"');
     expect(read("app/video/page.tsx")).not.toContain("deny=");
   });
+
+  it("bounces a non-founder off /fast too — a quickie URL travels in messages", () => {
+    // Tom asked for a 307 here. It cannot be one: /tutor redirects
+    // server-side because tutorEnabled() is an env flag the server can read,
+    // whereas this gate is fastVisibleTo(EMAIL) and the session lives
+    // client-side, so a server component cannot tell a founder from anyone
+    // else. Same destination, client-side. The fence is the route.
+    expect(read("app/fast/page.tsx")).toContain('deny="home"');
+  });
+
+  it("keeps the /fast money route as the actual fence, answering 404", () => {
+    const route = read("app/api/fast/route.ts");
+    const guard = route.indexOf("await guardSpend(req)");
+    const gate = route.indexOf("fastVisibleTo(email)");
+    const spend = route.indexOf("await fastTranslate(");
+    expect(guard).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(guard);
+    expect(spend).toBeGreaterThan(gate);
+    expect(route).toContain('status: 404');
+  });
 });
 
 describe("the /call routes are the fence, not the page", () => {

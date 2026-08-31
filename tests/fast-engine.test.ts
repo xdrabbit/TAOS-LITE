@@ -19,6 +19,7 @@ import {
   LITERAL_RULE,
   PARTIAL_INPUT_RULE
 } from "@/lib/fast/prompt";
+import { readFileSync } from "node:fs";
 import { LANGUAGES } from "@/lib/languages/catalog";
 
 const KEY = process.env.AZURE_TRANSLATOR_KEY;
@@ -232,5 +233,25 @@ describe("the literal prompt", () => {
     const p = buildLiteralAutoInstructions("en", "es");
     expect(p).toContain("Detect the language of the ORIGINAL INPUT");
     expect(p).toContain("sourceLang is the language the INPUT was written in");
+  });
+});
+
+describe("the /fast speaker button and tier 2", () => {
+  it("asks the catalog before drawing a speaker, not after tapping it", () => {
+    // requestSpeech answers `null` for a text-only language rather than
+    // failing, which is right for a caller that already committed to asking.
+    // But on a screen this bare an icon that silently does nothing is worse
+    // than no icon — so the gate is `isTextOnlyLanguage`, checked before the
+    // button renders. Asserted by source read because there is no DOM here;
+    // what matters is that the question is asked at all.
+    const src = readFileSync(new URL("../components/FastShell.tsx", import.meta.url), "utf8");
+    expect(src).toContain("isTextOnlyLanguage");
+    const gate = src.slice(src.indexOf("const speakable"), src.indexOf("const speakable") + 220);
+    expect(gate).toContain("!isTextOnlyLanguage(target)");
+  });
+
+  it("has tier-2 languages to hide it for — this is not a hypothetical", () => {
+    const textOnly = LANGUAGES.filter((l) => !l.tts);
+    expect(textOnly.length).toBeGreaterThan(0);
   });
 });

@@ -16,6 +16,22 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Create the Azure Translator resource, then walk /fast on a phone** — two
+  halves of one sitting. `/fast` shipped founders-only on 8/30 (PR #46) and is
+  running on its FALLBACK engine, because Azure Translator is a different
+  Azure resource kind from the Speech one the tutor uses and nobody has made
+  it yet. Portal steps, tier (F0 free, 2M chars/month), region and the
+  `vercel env add` commands are in `docs/fast-engine.md`; the screen switches
+  engines by itself and the badge at the bottom changes from "literal AI" to
+  "Azure Translator", which is how to confirm it took. One rig command in that
+  doc then fills in its only unmeasured row.
+  The other half is the judgement call the founders gate exists for: `/fast`
+  says "cuesta un brazo y una pierna" where `/translate` would say "cuesta un
+  ojo de la cara", **on purpose**. Does that read as a second tool, or as a
+  bug? Nobody has typed into it on a phone yet — it was verified against the
+  real route and in headless Chrome, which is the same gap the Crawl scoring
+  had. Answer that before `NEXT_PUBLIC_ENABLE_FAST=1`. (added 2026-08-30)
+
 - The header slides sideways on every phone — measured 2026-08-30 while
   swapping the menu icon (PR #TBD): the signed-in header's content is 406 px
   wide at 390, 360 and 320 px viewports, so `document.scrollWidth` exceeds the

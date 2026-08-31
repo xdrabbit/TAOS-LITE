@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { languageFlag, languageNative, type LanguageCode } from "@/lib/languages/catalog";
 import { jsonAuthHeaders } from "@/lib/authClient";
 import { saveTranslation } from "@/lib/supabase";
-import { requestSpeech } from "@/lib/tts/speech";
+import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import {
@@ -199,9 +199,10 @@ export function FastShell(): JSX.Element {
         sourceLanguage: detected,
         targetLanguage: target
       });
-      // null = the language is text-only. Not an error, and not worth a
-      // message on a screen this bare — the speaker is simply hidden for
-      // those languages (see `speakable` below).
+      // null = the language is text-only. `speakable` already hid the button
+      // for those, so reaching this is the stale-client case: a phone holding
+      // an old bundle after a tier flipped. Quiet either way — it is not an
+      // error and there is nothing useful to say about it.
       if (!blob) return;
       const audio = new Audio(URL.createObjectURL(blob));
       void audio.play();
@@ -226,7 +227,16 @@ export function FastShell(): JSX.Element {
 
   const from = detected ?? explicitSource ?? mine;
   const to = target ?? (from === mine ? theirs : mine);
-  const speakable = useMemo(() => Boolean(translation && target), [translation, target]);
+  // Tier 2 (text-only) languages have no voice, and requestSpeech answers null
+  // for them rather than failing. That is the right behaviour for a caller
+  // that already committed to asking — but on a screen this bare, a speaker
+  // icon that silently does nothing is worse than no icon. So the catalog is
+  // asked BEFORE the button is drawn, the same question the pill row asks when
+  // it puts a muted speaker on a tier-2 pill.
+  const speakable = useMemo(
+    () => Boolean(translation && target && !isTextOnlyLanguage(target)),
+    [translation, target]
+  );
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
