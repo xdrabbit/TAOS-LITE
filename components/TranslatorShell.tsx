@@ -1144,11 +1144,25 @@ export function TranslatorShell({
               a pill to its right, which is what guarantees its dropdown
               (absolute right-0, 11rem wide) has room to open inside the
               container instead of hanging off an edge. Wraps rather
-              than overflows if it ever outgrows a width again. */}
+              than overflows if it ever outgrows a width again.
+
+              min-h-[44px] on every pill, added 8/31 after #53. That PR
+              raised the two icon triggers to 44x44 and gave every menu
+              ITEM a 44px floor, said so in its description, and left the
+              pills at 30px tall — px-3 py-1.5 on a text-xs line — which
+              is 14px under the floor on the row a thumb reaches for
+              most. The rig measured the icons and the menu items and was
+              passed `min: 0` for the pills, so nothing caught it.
+
+              Measured at 390px: the pill goes 48x30 -> 48x44, and the
+              header 82px -> 96px. Fourteen pixels of chrome, for the row
+              a moving thumb is likeliest to miss — a 30px target needs
+              the touch to land within 15px of its centre vertically, and
+              #53's own rig measured a reaching thumb drifting 12-20px. */}
           <nav className="flex flex-wrap items-center justify-end gap-2">
             <a
               href="/live"
-              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
               Live
             </a>
@@ -1170,7 +1184,7 @@ export function TranslatorShell({
             {callVisible ? (
               <a
                 href="/call"
-                className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+                className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
               >
                 Call
               </a>
@@ -1192,7 +1206,7 @@ export function TranslatorShell({
                 onClick={() => setTogetherMenuOpen((o) => !o)}
                 aria-haspopup="menu"
                 aria-expanded={togetherMenuOpen}
-                className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+                className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
               >
                 Together ▾
               </button>
@@ -1225,7 +1239,7 @@ export function TranslatorShell({
             </div>
             <a
               href="/translate"
-              className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
               Translate
             </a>
