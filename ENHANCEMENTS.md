@@ -543,6 +543,17 @@ is not a prerequisite for using it.
   pinning is a decision about the conversation, not about the phrase that was
   just cleared. Somebody who pinned ES→EN to read a menu is about to read the
   next line of the same menu.
+  → **Walked in a real browser** on 2026-08-31
+  (`tests/live-fire/fast-clear-browser-check.mjs`), because three of the four
+  claims are about pixels or about time and no source-reading test can reach
+  them. The mic measured at the same 363px from the top of the viewport empty,
+  typed-into and cleared — the no-layout-shift claim, as a number. Focus came
+  back to the box after a *real* mouse press on the button (a synthetic
+  `.click()` never focuses the button, so it would have faked a pass). And the
+  meter, counted as inserts that actually left the page: one settled quickie →
+  1 row, the clear → still 1, retyping the same words → still 1, clear then a
+  new phrase → 2. Then the flow Tom described end to end: type, clear, speak.
+
 - **/fast metering moved to the server, 2026-08-31** — PR #51. Found
   reviewing #46-#49 rather than in the field, and it was the revenue hole:
   `POST /api/fast` gated who could call it and how fast, then translated
