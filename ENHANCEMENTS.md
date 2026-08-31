@@ -207,6 +207,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   turns out to be needed, and whether the ~1s the cloned voice costs is worth
   paying. The "⚡ Fastest" toggle on the lobby screen exists so Tom can answer
   that last one on a real call without a deploy.
+  → **Walked 2026-08-31, and it did not connect.** Tom and Liz, two real
+  phones: the call initiated and never came up. TURN was needed — see
+  "the /call relay" in Shipped. The two questions still open are the ones
+  that need the phones back: the three-row network matrix (same wifi /
+  mixed / both cellular), and the cloned-voice latency.
 
 - Cantonese field verdict — have the Cantonese-speaking guest judge the v3
   voice and the zh⇄yue auto-detection; swap ELEVENLABS_YUE_MODEL or tune the
@@ -448,6 +453,52 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **The /call relay, and two silences around it, 2026-08-31** — PR #52.
+  Tom and Liz, both founders, both seeing /call, the call initiating and
+  never connecting. The field report named TURN as the suspect and TURN was
+  the suspect — but reading the transport turned up **three** faults, and
+  only the first is about NAT. The other two are why nobody could tell.
+  1. **There was no relay.** `lib/call/session.ts` asked for one public
+     Google STUN server. STUN only tells a phone its own public address; it
+     cannot carry a packet. Two phones behind carrier-grade NAT have no
+     direct path to find, so ICE ran out of candidate pairs and stopped.
+     `POST /api/call/ice` now mints short-lived Cloudflare TURN credentials
+     — **$0.05/GB with the first 1,000 GB free, against Twilio's $0.40/GB**,
+     and no SDK, so `package.json` did not grow. Server-side only: the
+     `NEXT_PUBLIC_TURN_*` path this replaces would have inlined a relay
+     credential into the browser bundle for anyone to read.
+  2. **A doomed connection retried forever, silently.** `restartIce()` does
+     not throw when the restart is about to fail — it succeeds, ICE fails
+     again, and the handler restarted it again. The `catch` holding the only
+     error message was unreachable, so "reconnecting…" was terminal. One
+     restart now, then an honest bilingual failure, plus a 15-second
+     watchdog for the case that never even reaches `failed`.
+  3. **Trickled candidates were thrown away.** `addIceCandidate` throws when
+     there is no remote description yet, and that throw was swallowed as
+     "stale candidate after a rollback". It usually wasn't stale — the
+     answerer trickles while its answer is still in flight down the same
+     Supabase channel, so any candidate that won the race was lost. On a
+     hard network the lost one is the relay candidate, which is the one
+     that would have connected the call. Queued now.
+  → **Diagnostics stayed.** Gathering/connection states, candidate types,
+  TURN credential errors, and the selected candidate pair — to the console
+  under `[taos-call-ice]` and to a collapsed "Connection details" panel on
+  the call screen. The status pill reads `connected · conectado · relay` or
+  `· direct`, because "connected" without saying *how* is what made this a
+  code-reading exercise instead of a screenshot.
+  → **Proven without phones:** `tests/call-connection.test.ts` drives the
+  real `startCall` and fails against each of the three pre-fix behaviours;
+  `tests/live-fire/call-relay-check.mjs` connects two headless peers under
+  `iceTransportPolicy: "relay"` (205 ms, relay/relay pair, zero host or srflx
+  candidates), which is the both-cellular row of the matrix minus the
+  cellular. Cost arithmetic in docs/realtime-cost-model.md.
+  → **Two things this does NOT close.** Production has no
+  `CLOUDFLARE_TURN_KEY_ID` yet, so the relay is dark until Tom creates the
+  key — /call is exactly as good as it was until then, no worse. And the
+  relay path has only been proven against a local TURN server, never against
+  Cloudflare's. The same harness runs against the real thing once the key
+  exists.
 
 - **/fast metering moved to the server, 2026-08-31** — PR #51. Found
   reviewing #46-#49 rather than in the field, and it was the revenue hole:
