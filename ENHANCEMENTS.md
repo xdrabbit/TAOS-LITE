@@ -509,6 +509,40 @@ is not a prerequisite for using it.
   Cloudflare's. The same harness runs against the real thing once the key
   exists.
 
+- **/fast grew a Clear button, 2026-08-31** — PR #49, folded into the mic
+  branch. Tom's field ask: a quiet button directly above the mic that puts the
+  quickie box back to the state the screen opens in. /fast is used standing up,
+  a word at a time, and the real loop is "look this up, now look the next thing
+  up" — with the last answer still on the box, emptying it by hand on a phone
+  was a long-press menu and two more taps.
+  → **The mic stays the star.** Ghost styling at half the mic's size, in the
+  same column, bottom-aligned inside the row that was already there — so the
+  mic keeps the exact position it had before this button existed. The slot is
+  *reserved* rather than faded: the button comes and goes, the box it lives in
+  does not, so appearing costs no reflow. A fade would have hidden that jump
+  instead of removing it, and a control that slides out from under a thumb
+  already on its way down is worse than one that is simply there.
+  → **It shows only when there is something to clear**, and the tentative tail
+  counts. During a latched dictation the first second of speech is drawn on the
+  box but held *outside* `input` on purpose, so it cannot start a translation —
+  to the thumb that is still "what is on the screen right now"
+  (`lib/fast/clear.ts`).
+  → **It resets the machine, not the wallet.** The tap clears the input, the
+  translation, the direction caption's detected/target pair, the engine line
+  and any error; it orphans the in-flight request so a late reply cannot paint
+  into a box somebody just emptied; and it cancels the mic, because a tail
+  still arriving is text on its way into that same box. What it does **not**
+  touch is `billedRef` — the visit-long memory of which words have already
+  counted against the monthly allowance. Clear is a screen gesture, not a
+  purchase, and forgetting that set would have made clear-and-retype a second
+  charge for the same phrase, landing on exactly the person who cleared because
+  they wanted the answer they had just read. It is the one thing here that is
+  invisible when it breaks, so it is pinned as a negative assertion
+  (`tests/fast-clear.test.ts`).
+  → It leaves the **pinned direction** alone for the same class of reason:
+  pinning is a decision about the conversation, not about the phrase that was
+  just cleared. Somebody who pinned ES→EN to read a menu is about to read the
+  next line of the same menu.
 - **/fast metering moved to the server, 2026-08-31** — PR #51. Found
   reviewing #46-#49 rather than in the field, and it was the revenue hole:
   `POST /api/fast` gated who could call it and how fast, then translated

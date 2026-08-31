@@ -7,6 +7,7 @@ import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
+import { hasSomethingToClear } from "@/lib/fast/clear";
 import { FAST_MAX_DICTATION_MS } from "@/lib/fast/dictation";
 import { appendDictated } from "@/lib/fast/liveTranscript";
 import { speechCandidates } from "@/lib/fast/speechLocale";
@@ -296,6 +297,49 @@ export function FastShell(): JSX.Element {
   // one less thing that changes when a pair falls back.
   const live = dictation.mode === "stream" && dictation.state === "recording";
 
+  // ── Clear ───────────────────────────────────────────────────────────────
+  // One tap back to the state the screen opens in. lib/fast/clear.ts carries
+  // the whole rule; the two lines here that are easy to add by accident:
+  //
+  //   `billedRef` is NOT touched. It is the memory of what has already counted
+  //   against the allowance this visit, and clearing the box is not a payment.
+  //   Resetting it would make clear-and-retype a second charge for the same
+  //   phrase — see lib/fast/settle.ts.
+  //
+  //   `pinned` is NOT touched either. The direction is a decision about the
+  //   conversation, not about the phrase that was just cleared.
+  const clear = useCallback(() => {
+    // The mic first: a tail still arriving is text on its way into the box,
+    // and cancelling is what drops it (lib/fast/useLiveDictation.ts). A clear
+    // during dictation really does discard — it is the one gesture on this
+    // screen that means "not that, start again".
+    if (dictating) dictation.cancel();
+    // Orphan anything in flight. The empty-input effect bumps this too, but a
+    // render later, and the whole point of this button is that nothing lands
+    // after it.
+    seqRef.current += 1;
+    setInput("");
+    setTranslation("");
+    setDetected(null);
+    setTarget(null);
+    // The engine caption goes with the answer it described. It outlives an
+    // emptied box today, which is survivable when the box emptied a character
+    // at a time — but a line reading "Azure Translator" under a screen that
+    // has been deliberately reset is a claim about nothing.
+    setEngine(null);
+    setFallback(null);
+    setError(null);
+    setBusy(false);
+    // So a "Copied ✓" from the previous quickie cannot still be sitting on the
+    // button when the next translation lands inside its 1400ms.
+    setCopied(false);
+    // Keyboard users get the caret back without reaching for the box. When the
+    // mic was open there is no textarea to focus yet — the ref is null while
+    // the live view stands in for it — and the effect above does it instead,
+    // on the render where dictation goes idle.
+    inputRef.current?.focus();
+  }, [dictating, dictation]);
+
   const copy = useCallback(async () => {
     if (!translation) return;
     try {
@@ -354,6 +398,11 @@ export function FastShell(): JSX.Element {
     () => Boolean(translation && target && !isTextOnlyLanguage(target)),
     [translation, target]
   );
+
+  // Only when there is something to clear, so an empty /fast is still the two
+  // controls it was designed as. The tentative tail counts as content even
+  // though it is deliberately not in `input` (lib/fast/clear.ts).
+  const clearable = hasSomethingToClear(input, dictation.partial);
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -439,11 +488,11 @@ export function FastShell(): JSX.Element {
           </div>
         </div>
 
-        {/* The box, and the mic beside it. Beside and not below: they are two
-            ways into the SAME field, and a control that sits under the answer
-            reads as a control over the answer. The keyboard is still primary —
-            the textarea takes the width and the autofocus, and the mic is a
-            thumb-sized target next to it. */}
+        {/* The box, and the controls beside it. Beside and not below: they
+            are two ways into the SAME field, and a control that sits under the
+            answer reads as a control over the answer. The keyboard is still
+            primary — the textarea takes the width and the autofocus, and the
+            mic is a thumb-sized target next to it. */}
         <div className="flex items-end gap-2">
           {live ? (
             /* The live view. Same box, same type, same metrics as the textarea
@@ -482,48 +531,86 @@ export function FastShell(): JSX.Element {
               className={`${BOX_BASE} resize-none caret-amber-300 placeholder:text-amber-100/25`}
             />
           )}
-          {/* Pointer events, not onClick: the button has to know the
-              DIFFERENCE between a hold and a tap, and a click only ever
-              reports that both happened. `touch-none` keeps a held finger
-              from scrolling the page out from under itself, and the pointer
-              capture keeps the release on this button even if the finger
-              drifts off it mid-sentence — a walking thumb always drifts. */}
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
-              dictation.press();
-            }}
-            onPointerUp={() => dictation.release()}
-            onPointerCancel={() => dictation.release()}
-            disabled={dictation.state === "working"}
-            aria-label="Dictar · Dictate"
-            title="Dictar · Dictate"
-            aria-pressed={dictation.state === "recording"}
-            className={`flex h-14 w-14 shrink-0 touch-none select-none items-center justify-center rounded-full border transition active:scale-95 disabled:opacity-60 ${
-              dictation.state === "recording"
-                ? "animate-pulse border-amber-300 bg-amber-400 text-stone-950 shadow-[0_0_28px_rgba(251,191,36,0.55)]"
-                : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-            }`}
-          >
-            {dictation.state === "working" ? (
-              <span className="text-[11px] font-semibold tracking-tight">···</span>
-            ) : (
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-6 w-6"
-              >
-                <path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z" />
-                <path d="M5 10v1a7 7 0 0014 0v-1M12 19v3M8.5 22h7" />
-              </svg>
-            )}
-          </button>
+          {/* The right-hand column: Clear over the mic, bottom-aligned with
+              the box so the mic keeps the position it has always had and the
+              smaller button stacks above it.
+
+              The slot is RESERVED rather than faded. It is always in the
+              layout at its own height, and only the button inside it comes and
+              goes, so appearing costs no reflow — the box does not resize and
+              the mic does not move the moment somebody types their first
+              letter. A fade would have hidden that jump rather than removed
+              it, and on a screen whose whole virtue is speed a control that
+              slides out from under a thumb already on its way down is worse
+              than one that is simply there. */}
+          <div className="flex shrink-0 flex-col items-center gap-2">
+            <div className="flex h-8 items-center justify-center">
+              {clearable ? (
+                <button
+                  type="button"
+                  onClick={clear}
+                  aria-label="Borrar · Clear"
+                  title="Borrar · Clear"
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-amber-100/60 transition active:scale-95"
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                  >
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              ) : null}
+            </div>
+            {/* Pointer events, not onClick: the button has to know the
+                DIFFERENCE between a hold and a tap, and a click only ever
+                reports that both happened. `touch-none` keeps a held finger
+                from scrolling the page out from under itself, and the pointer
+                capture keeps the release on this button even if the finger
+                drifts off it mid-sentence — a walking thumb always drifts. */}
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                dictation.press();
+              }}
+              onPointerUp={() => dictation.release()}
+              onPointerCancel={() => dictation.release()}
+              disabled={dictation.state === "working"}
+              aria-label="Dictar · Dictate"
+              title="Dictar · Dictate"
+              aria-pressed={dictation.state === "recording"}
+              className={`flex h-14 w-14 shrink-0 touch-none select-none items-center justify-center rounded-full border transition active:scale-95 disabled:opacity-60 ${
+                dictation.state === "recording"
+                  ? "animate-pulse border-amber-300 bg-amber-400 text-stone-950 shadow-[0_0_28px_rgba(251,191,36,0.55)]"
+                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+              }`}
+            >
+              {dictation.state === "working" ? (
+                <span className="text-[11px] font-semibold tracking-tight">···</span>
+              ) : (
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-6 w-6"
+                >
+                  <path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z" />
+                  <path d="M5 10v1a7 7 0 0014 0v-1M12 19v3M8.5 22h7" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Only while it is listening. A permanent hint under the box would be
