@@ -45,6 +45,26 @@ export const FAST_MIN_DICTATION_MS = 600;
 export const FAST_MAX_DICTATION_BYTES = 2 * 1024 * 1024;
 
 /**
+ * How long an Azure Speech token is good for. Microsoft's number, not ours.
+ *
+ * Shared by the route that mints one and the browser that holds it, so the
+ * refresh margin below is measured against the same ten minutes the server
+ * reported rather than against a second copy of it that could drift.
+ */
+export const AZURE_TOKEN_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Refresh the token once it is this close to expiring.
+ *
+ * A minute of margin, and the margin is the point: a token that expires
+ * BETWEEN the press and the first syllable fails the recogniser open, and the
+ * mic falls back to batch for a dictation that had no reason to. Renewing a
+ * minute early costs one free request (issueToken is not billed — only the
+ * recognition it unlocks is) and removes the whole class of failure.
+ */
+export const AZURE_TOKEN_REFRESH_MS = 60 * 1000;
+
+/**
  * The transcriber hint for a pair, or undefined.
  *
  * /fast dictates in AUTO-DETECT — the box does not know which of the two

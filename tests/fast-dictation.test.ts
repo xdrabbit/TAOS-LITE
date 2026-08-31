@@ -21,7 +21,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { readFileSync } from "node:fs";
-import { billingKey } from "@/lib/fast/settle";
+import { billingKey, FAST_MAX_CHARS } from "@/lib/fast/settle";
+import { appendDictated } from "@/lib/fast/liveTranscript";
 import {
   dictationHintFor,
   FAST_MAX_DICTATION_BYTES,
@@ -301,12 +302,17 @@ describe("transcript → input → translation, and what it bills", () => {
     // would put an unedited mis-hearing on screen as a result.
     const shell = routeSource("components/FastShell.tsx");
     const start = shell.indexOf("const receiveDictation");
-    const end = shell.indexOf("const dictation = useDictation");
+    const end = shell.indexOf("const candidates = useMemo");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const handler = shell.slice(start, end);
-    expect(handler).toContain("setInput(");
+    // It commits through the ONE path dictated words enter the box by — the
+    // same one the live mic's finalized segments use (commitDictated →
+    // appendDictated). What matters is unchanged: words go to the input, and
+    // nothing here writes the answer.
+    expect(handler).toContain("commitDictated(");
     expect(handler).not.toContain("setTranslation(");
+    expect(shell).toMatch(/const commitDictated[\s\S]*?setInput\(/);
   });
 
   it("bills through the same settle clock as typing — the handler cannot bill", () => {
@@ -317,7 +323,7 @@ describe("transcript → input → translation, and what it bills", () => {
     // transcript nobody had finished editing yet.
     const shell = routeSource("components/FastShell.tsx");
     const start = shell.indexOf("const receiveDictation");
-    const end = shell.indexOf("const dictation = useDictation");
+    const end = shell.indexOf("const candidates = useMemo");
     expect(shell.slice(start, end)).not.toContain("saveTranslation");
     expect(shell).toContain("saveTranslation"); // still billed, by the settle effect
     // And the route itself has no idea the allowance exists.
@@ -353,11 +359,20 @@ describe("transcript → input → translation, and what it bills", () => {
   it("appends to the box rather than replacing what is in it", () => {
     // There is no undo on this screen. Somebody who typed half a phrase and
     // then said the rest has not asked for the typed half to be thrown away.
+    //
+    // The rule itself now lives in lib/fast/liveTranscript.ts, because the
+    // live mic has to obey it too — one append rule, so a spoken quickie
+    // reads the same whether the words arrived one segment at a time or in
+    // one lump. tests/fast-live-dictation.test.ts exercises it on real
+    // strings; what this pins is that the batch handler still goes through it.
+    expect(appendDictated("where is", "the pharmacy", FAST_MAX_CHARS)).toBe(
+      "where is the pharmacy"
+    );
+    expect(appendDictated("a".repeat(495), "bbbbbbbbbb", FAST_MAX_CHARS)).toHaveLength(
+      FAST_MAX_CHARS
+    ); // and still respects the cap
     const shell = routeSource("components/FastShell.tsx");
-    const start = shell.indexOf("const receiveDictation");
-    const handler = shell.slice(start, shell.indexOf("const dictation = useDictation"));
-    expect(handler).toContain("current.trim()");
-    expect(handler).toContain("FAST_MAX_CHARS"); // and still respects the cap
+    expect(shell).toContain("appendDictated(current, heard, FAST_MAX_CHARS)");
   });
 
   it("sends the upload without a Content-Type of its own", () => {
@@ -365,7 +380,7 @@ describe("transcript → input → translation, and what it bills", () => {
     // boundary, and a Content-Type set here corrupts the body (lib/authClient).
     const shell = routeSource("components/FastShell.tsx");
     const start = shell.indexOf("const receiveDictation");
-    const handler = shell.slice(start, shell.indexOf("const dictation = useDictation"));
+    const handler = shell.slice(start, shell.indexOf("const candidates = useMemo"));
     expect(handler).toContain("headers: await authHeaders()");
     expect(handler).not.toContain("await jsonAuthHeaders()");
     expect(handler).not.toContain('"Content-Type"');

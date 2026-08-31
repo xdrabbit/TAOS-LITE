@@ -52,8 +52,13 @@ const AUDIO_BITS_PER_SECOND = 32000;
  * A press shorter than this is a TAP and latches the recording on. Longer and
  * it is a hold, ending when the finger lifts. 400ms is comfortably past a
  * deliberate tap and comfortably short of anybody's idea of "holding" it.
+ *
+ * Exported because the LIVE mic (lib/fast/useLiveDictation.ts) has to make the
+ * same hold-or-tap call about the same button. A second copy of this number
+ * would be a button whose meaning changed depending on which recogniser
+ * happened to be available.
  */
-const TAP_MS = 400;
+export const TAP_MS = 400;
 
 export type DictationState = "idle" | "recording" | "working";
 
