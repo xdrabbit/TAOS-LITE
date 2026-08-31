@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fastVisibleTo } from "@/lib/release";
+import { fastMicVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
 import { checkFastRate } from "@/lib/fast/rateLimit";
 import { AZURE_TOKEN_TTL_MS } from "@/lib/fast/dictation";
@@ -45,9 +45,18 @@ const ISSUE_TIMEOUT_MS = 4000;
 // different keys, still uncreated, and crossing the two gives a 401 that
 // reads like a bug (that file's header says so at length).
 //
+// ── PARKED, 2026-08-31 ─────────────────────────────────────────────────────
+// The mic came off /fast (lib/release.ts), and of the three parked routes this
+// is the one it would be worst to leave standing: what it hands out is ten
+// minutes of Azure recognition authority, in a JWT Microsoft gives no way to
+// revoke. So it 404s everyone, founders included, until
+// NEXT_PUBLIC_ENABLE_FAST_MIC=1 — the same flag that decides whether anything
+// in the browser would ever call it.
+//
 // ── The gate is /api/fast's; the METER is this route's own ─────────────────
-// Same fastVisibleTo() 404-not-403, so a stranger cannot mint a credential to
-// a resource they cannot reach the screen for. Same checkFastRate() buckets as
+// fastMicVisibleTo() is fastVisibleTo() AND the mic flag, 404-not-403, so a
+// stranger cannot mint a credential to a resource they cannot reach the screen
+// for. Same checkFastRate() buckets as
 // typing and as the batch mic, so a storm of mints is refused for free before
 // anything else runs.
 //
@@ -131,7 +140,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Identity first, same order as POST /api/fast and /api/fast/listen.
   const guard = await guardSpend(req);
   const email = guard.ok ? (guard.user?.email ?? null) : null;
-  if (!fastVisibleTo(email)) return notFound();
+  if (!fastMicVisibleTo(email)) return notFound();
   if (!guard.ok) return guard.response;
 
   const rate = checkFastRate(guard.user?.id ?? "unknown");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fastVisibleTo } from "@/lib/release";
+import { fastMicVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
 import { settleFastSpeechSession, type SpeechEndReason } from "@/lib/fast/speechMeter";
 
@@ -31,8 +31,15 @@ export const maxDuration = 5;
 // makes an accurate bill cheaper than an inaccurate one, and the bound does
 // not depend on it.
 //
+// ── PARKED, 2026-08-31 ─────────────────────────────────────────────────────
+// The mic came off /fast (lib/release.ts), so this 404s until
+// NEXT_PUBLIC_ENABLE_FAST_MIC=1 like the two routes either side of it. It is
+// the harmless one of the three — it only ever REDUCES a bill — and it is
+// gated anyway, because a settle route reachable when nothing can mint a
+// session is a door into a ledger nobody is writing to.
+//
 // ── The gate is /api/fast's ────────────────────────────────────────────────
-// Same fastVisibleTo() 404, same guardSpend 401. Settling somebody else's
+// Same fastMicVisibleTo() 404, same guardSpend 401. Settling somebody else's
 // session is impossible for a different reason: the SQL matches on the session
 // id AND the caller's user id, so a stolen id closes nothing.
 
@@ -54,7 +61,7 @@ function asReason(value: unknown): SpeechEndReason {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const guard = await guardSpend(req);
   const email = guard.ok ? (guard.user?.email ?? null) : null;
-  if (!fastVisibleTo(email)) return notFound();
+  if (!fastMicVisibleTo(email)) return notFound();
   if (!guard.ok) return guard.response;
 
   // Deliberately NOT rate limited on checkFastRate. This route only ever

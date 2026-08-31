@@ -232,7 +232,33 @@ when a spoken turn finishes. `/fast` writes one per *settled* input, so it
 meters into the normal allowance rather than growing a private counter that
 would have to be reconciled later. It is the History entry too.
 
-## The mic
+## The mic — REMOVED 2026-08-31, and parked behind a flag
+
+> **Read this first.** `/fast` has no mic of its own. Tom removed it on
+> 2026-08-31 (PR #49) and the **platform keyboard's mic** replaced it: every
+> phone TAOS ships to already has one, it lands its words in the same box, and
+> it works on the one platform ours did not. The screen carries one line under
+> the input saying so, in both languages.
+>
+> Everything below still describes a real, tested machine — it is just asleep.
+> `NEXT_PUBLIC_ENABLE_FAST_MIC=1` wakes all of it: the dock
+> (`components/fast/FastMicDock.tsx`), the streaming hook, the audio graph, the
+> batch fallback, the ledger, and the three routes, which **404 everyone**
+> while the flag is unset. With the flag off, `FastShell` never renders the
+> dock, so its chunk is never fetched and the Speech SDK is not in what a phone
+> downloads. `tests/fast-mic-parked.test.ts` pins all of that.
+>
+> **Why it was parked and not deleted:** it worked on Android and was dead on
+> iPhone through three rounds of fixes — killed by the iOS WebKit audio stack,
+> in a failure mode no engine CI can reach (see "The iPhone, and the mic that
+> looked alive", below). An **Android-only revival** is the case it was kept
+> for, and it is the one place a custom mic still buys something the keyboard
+> cannot: auto-detect between the two pills. iOS keyboard dictation transcribes
+> in the **keyboard's** language, which is the accepted cost of the removal.
+> ENHANCEMENTS.md → Ideas carries the decision and the two things to settle
+> before it could ever ship past founders.
+
+The design it was built to, for whoever opens the drawer:
 
 `/fast` is a typing screen with a mic on it, and that ordering is the design.
 Dictating does not produce a *translation* — it produces **text in the input
@@ -562,6 +588,15 @@ is exactly why it shipped. What *is* proven automatically:
   mono PCM, a valid WAV.
 
 ### The two-minute phone check — for Tom
+
+> **Not needed any more.** This was written to close out the iPhone fix; the
+> mic was removed instead (above), so there is nothing on `/fast` to hold. It
+> is kept as the walk to run if the mic is ever revived — on an **Android**
+> phone, which is the platform it worked on.
+>
+> What is left on `/fast` itself is thirty seconds: tap the box, use the
+> **keyboard's** dictation button, and confirm the words land in the box and
+> get translated like typed ones.
 
 Run it **twice**: once in a **Safari tab**, once in the **installed PWA**
 (Share → Add to Home Screen, then open from the icon). Permission and capture

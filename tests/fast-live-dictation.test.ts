@@ -267,7 +267,8 @@ const ORIGINAL_FETCH = globalThis.fetch;
 const ORIGINAL = {
   key: process.env.AZURE_SPEECH_KEY,
   region: process.env.AZURE_SPEECH_REGION,
-  flag: process.env.NEXT_PUBLIC_ENABLE_FAST
+  flag: process.env.NEXT_PUBLIC_ENABLE_FAST,
+  mic: process.env.NEXT_PUBLIC_ENABLE_FAST_MIC
 };
 
 beforeEach(async () => {
@@ -277,6 +278,10 @@ beforeEach(async () => {
   process.env.AZURE_SPEECH_KEY = "speech-key-secret";
   process.env.AZURE_SPEECH_REGION = "eastus";
   delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  // The mic is parked (lib/release.ts). Everything below describes the machine
+  // behind the flag, so the flag is on here; the parking itself is pinned in
+  // tests/fast-mic-parked.test.ts.
+  process.env.NEXT_PUBLIC_ENABLE_FAST_MIC = "1";
   const { resetFastRateLimits } = await import("@/lib/fast/rateLimit");
   resetFastRateLimits();
 });
@@ -286,7 +291,8 @@ afterEach(() => {
   for (const [name, value] of [
     ["AZURE_SPEECH_KEY", ORIGINAL.key],
     ["AZURE_SPEECH_REGION", ORIGINAL.region],
-    ["NEXT_PUBLIC_ENABLE_FAST", ORIGINAL.flag]
+    ["NEXT_PUBLIC_ENABLE_FAST", ORIGINAL.flag],
+    ["NEXT_PUBLIC_ENABLE_FAST_MIC", ORIGINAL.mic]
   ] as const) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -687,42 +693,56 @@ describe("one settled quickie still bills one row", () => {
   });
 
   it("keeps hypotheses out of the input entirely", () => {
-    // The cost fence again, this time where it is actually enforced: the
-    // shell commits `onSegment` (finals only) and renders `dictation.partial`
+    // The cost fence again, this time where it is actually enforced: the dock
+    // commits `onSegment` (finals only) and renders `dictation.partial`
     // without ever setting it into `input`.
-    const shell = source("components/FastShell.tsx");
-    expect(shell).toContain("onSegment: commitDictated");
-    expect(shell).not.toMatch(/setInput\([^)]*partial/);
+    const dock = source("components/fast/FastMicDock.tsx");
+    expect(dock).toContain("onSegment: commitDictated");
+    expect(dock).not.toMatch(/setInput\([^)]*partial/);
   });
 });
 
-describe("the live view is the same box", () => {
-  const shell = source("components/FastShell.tsx");
+// ───────────────────────────────────────────────────────────────────────────
+// 6. What the parked dock still draws
+//
+// The mic came off /fast on 8/31 (lib/release.ts) and everything below lives
+// behind NEXT_PUBLIC_ENABLE_FAST_MIC. It is pinned anyway: the point of a park
+// is that somebody can open the drawer and find working parts, and an
+// Android-only revival is the case this was parked FOR.
+// ───────────────────────────────────────────────────────────────────────────
 
-  it("shares one class string with the textarea it stands in for", () => {
-    // The two render alternately in the same slot. Different metrics would
-    // make the box jump the instant somebody started talking.
-    expect(shell).toContain("const BOX_BASE");
-    expect(shell.match(/\$\{BOX_BASE\}/g)?.length).toBe(2);
+describe("the parked dock", () => {
+  const dock = source("components/fast/FastMicDock.tsx");
+
+  it("holds the tail outside the box, where it cannot start a translation", () => {
+    // The one line that makes a live mic affordable. It used to be drawn
+    // inside a stand-in for the textarea, with matched metrics so the box did
+    // not jump; it is a dimmed line under the box now, because the stand-in
+    // needed the mic's state spread through FastShell and that is exactly what
+    // had to leave the default bundle. The RULE is unchanged: rendered, never
+    // committed.
+    expect(dock).toContain("{dictation.partial}");
+    expect(dock).not.toContain("value={dictation.partial}");
+    expect(dock).not.toMatch(/setInput\([^)]*dictation\.partial/);
   });
 
   it("draws the tail dimmed, and only while streaming", () => {
-    expect(shell).toContain("text-amber-100/40");
-    expect(shell).toContain('dictation.mode === "stream" && dictation.state === "recording"');
+    expect(dock).toContain("text-amber-100/40");
+    expect(dock).toContain('dictation.mode === "stream" && dictation.partial');
   });
 
   it("aims the recogniser with the same pin that aims the translation", () => {
     // One direction decision, used twice. Pinning does not just choose which
     // way the translation runs; it removes the language identification step
     // and is most of the difference between ~800ms and ~2400ms to first word.
-    expect(shell).toContain("speechCandidates([mine, theirs], explicitSource)");
+    expect(dock).toContain("speechCandidates([mine, theirs], explicitSource)");
   });
 
   it("labels the stop button for what it actually does in each mode", () => {
     // Streaming has already put the finalized words in the box, so there is
     // nothing to take back — calling it "Cancel" would promise an undo this
     // screen does not have. The batch mic really does discard.
-    expect(shell).toContain('dictation.mode === "stream" ? "Done · Listo" : "Cancel · Cancelar"');
+    expect(dock).toContain('dictation.mode === "stream" ? "Done · Listo" : "Cancel · Cancelar"');
   });
 });
 

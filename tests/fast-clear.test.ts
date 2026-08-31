@@ -172,7 +172,11 @@ describe("the button is rendered from that predicate, in a reserved slot", () =>
   const shell = source("components/FastShell.tsx");
 
   it("gates on hasSomethingToClear rather than on a hand-rolled check", () => {
-    expect(shell).toContain("hasSomethingToClear(input, dictation.partial)");
+    // Two arguments still, and the second one is now always "" — the mic was
+    // parked on 8/31 (lib/release.ts) and `micPartial` is the wire that would
+    // carry a tentative tail back if somebody flipped it on. The predicate did
+    // not change, because the reason for it did not.
+    expect(shell).toContain("hasSomethingToClear(input, micPartial)");
     expect(shell).toMatch(/\{clearable \? \(/);
   });
 
@@ -180,24 +184,27 @@ describe("the button is rendered from that predicate, in a reserved slot", () =>
     expect(shell).toContain('aria-label="Borrar · Clear"');
   });
 
-  it("sits above the mic in one column, and is the smaller of the two", () => {
-    // "Mic stays the star." The column is bottom-aligned inside the existing
-    // `items-end` row, so the mic keeps the exact position it had before this
-    // button existed and the small one stacks on top of it.
-    const column = shell.slice(
-      shell.indexOf('<div className="flex shrink-0 flex-col items-center gap-2">'),
-      shell.indexOf('aria-label="Dictar · Dictate"')
-    );
-    expect(column).toContain('aria-label="Borrar · Clear"');
-    expect(column).toContain("h-8 w-8"); // clear
-    expect(shell).toContain("h-14 w-14"); // mic, untouched
+  it("is the only control beside the box now that the mic is gone", () => {
+    // It shipped as the quiet one in a column under a 56px mic. The mic came
+    // off on 8/31 and Clear kept its size and its side: still h-8, still
+    // beside the field rather than under the answer, because it acts on the
+    // FIELD. What it must NOT have inherited is the mic's job — no dictate
+    // control, and no mic-sized button, survives on this screen.
+    expect(shell).toContain('aria-label="Borrar · Clear"');
+    expect(shell).toContain("h-8 w-8");
+    expect(shell).not.toContain('aria-label="Dictar · Dictate"');
+    expect(shell).not.toContain("h-14 w-14");
   });
 
   it("reserves the slot so appearing costs no layout shift", () => {
-    // The button comes and goes; the box it lives in does not. Without this
-    // the mic would jump 40px the instant somebody typed their first letter —
-    // under a thumb that is already on its way to it.
-    expect(shell).toMatch(/<div className="flex h-8 items-center justify-center">\s*\{clearable \?/);
+    // The button comes and goes; the box it lives in does not. BOTH dimensions
+    // now: the slot used to take its width from the 56px mic under it, and
+    // with the mic gone an empty h-8 wrapper collapses to zero width and hands
+    // it back to the textarea — the box would resize under the caret on the
+    // first keystroke, which is the exact jump this slot exists to prevent.
+    expect(shell).toMatch(
+      /<div className="flex h-8 w-8 shrink-0 items-center justify-center">\s*\{clearable \?/
+    );
   });
 });
 
@@ -229,8 +236,13 @@ describe("clear resets every piece of the answer on screen", () => {
     expect(handler).toContain("seqRef.current += 1");
   });
 
-  it("cancels the mic, because a tail still arriving is text on its way in", () => {
-    expect(handler).toContain("if (dictating) dictation.cancel()");
+  it("still cancels the parked mic, because a tail would be text on its way in", () => {
+    // The mic is off (lib/release.ts) and this line costs one setState when
+    // nothing is listening. It stays because the drawer is meant to reopen:
+    // the dock watches this counter, and a clear during dictation is the one
+    // gesture on this screen that means "not that, start again".
+    expect(handler).toContain("setMicCancel((n) => n + 1)");
+    expect(source("components/fast/FastMicDock.tsx")).toContain("cancel();");
   });
 });
 
@@ -245,14 +257,18 @@ describe("clear returns focus to the input", () => {
     expect(clearHandler()).toContain("inputRef.current?.focus()");
   });
 
-  it("leans on the post-dictation refocus for the live case", () => {
-    // While the streaming view stands in for the textarea there is no element
-    // to focus — the ref is null. The effect that already puts the caret back
-    // when the mic lets go covers that render, so a clear during dictation
-    // still ends with the caret in the box.
-    const shell = source("components/FastShell.tsx");
-    expect(shell).toContain("wasDictatingRef");
-    expect(shell).toMatch(/if \(wasDictatingRef\.current && !dictating\)[\s\S]{0,200}el\.focus\(\)/);
+  it("hands the caret back after a parked-mic dictation too", () => {
+    // The textarea is always mounted now, so `inputRef.current?.focus()` above
+    // covers every clear on the shipped screen. The dock keeps its own end-of-
+    // dictation refocus for the flagged-on case — once, at the end, because
+    // focusing on every finalized segment would pop the keyboard up over
+    // somebody who is still talking.
+    const dock = source("components/fast/FastMicDock.tsx");
+    expect(dock).toContain("wasDictatingRef");
+    expect(dock).toMatch(/if \(wasDictatingRef\.current && !dictating\) onIdle\(\)/);
+    expect(source("components/FastShell.tsx")).toMatch(
+      /const focusInput = useCallback\([\s\S]{0,200}el\.focus\(\)/
+    );
   });
 });
 

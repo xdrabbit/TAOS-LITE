@@ -15,8 +15,13 @@
 //
 //   1. NO LAYOUT SHIFT. The whole reason the slot is reserved rather than
 //      faded. A source-reading test can see the wrapper div; only a browser
-//      can measure whether the mic actually stayed where it was when the
-//      button appeared, which is the thing a thumb on its way down notices.
+//      can measure whether the BOX actually stayed the size it was when the
+//      button appeared — and that anchor changed on 8/31. The slot used to
+//      take its width from the 56px mic under it, so the number to watch was
+//      where the mic sat. With the mic removed (PR #49) an empty wrapper would
+//      collapse to zero width and hand it back to the textarea, resizing the
+//      box under the caret on the first keystroke. So this now measures the
+//      textarea's own width and left edge, empty → typed → cleared.
 //   2. FOCUS RETURNS. Pressing a button focuses that button. Whether the caret
 //      comes back to the box afterwards is a real event ordering, and calling
 //      .click() from JS would fake a pass — so this drives real mouse events.
@@ -30,14 +35,14 @@
 //
 //      What the browser can still answer is the negative, and it is the one
 //      worth having on the real bundle: NOTHING on this page writes to
-//      taos_lite_translations, ever. Not on settle, not on clear, not on the
-//      mic. That is the regression the old shape would reintroduce, and it is
+//      taos_lite_translations, ever. Not on settle, not on clear. That is the
+//      regression the old shape would reintroduce, and it is
 //      checked below against a live page rather than against source text.
 //      What the requests then COST is pinned in tests/fast-clear.test.ts,
 //      against the route that decides it.
 //
-// Like the mic rig beside it, this renders FastShell from a temporary page so
-// the founder gate is out of the way — the gate is proved against the route in
+// This renders FastShell from a temporary page so the founder gate is out of
+// the way — the gate is proved against the route in
 // tests/fast-gating.test.ts, which is where it is load-bearing. Create
 // app/fast-probe/page.tsx as:
 //
@@ -58,7 +63,6 @@ const FIRST = "where is the pharmacy";
 const FIRST_ES = "dónde está la farmacia";
 const SECOND = "how much is this";
 const SECOND_ES = "cuánto cuesta esto";
-const HEARD = "the check please";
 
 // Long enough for the 300ms debounce, the reply, and the 1500ms settle on top.
 const SETTLED = 3400;
@@ -135,9 +139,11 @@ ws.onmessage = (m) => {
   events.push(msg);
   if (msg.method !== "Fetch.requestPaused") return;
   const { requestId, request } = msg.params;
-  // Order matters: /api/fast/listen also contains "/api/fast".
+  // /api/fast/listen is parked and 404s in production now, so nothing on this
+  // page should ever reach it. It is still matched first — the substring would
+  // otherwise fall into the branch below — and counted, as a negative.
   if (request.url.includes("/api/fast/listen")) {
-    void fulfill(requestId, { text: HEARD });
+    void fulfill(requestId, { text: "should never be asked for" });
   } else if (request.url.includes("/api/fast")) {
     let sent = "";
     try {
@@ -192,9 +198,21 @@ const CLEAR = `document.querySelector('button[aria-label="Borrar · Clear"]')`;
 const MIC = `document.querySelector('button[aria-label="Dictar · Dictate"]')`;
 const BOX = `document.querySelector('textarea')`;
 
-/** Where the mic is right now — the number the layout-shift claim is about. */
-const micTop = () =>
-  evaluate(`(() => { const r = ${MIC}.getBoundingClientRect(); return Math.round(r.top); })()`);
+/**
+ * The box's geometry — the numbers the layout-shift claim is about now.
+ *
+ * Width AND left edge: the Clear slot sits to the RIGHT of the textarea in a
+ * flex row, so a slot that collapses when the button goes away gives its width
+ * back to the box rather than moving it. Watching only `top` would have missed
+ * exactly the regression the reserved slot exists to prevent.
+ */
+const boxBox = () =>
+  evaluate(
+    `(() => { const r = ${BOX}.getBoundingClientRect();
+       return { w: Math.round(r.width), x: Math.round(r.x), y: Math.round(r.y) }; })()`
+  );
+
+const sameBox = (a, b) => a && b && a.w === b.w && a.x === b.x && a.y === b.y;
 
 const rectOf = (selector) =>
   evaluate(
@@ -237,17 +255,28 @@ async function tapClear() {
 await send("Page.navigate", { url: APP });
 await sleep(4500);
 
-if (!(await evaluate(`!!${MIC}`))) {
-  console.error("no mic button — is app/fast-probe/page.tsx there?");
+if (!(await evaluate(`!!${BOX}`))) {
+  console.error("no textarea — is app/fast-probe/page.tsx there?");
   ws.close();
   chrome.kill();
   process.exit(1);
 }
 
-// ── 1. An empty box has no Clear, and the mic sits where it sits ──────────
+// ── 1. An empty box has no Clear, and no mic at all ──────────────────────
 const empty = {
   clear: await evaluate(`!!${CLEAR}`),
-  micTop: await micTop()
+  // The removal, on the real bundle rather than in source text. If a mic
+  // button renders here, the flag leaked or the dock got mounted unguarded.
+  mic: await evaluate(`!!${MIC}`),
+  // No apostrophe in the English half: the source writes `&rsquo;`, so what
+  // renders is U+2019 and an ASCII `'` never matches. Same trap as grepping a
+  // deployed bundle for a bilingual label — assert on a marker that survives
+  // the encoding, in both directions.
+  tip: await evaluate(
+    `document.body.innerText.includes("mic works here") &&
+     document.body.innerText.includes("micrófono de tu teclado")`
+  ),
+  box: await boxBox()
 };
 
 // ── 2. Type one quickie and let it settle ────────────────────────────────
@@ -256,9 +285,8 @@ await sleep(SETTLED);
 
 const typed = {
   clear: await evaluate(`!!${CLEAR}`),
-  micTop: await micTop(),
+  box: await boxBox(),
   clearRect: await rectOf(CLEAR),
-  micRect: await rectOf(MIC),
   shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`),
   engineLine: await evaluate(`document.body.innerText.includes('Azure Translator')`),
   rows: rows(),
@@ -269,9 +297,9 @@ const typed = {
 await tapClear();
 
 const cleared = {
-  box: await evaluate(`${BOX}.value`),
+  value: await evaluate(`${BOX}.value`),
   clear: await evaluate(`!!${CLEAR}`),
-  micTop: await micTop(),
+  box: await boxBox(),
   translationGone: await evaluate(
     `!document.body.innerText.includes(${JSON.stringify(FIRST_ES)})`
   ),
@@ -296,39 +324,20 @@ await type(SECOND);
 await sleep(SETTLED);
 const fresh = { rows: rows(), calls: fastCalls(), shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`) };
 
-// ── 6. Clear, then speak — the flow Tom described ────────────────────────
-await tapClear();
-const micAt = await rectOf(MIC);
-await mouse("mousePressed", micAt);
-await sleep(1500); // a hold, not a tap
-await mouse("mouseReleased", micAt);
-await sleep(4000);
-
-const spoke = {
-  box: await evaluate(`${BOX}?.value ?? ''`),
-  clear: await evaluate(`!!${CLEAR}`),
-  micTop: await micTop()
-};
-
-// ── 7. And Clear takes the dictated words away too ───────────────────────
-await tapClear();
-const afterSpokenClear = {
-  box: await evaluate(`${BOX}.value`),
-  clear: await evaluate(`!!${CLEAR}`),
-  focused: await evaluate(`document.activeElement === ${BOX}`)
-};
-
 console.log("\n── /fast Clear, real browser ───────────────────────────────");
 console.log(`  empty box: clear button present .... ${empty.clear}   (want false)`);
 console.log(`  after typing: clear present ........ ${typed.clear}`);
 console.log(`  clear button size .................. ${typed.clearRect?.w}x${typed.clearRect?.h}`);
-console.log(`  mic button size ................... ${typed.micRect?.w}x${typed.micRect?.h}`);
-console.log(`  clear sits ABOVE the mic .......... ${typed.clearRect?.y < typed.micRect?.y}`);
-console.log(`  translation on screen ............. ${JSON.stringify(typed.shown)}`);
-console.log(`\n  MIC TOP  empty ${empty.micTop} → typed ${typed.micTop} → cleared ${cleared.micTop}`);
-console.log(`  no layout shift ................... ${empty.micTop === typed.micTop && typed.micTop === cleared.micTop}`);
+console.log(`\n  THE MIC IS GONE`);
+console.log(`  dictate button on the page ........ ${empty.mic}   (want false)`);
+console.log(`  keyboard-mic tip, both languages .. ${empty.tip}`);
+console.log(`  /api/fast/listen ever called ...... ${posts("/api/fast/listen")}   (want 0)`);
+console.log(`\n  BOX  empty ${JSON.stringify(empty.box)}`);
+console.log(`       typed ${JSON.stringify(typed.box)}`);
+console.log(`     cleared ${JSON.stringify(cleared.box)}`);
+console.log(`  no layout shift ................... ${sameBox(empty.box, typed.box) && sameBox(typed.box, cleared.box)}`);
 console.log(`\n  after the tap:`);
-console.log(`  box ............................... ${JSON.stringify(cleared.box)}`);
+console.log(`  box ............................... ${JSON.stringify(cleared.value)}`);
 console.log(`  translation gone .................. ${cleared.translationGone}`);
 console.log(`  empty-state prompt back ........... ${cleared.placeholderBack}`);
 console.log(`  engine caption gone ............... ${cleared.engineLineGone}`);
@@ -345,22 +354,20 @@ console.log(`  after retyping the SAME words ..... ${retyped.calls}`);
 console.log(`  after clear + a NEW quickie ....... ${fresh.calls}`);
 console.log(`  (what those cost is pinned in tests/fast-clear.test.ts,`);
 console.log(`   against the route that decides it)`);
-console.log(`\n  then the mic, held 1.5s:`);
-console.log(`  transcript in the box ............. ${JSON.stringify(spoke.box)}`);
-console.log(`  clear offered on it ............... ${spoke.clear}`);
-console.log(`  mic still un-moved ................ ${spoke.micTop === empty.micTop}`);
-console.log(`  clear takes the spoken words too .. ${afterSpokenClear.box === ""}`);
-console.log(`  and hands the caret back .......... ${afterSpokenClear.focused}`);
 
 const ok =
   empty.clear === false &&
+  // ── the removal, on the real bundle ──
+  empty.mic === false &&
+  empty.tip === true &&
+  posts("/api/fast/listen") === 0 &&
   typed.clear === true &&
-  typed.clearRect.h < typed.micRect.h && // visibly subordinate
-  typed.clearRect.y < typed.micRect.y && // and directly above it
+  typed.clearRect.h === 32 && // still the quiet one it shipped as
   typed.shown.includes(FIRST_ES) &&
-  empty.micTop === typed.micTop && // ── the no-layout-shift claim ──
-  typed.micTop === cleared.micTop &&
-  cleared.box === "" &&
+  // ── the no-layout-shift claim, re-anchored on the box itself ──
+  sameBox(empty.box, typed.box) &&
+  sameBox(typed.box, cleared.box) &&
+  cleared.value === "" &&
   cleared.clear === false &&
   cleared.translationGone === true &&
   cleared.placeholderBack === true &&
@@ -375,13 +382,7 @@ const ok =
   // simply is not the page's business whether that costs anything.
   retyped.shown.includes(FIRST_ES) &&
   fresh.calls > retyped.calls && // a new phrase really does reach the route
-  fresh.shown.includes(SECOND_ES) &&
-  spoke.box === HEARD &&
-  spoke.clear === true &&
-  spoke.micTop === empty.micTop &&
-  afterSpokenClear.box === "" &&
-  afterSpokenClear.clear === false &&
-  afterSpokenClear.focused === true;
+  fresh.shown.includes(SECOND_ES);
 
 console.log(`\n  ${ok ? "PASS" : "FAIL"}`);
 ws.close();

@@ -8,6 +8,16 @@
 // safe to re-run. It lives beside the live-fire rig rather than in tests/
 // because it drives Chrome over CDP and `npm test` should not.
 //
+// ── PARKED, 2026-08-31 ─────────────────────────────────────────────────────
+// The mic came off /fast (PR #49; lib/release.ts). This rig still works and is
+// kept for the Android-only revival, but it needs the flag on to have anything
+// to drive:
+//
+//   NEXT_PUBLIC_ENABLE_FAST_MIC=1 PORT=3025 npm run dev -- --port 3025
+//
+// Without it the probe page renders a screen with no mic button and the rig
+// exits saying so, which is the parking working rather than a broken rig.
+//
 // ── What only a browser can answer ─────────────────────────────────────────
 // tests/fast-dictation.test.ts proves the route: the gate, the shared rate
 // buckets, transcript-and-stop. What it cannot reach is the claim the feature
@@ -190,7 +200,7 @@ await evaluate(`(() => {
 
 const micExists = await evaluate(`!!${micSelector}`);
 if (!micExists) {
-  console.error("no mic button — is app/fast-probe/page.tsx there?");
+  console.error("no mic button — is NEXT_PUBLIC_ENABLE_FAST_MIC=1 set, and app/fast-probe/page.tsx there?");
   ws.close();
   chrome.kill();
   process.exit(1);

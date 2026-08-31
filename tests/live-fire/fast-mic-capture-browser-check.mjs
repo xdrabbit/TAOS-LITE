@@ -43,6 +43,13 @@
 // tests/fast-mic-capture.test.ts against a context that refuses to start, and
 // both halves of that are mutation-checked. The last leg is Tom's phone, and
 // docs/fast-engine.md carries the checklist for it.
+//
+// ── PARKED, 2026-08-31 ─────────────────────────────────────────────────────
+// The mic came off /fast (PR #49; lib/release.ts). This rig drives
+// lib/fast/micCapture.ts directly rather than through the screen, so it needs
+// no flag and still runs as written — it is the measurement that says the
+// capture path itself was sound, which is most of the case for reviving this
+// on Android.
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";

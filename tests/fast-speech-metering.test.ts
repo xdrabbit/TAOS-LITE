@@ -62,6 +62,11 @@ beforeEach(async () => {
   process.env.AZURE_SPEECH_KEY = "azure-key";
   process.env.AZURE_SPEECH_REGION = "eastus";
   process.env.NEXT_PUBLIC_ENABLE_FAST = "1";
+  // The mic is parked (lib/release.ts) and its routes 404 without this. Every
+  // test in this file is about what the ledger does once somebody has flipped
+  // it back on, so it is on for all of them — except the one below that pins
+  // the parking itself.
+  process.env.NEXT_PUBLIC_ENABLE_FAST_MIC = "1";
   delete process.env.VERCEL_ENV;
   delete process.env.TAOS_FAST_SPEECH_SECONDS_PER_HOUR;
   const { resetFastRateLimits } = await import("@/lib/fast/rateLimit");
@@ -73,6 +78,7 @@ afterEach(() => {
   delete process.env.AZURE_SPEECH_KEY;
   delete process.env.AZURE_SPEECH_REGION;
   delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  delete process.env.NEXT_PUBLIC_ENABLE_FAST_MIC;
   delete process.env.TAOS_FAST_SPEECH_SECONDS_PER_HOUR;
   vi.resetModules();
 });

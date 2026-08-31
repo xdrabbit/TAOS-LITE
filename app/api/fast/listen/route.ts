@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isLanguageCode, type LanguageCode } from "@/lib/languages/catalog";
-import { fastVisibleTo } from "@/lib/release";
+import { fastMicVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
 import { transcribeAudio } from "@/lib/translate/transcribe";
 import { checkFastRate } from "@/lib/fast/rateLimit";
@@ -39,9 +39,19 @@ const LISTEN_TIMEOUT_MS = 45000;
 // route shares that one's TRANSCRIBER (lib/translate/transcribe.ts, lifted out
 // unchanged, fences and all) and stops there.
 //
+// ── PARKED, 2026-08-31 ─────────────────────────────────────────────────────
+// The mic came off /fast (lib/release.ts), so this route answers 404 to
+// everyone — founders included — until NEXT_PUBLIC_ENABLE_FAST_MIC=1. That is
+// deliberate and not belt-and-braces: this is the route that buys a Whisper
+// transcription, and a paid endpoint left open with no UI calling it is not a
+// parked feature, it is an unwatched one. The gate below is the same flag that
+// decides whether the button exists, so the two cannot drift apart.
+//
 // ── The gate and the meter are /api/fast's, deliberately ───────────────────
-// Same fastVisibleTo() 404-not-403, so the mic cannot outlive the screen it is
-// on. Same checkFastRate() buckets, and that sharing is the point rather than
+// fastMicVisibleTo() is fastVisibleTo() AND the mic flag, 404-not-403, so the
+// mic cannot outlive the screen it is on — nor the decision that took it off
+// that screen. Same checkFastRate() buckets, and that sharing is the point
+// rather than
 // an economy: a mic that had its own counter would be a second way to spend on
 // /fast that the /fast ceiling could not see, and this is the more expensive
 // of the two calls. Speaking is metered against the same minute as typing.
@@ -83,7 +93,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // would otherwise have read is an audio upload.
   const guard = await guardSpend(req);
   const email = guard.ok ? (guard.user?.email ?? null) : null;
-  if (!fastVisibleTo(email)) return notFound();
+  if (!fastMicVisibleTo(email)) return notFound();
   if (!guard.ok) return guard.response;
   const userId = guard.user?.id ?? "unknown";
 

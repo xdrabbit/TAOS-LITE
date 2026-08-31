@@ -1,17 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { languageFlag, languageNative, type LanguageCode } from "@/lib/languages/catalog";
-import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
+import { jsonAuthHeaders } from "@/lib/authClient";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
 import { hasSomethingToClear } from "@/lib/fast/clear";
-import { FAST_MAX_DICTATION_MS } from "@/lib/fast/dictation";
-import { appendDictated } from "@/lib/fast/liveTranscript";
-import { speechCandidates } from "@/lib/fast/speechLocale";
-import { useLiveDictation } from "@/lib/fast/useLiveDictation";
+import { fastMicEnabled } from "@/lib/release";
 
 // ── /fast: the quickie ─────────────────────────────────────────────────────
 // One box. You type, and the translation is already there. No record button,
@@ -40,59 +38,42 @@ import { useLiveDictation } from "@/lib/fast/useLiveDictation";
 // What is left of the money on this screen is DISPLAY. The route may answer
 // 402 when the month is spent, and that message is rendered like any other.
 //
-// ── The mic ────────────────────────────────────────────────────────────────
-// The keyboard is still the primary way in. The mic is the sausage-finger
-// lane onto the same box: hold it or tap it, and the words land IN the input
-// as editable text rather than as an answer. That is the whole difference
-// between this and the home screen — there, speaking IS the turn, and a
-// mis-heard word is a mis-heard turn. Here it is a draft you can fix before it
-// costs anything, which is what /fast is for.
+// ── The mic is the keyboard's ──────────────────────────────────────────────
+// This screen had a mic of its own for two days. Tom took it off on 8/31, and
+// the reasoning is worth keeping where the next person to want one will read
+// it: every phone TAOS ships to already carries a mic on its keyboard, it
+// lands its words in this box exactly as ours did, and it is the control
+// people already know. Ours bought partial transcripts and its own
+// auto-detect, and cost a week that ended with a mic that worked on Android
+// and was DEAD on iPhone in the shape of a working mic — lit button, open
+// socket, never a word (three rounds of fixes; PRs #49 and #50 are the file).
 //
-// So dictation adds no third clock. The transcript is written into `input`
-// exactly as if it had been typed, and the two clocks above take it from
-// there: 300ms later it is translated, 1500ms after that it counts. One
-// spoken quickie bills one row, the same as one typed quickie.
+// So the screen is back to what it always was underneath: a box you type in.
+// The line under it says the keyboard's mic works here, because a screen that
+// used to have a mic button and now does not should say where the mic went.
 //
-// ── Live, and what is NOT live ─────────────────────────────────────────────
-// The mic streams (lib/fast/useLiveDictation.ts): words appear while you are
-// still saying them, not in one lump on release. That splits what is on the
-// box into two kinds of text, and the split is load-bearing:
-//
-//   COMMITTED  finalized words. Real `input` state, editable, and what the
-//              two clocks above see — so a long sentence gets translated at
-//              each pause for breath, exactly as if it were being typed.
-//   TENTATIVE  the recogniser is still reconsidering these. Drawn dimmed as
-//              a trailing tail and held OUTSIDE `input`, so it never starts a
-//              translation. lib/fast/liveTranscript.ts says why that one line
-//              is the difference between a live mic and an expensive one.
-//
-// While the tail is on screen the box is a live view rather than a textarea —
-// same box, same type, no caret you can put a word into. It is the only
-// seconds on this screen when the keyboard is not the way in, and it ends the
-// moment you stop talking: the textarea comes back with the caret at the end
-// and every word editable. A dimmed tail cannot be drawn inside a <textarea>,
-// and showing the tentative words as though they were settled text would be
-// the worse lie.
+// The streaming stack is PARKED, not deleted — lib/release.ts lists every
+// piece and names the flag. FastMicDock below is the door back in, and it is
+// shut: with NEXT_PUBLIC_ENABLE_FAST_MIC unset the dock is never rendered, so
+// its chunk is never fetched and none of the Speech SDK reaches a phone.
 //
 // The screen is minimal on purpose. Its whole virtue is speed, and every
 // control added here is a thing between somebody and the word they wanted.
-// The mic earns its place by being the one control that makes the screen
-// usable while walking.
 
 /** Which way round a turn runs, when the writer has pinned it. */
 type Pinned = "auto" | "mine" | "theirs";
 
 /**
- * The box, shared by the textarea and the live view that replaces it.
+ * The parked mic (components/fast/FastMicDock.tsx).
  *
- * ONE string on purpose. The two render alternately in the same slot, and the
- * swap is only invisible if their metrics are identical — a different padding
- * or line-height between them would make the box jump the instant somebody
- * started talking. min-h matches rows={3} so the empty live view is not
- * shorter than the empty textarea.
+ * `dynamic` and not an import: calling it here only registers a loader, and
+ * the chunk behind it is fetched on the first RENDER — which cannot happen
+ * while `fastMicEnabled()` is false. That is what keeps useLiveDictation,
+ * micCapture and microsoft-cognitiveservices-speech-sdk out of what /fast
+ * downloads. `ssr: false` because it opens a microphone and there is nothing
+ * for a server to render of it.
  */
-const BOX_BASE =
-  "min-h-[7.5rem] min-w-0 flex-1 rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4 text-lg leading-relaxed text-amber-50 outline-none";
+const FastMicDock = dynamic(() => import("./fast/FastMicDock"), { ssr: false });
 
 export function FastShell(): JSX.Element {
   const [input, setInput] = useState("");
@@ -199,110 +180,23 @@ export function FastShell(): JSX.Element {
     return () => window.clearTimeout(id);
   }, [input, explicitSource, translate]);
 
-  // ── The mic ─────────────────────────────────────────────────────────────
-  // Audio in, transcript into the box. Nothing here translates: setting
-  // `input` is exactly what a keystroke does, and the debounce above does the
-  // rest — which is why a spoken quickie and a typed one cost the same one
-  // row, and why the words are sitting in an editable box when they arrive.
-  // (The billing itself is the server's now — lib/fast/meter.ts. A spoken
-  // quickie is the same burst of previews a typed one is, so it needs no
-  // special case there either.)
-  // One place where dictated words enter the box, whichever mic produced them.
-  // APPENDED, never replacing (lib/fast/liveTranscript.ts): somebody who typed
-  // half a phrase and then said the rest has not asked for the typed half to
-  // be thrown away, and there is no undo on this screen. Setting `input` is
-  // exactly what a keystroke does, which is why a spoken quickie and a typed
-  // one cost the same one row.
-  const commitDictated = useCallback((heard: string) => {
-    setInput((current) => appendDictated(current, heard, FAST_MAX_CHARS));
-    setError(null);
+  // ── The parked mic's two wires ──────────────────────────────────────────
+  // Both are here rather than in the dock because Clear needs them, and Clear
+  // ships. They cost two `useState` calls when the mic is off, and the dock
+  // that would move them is the thing being kept out of the bundle.
+  //
+  // `micPartial` is the tentative tail — words on screen that are deliberately
+  // NOT in `input` (lib/fast/liveTranscript.ts). It stays "" forever while the
+  // mic is parked, which is exactly what hasSomethingToClear should then see.
+  const [micPartial, setMicPartial] = useState("");
+  // A counter the dock watches, bumped to mean "drop what you are holding".
+  const [micCancel, setMicCancel] = useState(0);
+  const focusInput = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
   }, []);
-
-  const receiveDictation = useCallback(
-    async (blob: Blob, mimeType: string) => {
-      const form = new FormData();
-      // A filename with an extension the container matches: the transcriber
-      // sniffs it, and a webm blob called .bin comes back "unsupported".
-      // Three containers reach here, not two — wav is the salvaged PCM from a
-      // streaming session whose socket went deaf (lib/fast/useLiveDictation.ts),
-      // which is the only path that hands up audio this hook recorded itself.
-      const ext = mimeType.includes("wav")
-        ? "wav"
-        : mimeType.includes("mp4") || mimeType.includes("aac")
-          ? "mp4"
-          : "webm";
-      form.append("audio", new File([blob], `quickie.${ext}`, { type: mimeType }));
-      // Only so the transcriber knows whether Cantonese is possible
-      // (lib/fast/dictation.ts). It is NOT a source hint — the box does not
-      // know which of the two somebody is about to speak, which is the same
-      // reason the direction row says Auto.
-      form.append("pairA", mine);
-      form.append("pairB", theirs);
-      try {
-        // authHeaders, not jsonAuthHeaders: the browser must set its own
-        // multipart boundary, and a Content-Type here corrupts the body.
-        const res = await fetch("/api/fast/listen", {
-          method: "POST",
-          headers: await authHeaders(),
-          body: form
-        });
-        const payload = (await res.json().catch(() => ({}))) as {
-          text?: string;
-          error?: string;
-        };
-        if (!res.ok) throw new Error(payload.error || "Could not hear that.");
-        const heard = (payload.text ?? "").trim();
-        if (!heard) throw new Error("Nothing was heard — try again.");
-        commitDictated(heard);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not hear that.");
-      }
-    },
-    [commitDictated, mine, theirs]
-  );
-
-  // Which languages to tell Azure to listen for — and it is the SAME direction
-  // decision the translate call above makes, deliberately. Pinning the
-  // direction does not just aim the translation; it tells the recogniser there
-  // is nothing to identify, which measured ~800ms to first word against
-  // ~2400ms for auto-detect (lib/fast/speechLocale.ts carries the table and
-  // the reason the auto list is only ever the two pills).
-  const candidates = useMemo(
-    () => speechCandidates([mine, theirs], explicitSource),
-    [mine, theirs, explicitSource]
-  );
-
-  const dictation = useLiveDictation({
-    candidates,
-    onSegment: commitDictated,
-    onAudio: receiveDictation,
-    onError: setError,
-    onStart: useCallback(() => setError(null), [])
-  });
-
-  // Put the caret back in the box when the mic lets go. The point of dictating
-  // into a text FIELD rather than at a translator is that the next thing you
-  // might do is fix a word — but only once, at the end: focusing on every
-  // finalized segment would pop the keyboard up over the screen while somebody
-  // is still talking into it.
-  const dictating = dictation.state !== "idle";
-  const wasDictatingRef = useRef(false);
-  useEffect(() => {
-    if (wasDictatingRef.current && !dictating) {
-      const el = inputRef.current;
-      if (el) {
-        el.focus();
-        el.setSelectionRange(el.value.length, el.value.length);
-      }
-    }
-    wasDictatingRef.current = dictating;
-  }, [dictating]);
-
-  // The live view stands in for the textarea only while the STREAMING mic is
-  // open. The batch mic has no partials to draw, so it leaves the box editable
-  // the whole time it records — which is exactly what it did before this, and
-  // one less thing that changes when a pair falls back.
-  const live = dictation.mode === "stream" && dictation.state === "recording";
 
   // ── Clear ───────────────────────────────────────────────────────────────
   // One tap back to the state the screen opens in. lib/fast/clear.ts carries
@@ -319,11 +213,6 @@ export function FastShell(): JSX.Element {
   //   `pinned` is NOT touched either. The direction is a decision about the
   //   conversation, not about the phrase that was just cleared.
   const clear = useCallback(() => {
-    // The mic first: a tail still arriving is text on its way into the box,
-    // and cancelling is what drops it (lib/fast/useLiveDictation.ts). A clear
-    // during dictation really does discard — it is the one gesture on this
-    // screen that means "not that, start again".
-    if (dictating) dictation.cancel();
     // Orphan anything in flight. The empty-input effect bumps this too, but a
     // render later, and the whole point of this button is that nothing lands
     // after it.
@@ -343,12 +232,14 @@ export function FastShell(): JSX.Element {
     // So a "Copied ✓" from the previous quickie cannot still be sitting on the
     // button when the next translation lands inside its 1400ms.
     setCopied(false);
-    // Keyboard users get the caret back without reaching for the box. When the
-    // mic was open there is no textarea to focus yet — the ref is null while
-    // the live view stands in for it — and the effect above does it instead,
-    // on the render where dictation goes idle.
+    // And the parked mic, if somebody has flipped it back on: a tail still
+    // arriving is text on its way into the box that was just emptied. A clear
+    // during dictation really does discard — it is the one gesture on this
+    // screen that means "not that, start again".
+    setMicCancel((n) => n + 1);
+    // Keyboard users get the caret back without reaching for the box.
     inputRef.current?.focus();
-  }, [dictating, dictation]);
+  }, []);
 
   const copy = useCallback(async () => {
     if (!translation) return;
@@ -409,10 +300,11 @@ export function FastShell(): JSX.Element {
     [translation, target]
   );
 
-  // Only when there is something to clear, so an empty /fast is still the two
-  // controls it was designed as. The tentative tail counts as content even
-  // though it is deliberately not in `input` (lib/fast/clear.ts).
-  const clearable = hasSomethingToClear(input, dictation.partial);
+  // Only when there is something to clear, so an empty /fast is still the bare
+  // box it was designed as. The tentative tail counts as content even though
+  // it is deliberately not in `input` — and while the mic is parked it is
+  // always "" (lib/fast/clear.ts).
+  const clearable = hasSomethingToClear(input, micPartial);
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -498,113 +390,43 @@ export function FastShell(): JSX.Element {
           </div>
         </div>
 
-        {/* The box, and the controls beside it. Beside and not below: they
-            are two ways into the SAME field, and a control that sits under the
-            answer reads as a control over the answer. The keyboard is still
-            primary — the textarea takes the width and the autofocus, and the
-            mic is a thumb-sized target next to it. */}
-        <div className="flex items-end gap-2">
-          {live ? (
-            /* The live view. Same box, same type, same metrics as the textarea
-               it stands in for — only the caret is gone, because for these few
-               seconds the words are arriving from a mouth rather than a
-               keyboard. No aria-live: a hypothesis changes several times a
-               second, and announcing each one would make a screen reader
-               unusable. The recording banner below is the status region, and
-               the committed text is read normally once the mic lets go. */
-            <div className={`${BOX_BASE} overflow-y-auto whitespace-pre-wrap break-words`}>
-              {input ? <span>{input}</span> : null}
-              {dictation.partial ? (
-                <span className="text-amber-100/40">
-                  {input ? " " : ""}
-                  {dictation.partial}
-                </span>
-              ) : null}
-              {/* Something to watch while the first words are still coming. */}
-              <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-amber-300 align-text-bottom" />
-              {!input && !dictation.partial ? (
-                <span className="text-amber-100/25"> Listening… · Escuchando…</span>
-              ) : null}
-            </div>
-          ) : (
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value.slice(0, FAST_MAX_CHARS))}
-              maxLength={FAST_MAX_CHARS}
-              autoFocus
-              rows={3}
-              placeholder="Type a word or a phrase…"
-              autoCapitalize="sentences"
-              autoCorrect="on"
-              spellCheck
-              className={`${BOX_BASE} resize-none caret-amber-300 placeholder:text-amber-100/25`}
-            />
-          )}
-          {/* The right-hand column: Clear over the mic, bottom-aligned with
-              the box so the mic keeps the position it has always had and the
-              smaller button stacks above it.
+        {/* The box, and Clear beside it. Beside and not below: Clear acts on
+            the FIELD, and a control that sits under the answer reads as a
+            control over the answer.
 
-              The slot is RESERVED rather than faded. It is always in the
-              layout at its own height, and only the button inside it comes and
-              goes, so appearing costs no reflow — the box does not resize and
-              the mic does not move the moment somebody types their first
-              letter. A fade would have hidden that jump rather than removed
-              it, and on a screen whose whole virtue is speed a control that
-              slides out from under a thumb already on its way down is worse
-              than one that is simply there. */}
-          <div className="flex shrink-0 flex-col items-center gap-2">
-            <div className="flex h-8 items-center justify-center">
-              {clearable ? (
-                <button
-                  type="button"
-                  onClick={clear}
-                  aria-label="Borrar · Clear"
-                  title="Borrar · Clear"
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-amber-100/60 transition active:scale-95"
-                >
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-4 w-4"
-                  >
-                    <path d="M18 6L6 18M6 6l12 12" />
-                  </svg>
-                </button>
-              ) : null}
-            </div>
-            {/* Pointer events, not onClick: the button has to know the
-                DIFFERENCE between a hold and a tap, and a click only ever
-                reports that both happened. `touch-none` keeps a held finger
-                from scrolling the page out from under itself, and the pointer
-                capture keeps the release on this button even if the finger
-                drifts off it mid-sentence — a walking thumb always drifts. */}
-            <button
-              type="button"
-              onPointerDown={(e) => {
-                e.currentTarget.setPointerCapture(e.pointerId);
-                dictation.press();
-              }}
-              onPointerUp={() => dictation.release()}
-              onPointerCancel={() => dictation.release()}
-              disabled={dictation.state === "working"}
-              aria-label="Dictar · Dictate"
-              title="Dictar · Dictate"
-              aria-pressed={dictation.state === "recording"}
-              className={`flex h-14 w-14 shrink-0 touch-none select-none items-center justify-center rounded-full border transition active:scale-95 disabled:opacity-60 ${
-                dictation.state === "recording"
-                  ? "animate-pulse border-amber-300 bg-amber-400 text-stone-950 shadow-[0_0_28px_rgba(251,191,36,0.55)]"
-                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
-              }`}
-            >
-              {dictation.state === "working" ? (
-                <span className="text-[11px] font-semibold tracking-tight">···</span>
-              ) : (
+            The slot is RESERVED rather than faded. It is always in the layout
+            at its own height, and only the button inside it comes and goes, so
+            appearing costs no reflow — the box does not resize the moment
+            somebody types their first letter. A fade would have hidden that
+            jump rather than removed it. */}
+        <div className="flex items-start gap-2">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value.slice(0, FAST_MAX_CHARS))}
+            maxLength={FAST_MAX_CHARS}
+            autoFocus
+            rows={3}
+            placeholder="Type a word or a phrase…"
+            autoCapitalize="sentences"
+            autoCorrect="on"
+            spellCheck
+            className="min-h-[7.5rem] min-w-0 flex-1 resize-none rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4 text-lg leading-relaxed text-amber-50 caret-amber-300 outline-none placeholder:text-amber-100/25"
+          />
+          {/* h-8 w-8 and not just h-8: the slot used to get its width from the
+              56px mic underneath it, and with the mic gone an empty wrapper
+              would collapse to zero and hand its width back to the textarea —
+              so the box would resize under the caret on the first keystroke.
+              The reserved slot has to reserve both dimensions now. */}
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+            {clearable ? (
+              <button
+                type="button"
+                onClick={clear}
+                aria-label="Borrar · Clear"
+                title="Borrar · Clear"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-amber-100/60 transition active:scale-95"
+              >
                 <svg
                   aria-hidden="true"
                   viewBox="0 0 24 24"
@@ -613,55 +435,45 @@ export function FastShell(): JSX.Element {
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="h-6 w-6"
+                  className="h-4 w-4"
                 >
-                  <path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z" />
-                  <path d="M5 10v1a7 7 0 0014 0v-1M12 19v3M8.5 22h7" />
+                  <path d="M18 6L6 18M6 6l12 12" />
                 </svg>
-              )}
-            </button>
+              </button>
+            ) : null}
           </div>
         </div>
 
-        {/* Only while it is listening. A permanent hint under the box would be
-            one more thing between somebody and the word they wanted. */}
-        {dictation.state === "recording" ? (
-          <div
-            role="status"
-            aria-live="polite"
-            className="flex items-center justify-between gap-2 rounded-2xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-sm text-amber-100/80"
-          >
-            <span className="truncate">
-              {dictation.latched ? "Listening — tap to stop" : "Listening — let go when done"}
-              <span className="ml-2 tabular-nums text-amber-100/50">
-                {Math.max(0, Math.round(FAST_MAX_DICTATION_MS / 1000) - dictation.seconds)}s
-              </span>
-            </span>
-            {/* The same button means two different things, so it says two
-                different things. Streaming has already put the finalized words
-                in the box — there is nothing left to take back, only a tail to
-                drop, so it is "Done". The batch mic is still holding audio
-                nobody has seen, and stopping it really does discard: "Cancel".
-                One label for both would promise an undo this screen does not
-                have. */}
-            <button
-              type="button"
-              onClick={dictation.cancel}
-              className="shrink-0 rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-amber-100/60"
-            >
-              {dictation.mode === "stream" ? "Done · Listo" : "Cancel · Cancelar"}
-            </button>
-          </div>
-        ) : null}
+        {/* Where the mic went. One quiet line, bilingual like every other piece
+            of copy a stranger might read first, and small enough that it does
+            not need a dismiss button — a screen this bare cannot afford a
+            second control to make the first one go away.
 
-        {/* Batch only. Streaming's "working" is the sub-second flush that
-            collects the last word after you stop, and the words are already on
-            screen — a banner announcing that it is writing them down would
-            appear and vanish faster than it could be read. */}
-        {dictation.state === "working" && dictation.mode !== "stream" ? (
-          <p role="status" aria-live="polite" className="text-center text-sm text-amber-100/60">
-            Writing it down… · Escribiéndolo…
-          </p>
+            KNOWN LIMITATION, documented and accepted: iOS keyboard dictation
+            transcribes in the KEYBOARD's language, not in whatever is being
+            spoken. So dictating the other side of the pair means switching
+            keyboards first (globe key), where our own mic auto-detected
+            between the two pills. That was the best thing it did and it is
+            what this line costs. Somebody typing in one language and looking
+            up words in it — the actual /fast loop — never notices. */}
+        <p className="-mt-1 px-1 text-[11px] leading-snug text-amber-100/40">
+          💡 Your keyboard&rsquo;s mic works here · El micrófono de tu teclado funciona aquí
+        </p>
+
+        {/* Parked (lib/release.ts). Never rendered unless somebody sets
+            NEXT_PUBLIC_ENABLE_FAST_MIC=1, which is what keeps the whole
+            streaming stack out of the chunk this page downloads. */}
+        {fastMicEnabled() ? (
+          <FastMicDock
+            mine={mine}
+            theirs={theirs}
+            explicitSource={explicitSource}
+            setInput={setInput}
+            onError={setError}
+            onPartialChange={setMicPartial}
+            cancelSignal={micCancel}
+            onIdle={focusInput}
+          />
         ) : null}
 
         {/* The answer. It REPLACES in place rather than clearing first: the

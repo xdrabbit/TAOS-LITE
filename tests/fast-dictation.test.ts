@@ -63,6 +63,7 @@ const fetchSpy = vi.fn(async (url: unknown, init?: RequestInit) => {
 const ORIGINAL_FETCH = globalThis.fetch;
 const ORIGINAL_KEY = process.env.OPENAI_API_KEY;
 const ORIGINAL_FLAG = process.env.NEXT_PUBLIC_ENABLE_FAST;
+const ORIGINAL_MIC_FLAG = process.env.NEXT_PUBLIC_ENABLE_FAST_MIC;
 
 beforeEach(async () => {
   caller = null;
@@ -72,6 +73,10 @@ beforeEach(async () => {
   globalThis.fetch = fetchSpy as unknown as typeof fetch;
   process.env.OPENAI_API_KEY = "sk-test";
   delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  // The mic is parked (lib/release.ts) and /api/fast/listen 404s without this.
+  // This file describes the batch mic behind the flag; the parking is pinned
+  // in tests/fast-mic-parked.test.ts.
+  process.env.NEXT_PUBLIC_ENABLE_FAST_MIC = "1";
   delete process.env.AZURE_TRANSLATOR_KEY;
   delete process.env.AZURE_TRANSLATOR_REGION;
   const { resetFastRateLimits } = await import("@/lib/fast/rateLimit");
@@ -84,6 +89,8 @@ afterEach(() => {
   else process.env.OPENAI_API_KEY = ORIGINAL_KEY;
   if (ORIGINAL_FLAG === undefined) delete process.env.NEXT_PUBLIC_ENABLE_FAST;
   else process.env.NEXT_PUBLIC_ENABLE_FAST = ORIGINAL_FLAG;
+  if (ORIGINAL_MIC_FLAG === undefined) delete process.env.NEXT_PUBLIC_ENABLE_FAST_MIC;
+  else process.env.NEXT_PUBLIC_ENABLE_FAST_MIC = ORIGINAL_MIC_FLAG;
   vi.resetModules();
 });
 
@@ -148,7 +155,7 @@ describe("POST /api/fast/listen — who may speak into it", () => {
     // does next door: the body this refuses to read is an audio file.
     const src = routeSource("app/api/fast/listen/route.ts");
     const guard = src.indexOf("await guardSpend(req)");
-    const gate = src.indexOf("fastVisibleTo(email)");
+    const gate = src.indexOf("fastMicVisibleTo(email)");
     // The STATEMENT, not the word: the header comment above says why the
     // buckets are shared, and it says it before any of this runs.
     const rate = src.indexOf("const rate = checkFastRate(");
@@ -300,7 +307,12 @@ describe("transcript → input → translation, and what it bills", () => {
     // the transcript is a draft you can fix. So the shell's dictation handler
     // writes `input` and nothing else — it must not set `translation`, which
     // would put an unedited mis-hearing on screen as a result.
-    const shell = routeSource("components/FastShell.tsx");
+    //
+    // The handler lives in the parked dock now (lib/release.ts): the mic came
+    // off /fast on 8/31 and the whole streaming stack moved behind
+    // NEXT_PUBLIC_ENABLE_FAST_MIC. The rule is unchanged and still pinned,
+    // because the drawer it went into is meant to be reopenable.
+    const shell = routeSource("components/fast/FastMicDock.tsx");
     const start = shell.indexOf("const receiveDictation");
     const end = shell.indexOf("const candidates = useMemo");
     expect(start).toBeGreaterThan(-1);
@@ -326,12 +338,13 @@ describe("transcript → input → translation, and what it bills", () => {
     // charge for a transcript nobody had finished editing — and editing a
     // mis-heard word is the entire reason the words land in a box instead of
     // on screen.
-    const shell = routeSource("components/FastShell.tsx");
-    expect(shell).not.toContain("saveTranslation");
+    const dock = routeSource("components/fast/FastMicDock.tsx");
+    expect(dock).not.toContain("saveTranslation");
+    expect(routeSource("components/FastShell.tsx")).not.toContain("saveTranslation");
     expect(routeSource("app/api/fast/listen/route.ts")).not.toContain("saveTranslation");
     // The transcript reaches the meter the only way it can: as text in the
     // input, which the debounce then sends to the route like any keystroke.
-    expect(shell).toContain("commitDictated");
+    expect(dock).toContain("commitDictated");
   });
 
   it("bills a spoken quickie exactly as it bills a typed one — once", () => {
@@ -347,6 +360,7 @@ describe("transcript → input → translation, and what it bills", () => {
     // second copy of the billing rule in a mic test is a second rule.
     const shell = routeSource("components/FastShell.tsx");
     expect(shell).not.toContain("saveTranslation");
+    expect(routeSource("components/fast/FastMicDock.tsx")).not.toContain("saveTranslation");
     // `billedRef` survives only as prose explaining why it is gone, so the
     // assertion is on the code shape rather than on the word.
     expect(shell).not.toContain("billedRef.current");
@@ -368,14 +382,14 @@ describe("transcript → input → translation, and what it bills", () => {
     expect(appendDictated("a".repeat(495), "bbbbbbbbbb", FAST_MAX_CHARS)).toHaveLength(
       FAST_MAX_CHARS
     ); // and still respects the cap
-    const shell = routeSource("components/FastShell.tsx");
-    expect(shell).toContain("appendDictated(current, heard, FAST_MAX_CHARS)");
+    const dock = routeSource("components/fast/FastMicDock.tsx");
+    expect(dock).toContain("appendDictated(current, heard, FAST_MAX_CHARS)");
   });
 
   it("sends the upload without a Content-Type of its own", () => {
     // authHeaders, not jsonAuthHeaders: the browser must set its own multipart
     // boundary, and a Content-Type set here corrupts the body (lib/authClient).
-    const shell = routeSource("components/FastShell.tsx");
+    const shell = routeSource("components/fast/FastMicDock.tsx");
     const start = shell.indexOf("const receiveDictation");
     const handler = shell.slice(start, shell.indexOf("const candidates = useMemo"));
     expect(handler).toContain("headers: await authHeaders()");
