@@ -9,13 +9,23 @@
 // "it looks busy" is not a signal anything can act on. Hence a hard ceiling.
 //
 // Reuses the fixed-window counter from lib/spendGuard.ts rather than growing a
-// second one — including its two honest limits, which apply unchanged: the
-// window is PER INSTANCE and it resets on a cold start. Fluid Compute reuses
-// instances, so a burst from one person lands mostly on one of them; with
-// several warm instances the effective ceiling is this number times the
-// instance count. That is the right size for a spend BOUND, and it is not an
-// anti-abuse fence — the fence is guardSpend's session check, which runs first
-// and means every hit counted here belongs to a known account.
+// second one — including its two honest limits: the window is PER INSTANCE and
+// it resets on a cold start. Fluid Compute reuses instances, so a burst from
+// one person lands mostly on one of them; with several warm instances the
+// effective ceiling is this number times the instance count.
+//
+// ── This is the fast path, not the ceiling (8/31) ──────────────────────────
+// Which is why it stopped being the only counter. The DURABLE limit lives in
+// Postgres now, on the same two windows and off the same environment
+// variables (lib/fast/meter.ts, public.fast_begin): shared by every instance,
+// surviving a cold start, and therefore the number that actually holds.
+//
+// This one stays because it is FREE and it runs FIRST — before the body is
+// read, before a round trip is spent. A held key or a stuck retry loop is
+// refused here at no cost at all, and only traffic that looks like typing
+// ever reaches the database. Neither is an anti-abuse fence; the fence is
+// guardSpend's session check, which runs before both and means every hit
+// counted anywhere belongs to a known account.
 import { hit } from "@/lib/spendGuard";
 
 function numberFromEnv(name: string, fallback: number): number {

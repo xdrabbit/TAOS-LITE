@@ -16,6 +16,23 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Resolve founder-ness on the server, not from the client bundle** — every
+  founders gate in the app (`/fast`, `/call`, `/video`) ends at
+  `isFounder(email)` in `lib/release.ts`, and that function reads
+  `NEXT_PUBLIC_FOUNDER_EMAILS` plus two hardcoded addresses. `NEXT_PUBLIC_`
+  means **the founder list is compiled into the JavaScript every visitor
+  downloads** — `grep` the deployed bundle and it is right there. Nothing is
+  *breached* by that: the routes re-ask the question against a server-validated
+  token, so knowing the list does not let anybody use it, and the addresses are
+  on the About page anyway. It is still the kind of thing that reads badly in a
+  security review and gets worse the moment a non-founder address is added to
+  the list. Pre-existing, not introduced by the /fast work (PR #51 flagged it
+  rather than fixing it, because changing how founder-ness resolves touches the
+  nav, three page gates and four routes at once). Wants: a server-only
+  `FOUNDER_EMAILS`, a small `/api/me` capability answer for the nav to render
+  from, and the `NEXT_PUBLIC_` copy kept only for what the browser genuinely
+  cannot ask. (added 2026-08-31)
+
 - **Create the Azure Translator resource, then walk /fast on a phone** — two
   halves of one sitting. `/fast` shipped founders-only on 8/30 (PR #46) and is
   running on its FALLBACK engine, because Azure Translator is a different
@@ -432,6 +449,42 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **/fast metering moved to the server, 2026-08-31** — PR #51. Found
+  reviewing #46-#49 rather than in the field, and it was the revenue hole:
+  `POST /api/fast` gated who could call it and how fast, then translated
+  **without ever asking what the month's allowance had left**. The bill was a
+  `saveTranslation(...).catch(() => {})` in `FastShell`, fired 1500ms after
+  the typing stopped. Everything about that is fail-open — a curl with a valid
+  session never ran it, a tab closed a fraction early never ran it, and a
+  failed write was swallowed by design. The allowance did not move.
+  → **The premise under it was the wrong one.** #46 argued the route "sees
+  each preview individually and has no way to know which one was the last".
+  True of any one request, false of the stream: the client's settle measures a
+  PAUSE IN TYPING, and the gap between two requests from one account is that
+  same pause on a clock nobody can edit. So the unit is a **burst** — a run of
+  previews in one direction with no gap longer than 1500ms — and it is decided
+  in `lib/fast/meter.ts`, not in a browser.
+  → **Check, then serve.** The allowance is taken BEFORE `fastTranslate` is
+  called, the same shape `lib/tutor/meter.ts` reserves minutes in: the
+  reservation IS the `taos_lite_translations` row, so /fast still spends from
+  the one meter the whole app shares. `fast_record` fills it in when the
+  engine answers; `fast_abandon` deletes it when the engine falls over, so
+  nobody pays for a translation that never arrived. Over quota is a **402**
+  that never reaches a provider.
+  → **The rate limit is durable now.** `public.fast_rate` is a fixed-window
+  counter in Postgres, shared by every instance and surviving a cold start.
+  The in-process one stays in front of it because it is free and runs before
+  the body is read — it is the fast path, not the ceiling.
+  → Verified twice, because a JS test of a mock is not a test of plpgsql: 22
+  route tests against a simulated Postgres, **and** the eleven real functions
+  driven against the live database with a fixture account (continuation,
+  pause, direction flip, refund, over-quota, both rate windows), then cleaned
+  up to the row.
+  → **The screen is unchanged**, and so is what a founder is charged: both
+  founders are subscribers, so nothing is capped today. This closes the hole
+  *before* `NEXT_PUBLIC_ENABLE_FAST=1` opens the door, which is the only
+  moment it was ever going to be cheap to close.
+
 - **/fast — the Google-quickie box, 2026-08-30** — PR #46. Tom's ask: a
   single input where the translation "renders as you type", plain and
   word-for-word — the thing everybody already knows how to do. It is the ONLY
@@ -469,6 +522,13 @@ is not a prerequisite for using it.
   characters typed → **2 provider calls, 1 billed row**. Server ceiling of
   60/min per account on top, because a debounce is a courtesy the browser
   extends; a driver ignoring it entirely got 60 served and then 429s.
+  → **Both halves of that paragraph were wrong, and #51 fixes them** (8/31).
+  The 1500ms clock ran in the BROWSER and wrote the billing row itself, so a
+  caller who declined to run it — a curl with a valid session, a tab closed at
+  1400ms — was never billed at all; and the 60/min ceiling was a counter in
+  module scope, which on Fluid Compute means 60 times however many instances
+  are warm. Kept here as written rather than edited, because the reasoning is
+  the interesting part and it was confidently wrong.
   → Verified against the real API through the shipped route: EN→ES p50 702ms,
   EN→PL p50 627ms, auto-detect correct in both directions, non-founder 404
   without the provider ever being called.

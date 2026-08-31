@@ -9,11 +9,18 @@
 // Two separate things are proved here, and conflating them is the bug this
 // screen could most easily have shipped:
 //   1. the server caps how many TRANSLATIONS one account can buy per minute;
-//   2. a storm of keystrokes bills exactly ONE settled translation, because
-//      billing is keyed on the settled text and not on the request count.
+//   2. a storm of keystrokes bills exactly ONE translation, because the unit
+//      billed is a settled thought and not a request.
+//
+// This file covers the in-process half of (1) — the free fast path that
+// refuses a storm before the body is read. The DURABLE half, and the whole of
+// (2), moved server-side on 8/31 and are pinned in tests/fast-metering.test.ts:
+// billing used to be a browser timer writing its own row, which meant a caller
+// who declined to run it was never billed at all.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { NextRequest } from "next/server";
-import { billingKey, FAST_DEBOUNCE_MS, FAST_SETTLE_MS } from "@/lib/fast/settle";
+import { FAST_DEBOUNCE_MS, FAST_SETTLE_MS } from "@/lib/fast/settle";
 import { checkFastRate, resetFastRateLimits } from "@/lib/fast/rateLimit";
 
 let caller: { id: string; email: string } | null = null;
@@ -40,6 +47,10 @@ beforeEach(() => {
   fetchSpy.mockClear();
   globalThis.fetch = fetchSpy as unknown as typeof fetch;
   process.env.OPENAI_API_KEY = "sk-test";
+  // No service-role key: lib/fast/meter.ts runs unmetered off production
+  // and says so in the log, which keeps these tests about the gate and
+  // the in-process cap. Billing has its own file.
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.AZURE_TRANSLATOR_KEY;
   delete process.env.AZURE_TRANSLATOR_REGION;
 });
@@ -139,40 +150,25 @@ describe("POST /api/fast under a keystroke storm", () => {
 });
 
 describe("what a storm actually BILLS", () => {
-  // The quota is a count of taos_lite_translations rows (lib/supabase.ts),
-  // and FastShell writes one only when the input has been still for
-  // FAST_SETTLE_MS and the translation on screen matches it. So the unit
-  // billed is a settled thought, not a request — which is why these two
-  // constants are different numbers and must stay that way.
+  // The quota is a count of taos_lite_translations rows (lib/supabase.ts), and
+  // the row is now written by POST /api/fast — once per BURST of previews,
+  // where a burst ends when the gap between two requests exceeds
+  // FAST_SETTLE_MS. So the unit billed is still a settled thought rather than
+  // a request, which is why these two constants are different numbers and
+  // must stay that way. What the burst rule actually costs is pinned against
+  // the route in tests/fast-metering.test.ts.
   it("keeps the money clock slower than the feel clock", () => {
     expect(FAST_DEBOUNCE_MS).toBe(300);
     expect(FAST_SETTLE_MS).toBe(1500);
     expect(FAST_SETTLE_MS).toBeGreaterThan(FAST_DEBOUNCE_MS);
   });
 
-  it("bills one row for the whole of typing a phrase", () => {
-    // Every prefix of "bathroom" is a request; only the settled text is a
-    // billing key, and the set is what stops it being billed twice.
-    const billed = new Set<string>();
-    const bill = (text: string) => {
-      const key = billingKey(text, "en", "es");
-      if (billed.has(key)) return false;
-      billed.add(key);
-      return true;
-    };
-    const typed = "bathroom";
-    for (let i = 1; i <= typed.length; i += 1) {
-      // Only the last prefix ever settles — the rest are overwritten by the
-      // next keystroke before FAST_SETTLE_MS elapses.
-      if (i === typed.length) expect(bill(typed)).toBe(true);
-    }
-    // A pause, a re-render, a second settle over the same words: still one.
-    expect(bill(typed)).toBe(false);
-    expect(bill("bathroom ")).toBe(false); // trailing space is a keystroke
-    expect(billed.size).toBe(1);
-  });
-
-  it("bills the same words the other way round as a separate lookup", () => {
-    expect(billingKey("gracias", "es", "en")).not.toBe(billingKey("gracias", "en", "es"));
+  it("measures the settle where the caller cannot skip it", () => {
+    // The constant is read by the SERVER meter now. If this import ever goes
+    // back to being a browser-only timer, the meter goes back to being
+    // optional — which was the bug.
+    const meter = readFileSync(new URL("../lib/fast/meter.ts", import.meta.url), "utf8");
+    expect(meter).toContain("FAST_SETTLE_MS");
+    expect(meter).toContain("p_window_ms");
   });
 });

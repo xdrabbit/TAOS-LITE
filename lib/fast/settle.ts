@@ -21,6 +21,19 @@
 // So one settled input bills once, however many previews it took to get
 // there — which is the same unit the home screen bills: one finished thing a
 // person meant to say.
+//
+// ── Where the settle is measured (changed 8/31) ────────────────────────────
+// Both of these used to be browser timers, and the second one was the meter:
+// FastShell waited 1500ms and wrote the billing row itself. That made the
+// cash register something a caller could decline to run — a curl with a valid
+// session, or a tab closed at 1400ms, translated for free.
+//
+// SETTLE is now the SERVER's window. POST /api/fast measures the gap between
+// two requests from one account, which is the same pause this constant always
+// described, on a clock the caller does not hold: a run of previews with no
+// gap longer than this is one burst, and one burst is one billed quickie.
+// lib/fast/meter.ts is where that lives. The number did not change and the
+// unit did not change — only who is holding the stopwatch.
 export const FAST_DEBOUNCE_MS = 300;
 export const FAST_SETTLE_MS = 1500;
 
@@ -34,18 +47,3 @@ export const FAST_SETTLE_MS = 1500;
  * away for a paragraph.
  */
 export const FAST_MAX_CHARS = 500;
-
-/**
- * Has this text already been billed?
- *
- * The billing key is the text AND the direction, so re-typing the same phrase
- * in the same direction inside one visit is free (someone deleting a word and
- * putting it back has not asked for a second translation), while flipping the
- * pair and translating the same words the other way is a different question
- * and is billed as one.
- *
- * Trimmed, because trailing whitespace is a keystroke, not a new sentence.
- */
-export function billingKey(text: string, source: string, target: string): string {
-  return `${source}>${target}:${text.trim()}`;
-}

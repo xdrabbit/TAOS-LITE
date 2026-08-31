@@ -48,6 +48,10 @@ beforeEach(async () => {
   globalThis.fetch = fetchSpy as unknown as typeof fetch;
   process.env.OPENAI_API_KEY = "sk-test";
   delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  // No service-role key: lib/fast/meter.ts runs unmetered off production
+  // and says so in the log, which keeps these tests about the gate and
+  // the in-process cap. Billing has its own file.
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.AZURE_TRANSLATOR_KEY;
   delete process.env.AZURE_TRANSLATOR_REGION;
   const { resetFastRateLimits } = await import("@/lib/fast/rateLimit");
