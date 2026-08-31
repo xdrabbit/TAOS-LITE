@@ -355,6 +355,11 @@ export class FastMeterDb {
     s.reported_seconds = reported;
     s.billed_seconds = Math.min(reported, Math.max(s.granted_seconds, 0));
     s.end_reason = (a.p_reason as string) || "user";
+    // A row whose credential was never issued stops holding a live-token
+    // slot. Only the token route passes this, and only on the paths where
+    // Azure refused, timed out or was never configured — a settle reported by
+    // a browser can free a reservation and never a slot.
+    if (a.p_release_token === true) s.token_expires_at = null;
     return s.billed_seconds;
   }
 

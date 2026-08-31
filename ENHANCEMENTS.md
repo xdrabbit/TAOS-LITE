@@ -44,6 +44,21 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   `fast_speech_sessions`. **Set it to 2 as part of going public** — the 6 is
   slack for a field test that involves a lot of reloading, not a considered
   production number. The relay is still the only thing that would close it.
+  **Round 3, same day.** A ceiling is only as good as what it counts, and it
+  was counting two things that do not exist. A mint RESERVES before it calls
+  Azure, so a failed `issueToken` left a row claiming a ten-minute credential
+  that was never issued — six outages and the account is on the batch mic for
+  ten minutes. `fast_speech_settle` takes `p_release_token` now, passed only
+  by the token route, on the paths where the server itself knows nothing left
+  the building. And in the browser, a socket that died used to throw the
+  credential away, so the next press minted a *second* one — a bad tunnel
+  spending a slot per press. It keeps the credential through one failure and
+  re-reserves against it; two in a row with nothing heard between them is
+  when the credential becomes the suspect. What is deliberately NOT built:
+  freeing a slot because a client says its session died early. A JWT that
+  reached a browser is live for its ten minutes whatever the browser then
+  says, and a caller willing to claim it after every mint would lift the
+  ceiling entirely.
 
 - **Turn the /fast founder speech bypass back on when the screen goes public**
   — `fastSpeechUnlimited()` in `lib/release.ts` deliberately ties the founder
@@ -591,13 +606,28 @@ is not a prerequisite for using it.
   one WAV, because restarting into the batch mic would throw away exactly the
   audio that diagnosed the problem.
 
-  → **One press opens one microphone.** A fallback hands its already-granted
-  stream down (`detachStream()` / `adopt`) rather than stopping every track and
-  asking the phone again — a close/reopen cycle in the same second is how iOS
-  gives you a stream that records silence, and the second ask would land
-  outside the gesture besides. The first draft got this wrong and
+  → **One press opens one microphone — unless the microphone is the accused.**
+  A fallback hands its already-granted stream down (`detachStream()` / `adopt`)
+  rather than stopping every track and asking the phone again: a close/reopen
+  cycle in the same second is how iOS gives you a stream that records silence.
+  The first draft got this wrong in the other direction and
   `tests/live-fire/fast-dictation-browser-check.mjs` caught it by counting
   streams: 2, where the fence says 1.
+
+  **Then round 3 found the hole in "always adopt".** The `dead-graph` verdict
+  fires when chunks ARE arriving and every sample in them is zero — which rules
+  the AudioContext out and points at the *track*. Handing that track to
+  MediaRecorder records the same zeroes: both lanes dead, and what the person
+  sees is the field report either way round. So that one path stops every
+  track and lets the batch mic call `getUserMedia` for itself; the socket-side
+  failures still adopt, because a token or a websocket failing says nothing
+  about a microphone. The assumption underneath — that a second
+  `getUserMedia` in the same document does not re-prompt once permission is
+  granted, `getUserMedia` having no transient-activation requirement the way
+  `AudioContext.resume` does — is **unverified on a device** and is on the
+  phone checklist. If it is wrong the failure is benign: iOS puts its prompt
+  up mid-press and `useDictation`'s pending-latch rule already holds that
+  press open, which is what it was written for.
 
   → **The bug is invisible to every engine CI can reach**, which is why it
   shipped. Chrome reports a fresh AudioContext as `running` at birth —

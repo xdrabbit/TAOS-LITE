@@ -138,11 +138,14 @@ vi.mock("microsoft-cognitiveservices-speech-sdk", () => ({
 }));
 
 const settles: Array<Record<string, unknown>> = [];
+/** Every speech-token body, so a test can see which presses asked to REUSE. */
+const mints: Array<Record<string, unknown>> = [];
 const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
   if (String(url).includes("/api/fast/speech-settle")) {
     settles.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return new Response(JSON.stringify({ billedSeconds: 1, settled: true }), { status: 200 });
   }
+  mints.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
   return new Response(
     JSON.stringify({
       token: "jwt",
@@ -166,6 +169,7 @@ beforeEach(() => {
   mic.retaining = true;
   handlers = {};
   settles.length = 0;
+  mints.length = 0;
   openMicCapture.mockClear();
   recognizerClosed.mockClear();
   batch.press.mockClear();
@@ -320,17 +324,50 @@ describe("useLiveDictation — the dead graph actually falls back", () => {
     expect(settles[0]).toMatchObject({ sessionId: "spk-1" });
   });
 
-  it("carries the already-granted microphone across instead of asking twice", async () => {
-    // On iOS a close/reopen cycle in the same second is a good way to get a
-    // stream that records silence, and the second getUserMedia would land
-    // outside the gesture besides.
+  it("does NOT carry the accused microphone across — it closes it", async () => {
+    // ── Reversed on purpose, 8/31 round 3. ──────────────────────────────
+    // This used to pin the opposite: "carries the already-granted microphone
+    // across instead of asking twice", on the grounds that a close/reopen
+    // cycle inside the same second is how iOS gives you a stream that records
+    // silence, and that a second getUserMedia would land outside the gesture.
+    // The first half is true and the conclusion still does not follow, which
+    // is why the old reasoning is kept here rather than deleted.
+    //
+    // This fallback fires BECAUSE the audio was silent. If the zeroes are
+    // coming from the track rather than from the AudioContext, handing that
+    // track to MediaRecorder records the same zeroes — a fallback that
+    // inherits the fault, and Tom's exact symptom either way round. The
+    // capture is closed instead (which stops its tracks) and useDictation
+    // opens its own.
+    //
+    // What that costs, and why it is affordable, is written out at
+    // `discardCapture` in lib/fast/useLiveDictation.ts. That the batch mic
+    // then records from a DIFFERENT stream object is proved end to end, with
+    // the real useDictation underneath, in tests/fast-mic-fresh-stream.ts —
+    // this file mocks that hook away and so cannot see it.
     const view = await mount();
     await press(view);
     mic.frames = 0;
     await listen(MIC_SILENT_MS + 500);
 
-    expect(mic.detached).toBe(true);
+    expect(mic.detached).toBe(false);
+    expect(mic.closed).toBe(true);
     expect(openMicCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it("still hands the microphone on when it was the SOCKET that failed", async () => {
+    // The other branch, so that "never adopt" cannot quietly become the rule.
+    // A mint that 503s says nothing about the microphone: those tracks are
+    // granted, open, and were opened inside the tap.
+    fetchSpy.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ error: "speech_unavailable" }), { status: 503 })
+    );
+    const view = await mount();
+    await press(view);
+
+    expect(view.result.current.mode).toBe("batch");
+    expect(mic.detached).toBe(true);
+    expect(batch.press).toHaveBeenCalledTimes(1);
   });
 
   it("backstops a trickle of signal that never becomes a word", async () => {
@@ -351,6 +388,66 @@ describe("useLiveDictation — the dead graph actually falls back", () => {
 
     expect(view.result.current.mode).toBe("batch");
     expect(batch.press).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useLiveDictation — a dropped socket does not cost a live-token slot", () => {
+  /** Azure's way of saying the socket died: a cancellation with reason Error. */
+  async function dropTheSocket() {
+    await act(async () => {
+      handlers.canceled?.(null, { reason: "Error", errorDetails: "connection closed" });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+  }
+
+  it("keeps the credential after one bad socket, and re-reserves against it", async () => {
+    // The other half of the slot leak the second review found, and this half
+    // lives in the browser. Dropping the token here does not retire it —
+    // Azure has no revocation — it just makes the next press mint a SECOND
+    // one, and spends another of the six slots. A tunnel, a captive portal or
+    // a walk out of range would do that once per press until the ceiling
+    // refuses, at which point the streaming mic goes quietly lumpy for ten
+    // minutes and the mic is not what is wrong.
+    const view = await mount();
+    await press(view);
+    expect(mints[0]).toMatchObject({ reuse: false });
+
+    await dropTheSocket();
+    expect(view.onError).toHaveBeenCalledWith("Lost the mic — tap to try again.");
+
+    await press(view);
+    expect(mints).toHaveLength(2);
+    expect(mints[1]).toMatchObject({ reuse: true });
+  });
+
+  it("gives up on a credential that fails twice with nothing heard in between", async () => {
+    // The case where the token really is the suspect — a rotated key, a
+    // credential minted against the wrong region. One strike is weather; two
+    // in a row, with not one hypothesis between them, is the credential.
+    const view = await mount();
+    await press(view);
+    await dropTheSocket();
+    await press(view);
+    await dropTheSocket();
+    await press(view);
+
+    expect(mints.map((m) => m.reuse)).toEqual([false, true, false]);
+  });
+
+  it("forgives a credential the moment Azure says anything through it", async () => {
+    // A token that produced a hypothesis is a good token, so a socket that
+    // dies later starts the count again rather than continuing it.
+    const view = await mount();
+    await press(view);
+    await dropTheSocket();
+    await press(view);
+    act(() => {
+      handlers.recognizing?.(null, { result: { text: "hola" } });
+    });
+    await dropTheSocket();
+    await press(view);
+
+    expect(mints.map((m) => m.reuse)).toEqual([false, true, true]);
   });
 });
 

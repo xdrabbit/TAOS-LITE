@@ -81,6 +81,14 @@ const ISSUE_TIMEOUT_MS = 4000;
 // refuses past the ceiling. That is the only bound Azure's fixed, unrevokable
 // ten-minute TTL leaves room for, and speechMeter's header states the residual
 // exposure as a number rather than waving at it.
+//
+// ── And a slot is only held by a token that EXISTS ─────────────────────────
+// Because the reservation is written before Azure is called, every failure
+// below happens with the row already claiming a ten-minute credential. Each of
+// them calls `release()`, which now clears that claim as well as the
+// reservation — otherwise an unconfigured resource, a rotated key or a
+// Microsoft outage would spend the ceiling six presses deep and leave the
+// account on the batch mic for ten minutes with nothing to show why.
 
 function notFound(): NextResponse {
   return NextResponse.json(
@@ -90,11 +98,22 @@ function notFound(): NextResponse {
 }
 
 /**
- * Hand a reservation back when the credential never got issued.
+ * Hand a reservation back — AND its live-token slot — when nothing was issued.
  *
- * Zero seconds, because nothing was streamed — a token that was never minted
+ * Zero seconds, because nothing was streamed: a token that was never minted
  * cannot have been used, and holding its thirty seconds until the reaper comes
  * would charge somebody for an outage at Microsoft.
+ *
+ * `releaseToken` is the half the second review added, and it is the more
+ * expensive one to get wrong. The reservation is taken BEFORE Azure is asked
+ * for the credential, so the row already claims a ten-minute JWT by the time
+ * any of the failures below are known. Settling it without clearing that claim
+ * leaves a slot held on behalf of a token that does not exist — and
+ * `fastSpeechLiveTokenLimit()` is a hard refusal, so six failed mints inside
+ * ten minutes turn the streaming mic into the batch mic for the whole account.
+ * Every path that reaches this function is one where the server itself knows
+ * no credential left the building, which is what makes clearing it a fact
+ * rather than a favour.
  */
 async function release(
   userId: string | undefined,
@@ -103,7 +122,9 @@ async function release(
   reason: SpeechEndReason
 ): Promise<void> {
   if (!sessionId || !userId) return;
-  await settleFastSpeechSession({ id: userId, email }, sessionId, 0, reason);
+  await settleFastSpeechSession({ id: userId, email }, sessionId, 0, reason, {
+    releaseToken: true
+  });
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {

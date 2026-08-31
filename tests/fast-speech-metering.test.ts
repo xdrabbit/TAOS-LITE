@@ -178,6 +178,47 @@ describe("POST /api/fast/speech-token reserves audio seconds", () => {
     expect(db.speechSecondsHeld("u1")).toBe(0);
   });
 
+  it("does not hold a live-token SLOT for one either", async () => {
+    // The half the reservation refund missed, and the more expensive half.
+    // The row is written before Azure is called, claiming a ten-minute JWT;
+    // when issueToken then fails, settling the reservation leaves that claim
+    // standing. `fastSpeechLiveTokenLimit()` counts it, and counting a token
+    // that does not exist is how an outage at Microsoft becomes a silent,
+    // sticky demotion to the batch mic for the rest of the JWT's life.
+    fetchSpy.mockImplementationOnce(async () => new Response("nope", { status: 401 }));
+    expect((await mint()).status).toBe(503);
+    expect(db.speech[0].token_expires_at).toBeNull();
+    expect(db.speech.filter((s) => s.token_expires_at !== null)).toHaveLength(0);
+  });
+
+  it("frees the slot however the mint failed — key, network, or empty body", async () => {
+    // All four paths call the same release(), and all four are cases where
+    // the SERVER knows no credential left the building.
+    delete process.env.AZURE_SPEECH_KEY;
+    expect((await mint()).status).toBe(503); // unconfigured resource
+    process.env.AZURE_SPEECH_KEY = "azure-key";
+    fetchSpy.mockImplementationOnce(async () => {
+      throw new Error("ETIMEDOUT");
+    });
+    expect((await mint()).status).toBe(503); // Azure unreachable
+    fetchSpy.mockImplementationOnce(async () => new Response("   ", { status: 200 }));
+    expect((await mint()).status).toBe(503); // a 200 carrying nothing
+    expect(db.speech).toHaveLength(3);
+    expect(db.speech.every((s) => s.token_expires_at === null)).toBe(true);
+  });
+
+  it("keeps streaming available after six failed mints in a row", async () => {
+    // The symptom, walked end to end at the shipped default. Before the fix
+    // this sequence left six slots held by six tokens that were never issued,
+    // and the seventh press — the first one after Azure came back — was
+    // refused with speech_tokens_live.
+    for (let i = 0; i < 6; i += 1) {
+      fetchSpy.mockImplementationOnce(async () => new Response("nope", { status: 500 }));
+      expect((await mint()).status).toBe(503);
+    }
+    expect((await mint()).status).toBe(200);
+  });
+
   it("does not meter a founder out of their own screen", async () => {
     process.env.TAOS_FAST_SPEECH_SECONDS_PER_HOUR = String(GRANT);
     caller = { id: "founder", email: "xdrabbit@gmail.com" };
@@ -448,6 +489,35 @@ describe("the live-token ceiling — the only bound a fixed, unrevokable TTL lea
     await settle({ sessionId: first.sessionId, seconds: 3, reason: "user" });
     expect((await mint()).status).toBe(200);
     expect((await mint()).status).toBe(429);
+  });
+
+  it("does not let a client free a slot by claiming its session died early", async () => {
+    // The obvious next feature, and it must not exist. A press that dies in
+    // four seconds still had a credential delivered to it, and Azure has no
+    // revocation — so "my stream failed, give the slot back" is a sentence
+    // the server cannot check and cannot afford to believe. A caller willing
+    // to say it after every mint would lift the ceiling entirely, and the
+    // ceiling is the only bound there is.
+    //
+    // Pinned two ways: the flag is ignored in the body, and the settle route
+    // never mentions it at all.
+    const first = (await (await mint()).json()) as { sessionId: string };
+    await settle({
+      sessionId: first.sessionId,
+      seconds: 0,
+      reason: "error",
+      releaseToken: true,
+      p_release_token: true
+    });
+    expect(db.speech[0].token_expires_at).not.toBeNull();
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(429);
+
+    const route = readFileSync(
+      new URL("../app/api/fast/speech-settle/route.ts", import.meta.url),
+      "utf8"
+    );
+    expect(route).not.toContain("releaseToken");
   });
 
   it("frees the slot when the token actually expires, and not before", async () => {

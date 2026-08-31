@@ -462,15 +462,43 @@ describe("the batch mic is still there, and nothing announces it", () => {
     expect(hook).toContain("useDictation({ onAudio, onError, adopt })");
   });
 
-  it("hands the batch mic the microphone it already opened", () => {
+  it("hands the batch mic the microphone it already opened, when the SOCKET failed", () => {
     // One press opens ONE microphone, however many recognisers it passes
     // through. Stopping every track and immediately asking the phone for
-    // another is how iOS gives you a stream that records silence — and the
-    // second ask would land outside the gesture besides.
+    // another is how iOS gives you a stream that records silence.
+    //
+    // Scoped to this branch on 8/31 (round 3): it is right when what failed
+    // threw — the token, the SDK import, the websocket — because none of
+    // those is an accusation against the capture. See below for the one that
+    // is.
     expect(hook).toContain("captureRef.current?.detachStream()");
-    const recover = hook.slice(hook.indexOf("const recoverToBatch = useCallback"));
-    // Before teardown, which would otherwise stop the tracks on its way past.
-    expect(recover.indexOf("handOffCapture()")).toBeLessThan(recover.indexOf("teardown()"));
+    const rejected = hook.slice(hook.indexOf("void beginStream(session)"));
+    const catchBlock = rejected.slice(0, rejected.indexOf(".finally("));
+    expect(catchBlock).toContain("handOffCapture()");
+  });
+
+  it("refuses to inherit a microphone that was delivering zeroes", () => {
+    // The layer-2 fix, pinned where CI can read it. `recoverToBatch` fires on
+    // a dead-graph verdict, and rule 3 of that verdict means chunks WERE
+    // arriving and every sample in them was zero — which points at the track
+    // as readily as at the AudioContext. Adopting it would put the same dead
+    // track behind MediaRecorder and kill both lanes at once.
+    //
+    // tests/fast-mic-fresh-stream.test.ts proves the consequence with the
+    // real useDictation mounted: the recorder is built on a different stream
+    // object, and the old tracks are stopped before the new one is asked for.
+    const recover = hook.slice(
+      hook.indexOf("const recoverToBatch = useCallback"),
+      hook.indexOf("const beginSalvage = useCallback")
+    );
+    expect(recover).toContain("discardCapture()");
+    expect(recover).not.toContain("handOffCapture()");
+    // Discard first, so `teardown` is the thing that stops the tracks — and
+    // so they are stopped before useDictation asks the browser for another.
+    expect(recover.indexOf("discardCapture()")).toBeLessThan(recover.indexOf("teardown()"));
+    // And nothing is left parked for a later press to adopt.
+    const discard = hook.slice(hook.indexOf("const discardCapture = useCallback"));
+    expect(discard.slice(0, discard.indexOf("}, []"))).toContain("handOffRef.current = null");
   });
 
   it("falls back without telling anybody", () => {

@@ -519,11 +519,30 @@ the mic and then thinks for ten seconds is not read as a broken socket. And it
 salvages rather than restarts, because restarting into the batch mic would
 throw away exactly the four seconds that diagnosed the problem.
 
-One press opens **one** microphone however many recognisers it passes through:
-a fallback hands its already-granted stream down via `detachStream()` /
-`adopt`, rather than stopping every track and asking the phone again. The
-browser rig counts the streams, and caught that regression when it was written
-the other way.
+One press opens **one** microphone however many recognisers it passes
+through — *unless the microphone is what is being accused*. A socket-side
+failure (row 1 and row 2 above) hands its already-granted stream down via
+`detachStream()` / `adopt`, rather than stopping every track and asking the
+phone again; the browser rig counts the streams and caught that regression
+when it was written the other way.
+
+The **dead-graph** verdict is the exception, and the reason is the whole
+layer-2 argument. Rule 3 of that verdict fires when chunks *are* arriving and
+every sample in them is zero, which rules out the AudioContext and points at
+the **track**. Handing that track to `MediaRecorder` records the same zeroes —
+both lanes dead, one field report. So that path stops every track and lets
+`useDictation` call `getUserMedia` for itself.
+
+It rests on an assumption that **no engine here can check**: that a second
+`getUserMedia` in the same document does not re-prompt once permission has
+been granted — `getUserMedia`, unlike `AudioContext.resume`, has no transient
+activation requirement, and Safari's grant is per-document. If that is wrong
+on a real iPhone the failure is benign and visible: the prompt goes up
+mid-press, and `useDictation`'s pending-latch rule already holds that press
+open until the answer lands (it was written for the permission prompt in the
+first-ever dictation). A refused second grant surfaces as *"Microphone access
+was denied"* rather than a lit button, and `tests/fast-mic-fresh-stream.test.ts`
+pins that path too.
 
 **What no engine here could prove.** Chrome reports a fresh `AudioContext` as
 `running` at birth — measured both with and without
@@ -574,3 +593,29 @@ compared.
 That is the whole run. What matters most is step 2's three-way answer in each
 of the two contexts — six observations, and the difference between "the fix
 landed", "it fell back safely" and "it is still broken".
+
+#### What each answer would actually mean
+
+Round 3 added a second layer to the fallback, so the ⚠️ and ❌ answers now
+say different things than they did. Worth knowing before you look:
+
+- ✅ **live words** — the win. The streaming mic works on your phone; nothing
+  below applies.
+- ⚠️ **lumpy lump** — the layer-2 fix is working and streaming is still dying.
+  The mic is not dead, the fallback caught it, and a fresh `getUserMedia`
+  recorded what the streaming track would not. **Report this one** — it means
+  the zeroes are coming from the capture track, which is the hypothesis this
+  round was built on and nothing here can confirm without your phone.
+- ❌ **4 seconds and nothing** — there is a *third* layer, below both of
+  these. Both a Web Audio graph and a brand-new MediaRecorder stream came back
+  empty, which is a phone that is not giving this page audio at all.
+- 🔁 **works, then goes lumpy after several reloads** — not the microphone.
+  That is `TAOS_FAST_SPEECH_LIVE_TOKENS` (default 6) refusing a seventh live
+  credential; a token lives ten minutes and does not survive a reload, so a
+  reload-heavy test can legitimately reach it. The runtime log says
+  `speech_tokens_live`. Raise the number for the test rather than lowering it
+  for production.
+
+Press the mic **more than once** in each context, and reload at least once.
+Several of the bugs found in rounds 2 and 3 only show on the second press or
+after a reload, which is exactly the press a desktop walkthrough never makes.

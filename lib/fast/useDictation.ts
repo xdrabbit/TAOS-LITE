@@ -91,12 +91,18 @@ export interface DictationOptions {
    * A microphone that is already open, if there is one.
    *
    * The live mic (lib/fast/useLiveDictation.ts) opens the microphone itself,
-   * inside the user gesture, and when streaming gives up it hands that same
+   * inside the user gesture, and when the SOCKET gives up it hands that same
    * stream down here rather than letting this hook ask the phone for a second
    * one. Two getUserMedia calls a second apart is how iOS gives you a stream
-   * that records silence — and the second one would land outside the gesture
-   * anyway. Returns null when there is nothing to inherit, which is the
-   * ordinary case and the one that asks for the mic normally.
+   * that records silence. Returns null when there is nothing to inherit,
+   * which is the ordinary case and the one that asks for the mic normally.
+   *
+   * It returns null in one more case, deliberately: when streaming gave up
+   * because the audio it was capturing was DIGITAL SILENCE. That verdict
+   * accuses the microphone, so that press arrives here with its old tracks
+   * already stopped and this hook opens a fresh one — inheriting a track that
+   * is provably delivering zeroes is inheriting the bug. The whole argument
+   * is written out at `discardCapture` in the live hook.
    *
    * Consumed once: whatever it returns, this hook owns and stops.
    */

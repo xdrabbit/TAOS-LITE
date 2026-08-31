@@ -256,14 +256,34 @@ export async function settleFastSpeechSession(
   user: FastUser,
   sessionId: string,
   seconds: number,
-  reason: SpeechEndReason
+  reason: SpeechEndReason,
+  options: {
+    /**
+     * Free this row's LIVE-TOKEN SLOT as well as its reservation.
+     *
+     * Only ever true when the server knows no JWT was issued against the row
+     * — issueToken failed, or the resource is unconfigured. The reservation
+     * is written before the credential is fetched, so a failed mint would
+     * otherwise hold a slot for ten minutes on behalf of a token that does
+     * not exist: six failures and the ceiling silently turns the streaming
+     * mic into the batch mic for everybody on that account.
+     *
+     * It is NOT settable from a client. A credential that reached a browser
+     * is live for the rest of its ten minutes whatever the browser then says
+     * about it, and Azure offers no revocation — so "my session died early,
+     * give me the slot back" is both uncheckable and, if honoured, a way to
+     * mint without limit. POST /api/fast/speech-settle never passes this.
+     */
+    releaseToken?: boolean;
+  } = {}
 ): Promise<number | null> {
   if (!meteringAvailable()) return null;
   const { data, error } = await supabaseAdmin.rpc("fast_speech_settle", {
     p_user_id: user.id,
     p_id: sessionId,
     p_seconds: Math.max(0, Math.round(seconds)),
-    p_reason: reason
+    p_reason: reason,
+    p_release_token: options.releaseToken === true
   });
   if (error) {
     // eslint-disable-next-line no-console

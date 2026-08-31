@@ -133,13 +133,18 @@ export interface MicCapture {
    * Give up the audio graph but KEEP the microphone, and hand the live
    * MediaStream to whoever asked.
    *
-   * This is what a fallback uses. The batch mic needs a MediaStream and
-   * nothing else — MediaRecorder does not touch Web Audio — so a press that
-   * gives up on streaming can carry its already-granted, already-open
-   * microphone across instead of stopping every track and asking the phone
-   * for it a second time. On iOS especially, a close/reopen cycle in the same
-   * second is a good way to get a stream that records silence, and the second
-   * getUserMedia would land outside the gesture besides.
+   * This is what the SOCKET fallback uses. The batch mic needs a MediaStream
+   * and nothing else — MediaRecorder does not touch Web Audio — so a press
+   * that gives up on streaming because the token, the SDK or the websocket
+   * failed can carry its already-granted, already-open microphone across
+   * instead of stopping every track and asking the phone for it a second
+   * time. On iOS especially, a close/reopen cycle in the same second is a
+   * good way to get a stream that records silence.
+   *
+   * It is emphatically NOT for the fallback that fires because the audio is
+   * silent. That verdict accuses this stream, and inheriting it would put the
+   * same dead track behind MediaRecorder — see `discardCapture` in
+   * lib/fast/useLiveDictation.ts, which calls `close()` instead.
    *
    * The caller owns the stream afterwards: `close()` will no longer stop it.
    */
@@ -432,8 +437,10 @@ export function micVerdict(reading: MicReading): MicVerdict {
   // A real mic in a silent room clears DIGITAL_SILENCE_RMS on its self-noise,
   // so four seconds of literal zero is a capture path and not a quiet person.
   // Batch, not salvage: what was retained is that same silence, and the
-  // fallback re-opens the microphone through MediaRecorder, which does not go
-  // through Web Audio at all.
+  // fallback re-opens the microphone through MediaRecorder — a NEW
+  // getUserMedia, not this one's track, because the layer this rule cannot
+  // see between might be the track itself. Web Audio is not involved either
+  // way.
   if (reading.audibleMs === 0 && reading.sinceStartMs >= STREAM_MUTE_MS) return "dead-graph";
 
   // 4. Audio is flowing and somebody is talking into it, and Azure has said

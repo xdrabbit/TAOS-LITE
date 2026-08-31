@@ -218,6 +218,14 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
   const sdkLoadRef = useRef<Promise<SpeechSdk> | null>(null);
   const tokenRef = useRef<HeldToken | null>(null);
   const warmRef = useRef<Promise<void> | null>(null);
+  /**
+   * Consecutive socket cancellations blamed on the credential in hand.
+   *
+   * Zeroed whenever a fresh one is minted and whenever Azure says anything at
+   * all through it. See the `canceled` handler for why one strike is not
+   * enough to throw a live token away.
+   */
+  const credentialStrikesRef = useRef(0);
 
   // performance.now() at the press that opened the live session, or 0 when
   // there is no reservation outstanding.
@@ -322,12 +330,64 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
   /**
    * Give the batch mic the microphone this press already opened.
    *
-   * Call this on the way into any fallback. It keeps the tracks alive and
-   * parks them for useDictation's `adopt`, so one press opens one microphone
-   * however many recognisers it goes through.
+   * It keeps the tracks alive and parks them for useDictation's `adopt`, so
+   * one press opens one microphone however many recognisers it goes through.
+   *
+   * ── When this is the right move, and when it is the bug ──────────────────
+   * Only when the MICROPHONE IS NOT THE ACCUSED. `beginStream` rejecting is
+   * the token, the SDK or the socket failing — the capture never got a chance
+   * to be judged, and re-opening it would cost a second getUserMedia for no
+   * evidence at all.
+   *
+   * A `dead-graph` verdict is the opposite case and must NOT come through
+   * here: see `discardCapture`.
    */
   const handOffCapture = useCallback(() => {
     handOffRef.current = captureRef.current?.detachStream() ?? null;
+  }, []);
+
+  /**
+   * Throw this press's microphone away — tracks stopped, nothing inherited.
+   *
+   * ── The layer-2 hypothesis ───────────────────────────────────────────────
+   * The first round of this branch handed the SAME MediaStream to the batch
+   * mic on EVERY fallback, including the one that fires because the audio
+   * being captured is zeroes. If an iPhone is producing digital silence at
+   * the TRACK level rather than at the AudioContext level — a mic the OS
+   * handed over but is not feeding, which is what an interrupted or
+   * hijacked-by-another-app capture looks like — then adopting that track is
+   * adopting the failure. Both lanes go dead, and what the person sees is
+   * Tom's exact field report: button lit, timer counting, four seconds,
+   * nothing. A fallback that inherits the fault is not a fallback.
+   *
+   * So the dead-graph path stops every track and lets `useDictation` call
+   * getUserMedia for itself. The two costs of that, both accepted:
+   *
+   *   • A second getUserMedia. The comment this replaces was right that
+   *     close-and-reopen inside the same second is a way to get a silent
+   *     stream on iOS — but that is a description of the failure we are
+   *     ALREADY IN. A fresh track that turns out silent is no worse than an
+   *     inherited one that is silent for certain, and it is the only version
+   *     with a chance of being different.
+   *   • It lands outside the tap's user gesture. Unlike AudioContext.resume,
+   *     `getUserMedia` has no transient-activation requirement once the
+   *     permission is granted, and the grant is per-document — Safari does
+   *     not re-prompt for a second call on a page it has already allowed.
+   *     UNVERIFIED ON A DEVICE, and it is on the phone-gate checklist. If it
+   *     is wrong, the failure is benign and visible: iOS puts its prompt up
+   *     mid-press, and `useDictation`'s pending-latch rule already keeps that
+   *     press alive until the answer lands (a permission prompt in the middle
+   *     of a press is the FIRST-ever-dictation case it was written for).
+   *
+   * Stopping is not optional politeness either: a track still held by this
+   * page is a track the next getUserMedia may be handed straight back.
+   */
+  const discardCapture = useCallback(() => {
+    // Nothing to inherit. A stale hand-off from an earlier press would be
+    // adopted by this one, so clear it rather than merely not setting it.
+    handOffRef.current = null;
+    // The tracks themselves go in `closeCapture` → `MicCapture.close()`, which
+    // stops them precisely because nothing detached them.
   }, []);
 
   /** Let the microphone and the push stream go. */
@@ -438,6 +498,8 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       return;
     }
     if (!payload.token || !payload.region) throw new Error("speech-token incomplete");
+    // A new credential starts with a clean record; see the `canceled` handler.
+    credentialStrikesRef.current = 0;
     tokenRef.current = {
       token: payload.token,
       region: payload.region,
@@ -551,19 +613,23 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
    * attempt down and hand the SAME press to the batch mic, including whether
    * the finger is still on the button. The person sees a mic that took a
    * moment to think, which is the point.
+   *
+   * What does NOT carry across is the microphone. This is the one verdict
+   * that accuses the capture path itself, so the batch mic gets a stream of
+   * its own — `discardCapture` above is the whole argument.
    */
   const recoverToBatch = useCallback(() => {
     const wasLatched = latchedRef.current;
     sessionRef.current += 1; // orphan a recogniser still in flight
     startingRef.current = false;
-    // Before teardown, which would otherwise stop the tracks: the graph is
-    // dead but the microphone behind it is perfectly good, and MediaRecorder
-    // does not need Web Audio at all.
-    handOffCapture();
+    // Order matters: this leaves the tracks attached so that `teardown` stops
+    // them, and it stops them BEFORE useDictation asks for a new one. A track
+    // this page still holds is one the browser can hand straight back.
+    discardCapture();
     teardown();
     if (wasLatched) pendingLatchRef.current = true;
     fallBackToBatch();
-  }, [fallBackToBatch, handOffCapture, teardown]);
+  }, [discardCapture, fallBackToBatch, teardown]);
 
   /**
    * The socket went deaf mid-sentence: keep the mic, drop the recogniser.
@@ -741,6 +807,9 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       const heard = (): void => {
         if (heardRef.current) return;
         heardRef.current = true;
+        // A credential that produced a hypothesis is a good credential,
+        // whatever happens to the socket after this.
+        credentialStrikesRef.current = 0;
         clearWatchdogs();
         captureRef.current?.stopRetaining();
       };
@@ -764,8 +833,28 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       recognizer.canceled = (_s, e) => {
         if (session !== sessionRef.current) return;
         if (e.reason === sdk.CancellationReason.Error) {
-          // The token is the likeliest culprit and the cheapest thing to fix.
-          tokenRef.current = null;
+          // ── Do not throw a live credential away on one bad socket ───────
+          // This used to read "the token is the likeliest culprit and the
+          // cheapest thing to fix" and drop it. It is neither. A token near
+          // its expiry is already refused reuse by `warm`, so what is left
+          // here is mostly WEATHER — a tunnel, a captive portal, a walk out
+          // of range — and dropping the credential makes the next press mint
+          // a new one. That does not retire the old one (Azure has no
+          // revocation), it adds a second: another of the six live-token
+          // slots spent, per failure, until the ceiling refuses the press and
+          // the streaming mic goes quietly lumpy for ten minutes. A bad
+          // afternoon on a train is indistinguishable from an attack.
+          //
+          // So: one strike keeps the credential and re-reserves against it;
+          // two consecutive strikes without a single word between them means
+          // the credential really is the suspect, and it goes.
+          credentialStrikesRef.current += 1;
+          const held = tokenRef.current;
+          const spent = !held || Date.now() >= held.expiresAt - AZURE_TOKEN_REFRESH_MS;
+          if (spent || credentialStrikesRef.current >= 2) {
+            tokenRef.current = null;
+            credentialStrikesRef.current = 0;
+          }
           warmRef.current = null;
           onErrorRef.current("Lost the mic — tap to try again.");
         }
@@ -915,6 +1004,11 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
         // microphone this press already opened goes WITH it — two live
         // captures on a phone is how you get one that records silence, and so
         // is closing one and immediately asking for another.
+        //
+        // This is the fallback where adopting is RIGHT. What failed here threw
+        // — the token, the SDK import, the socket — and none of those is an
+        // accusation against the capture. The dead-graph path is the one that
+        // accuses it, and that one refuses the inheritance (`discardCapture`).
         handOffCapture();
         closeCapture();
         fallBackToBatch();
