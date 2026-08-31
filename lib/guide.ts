@@ -146,8 +146,8 @@ const MODES: GuideSection = {
   id: "modes",
   heading: { en: "Four ways to talk", es: "Cuatro formas de hablar" },
   intro: {
-    en: "TAOS opens on the first one. The rest are buttons along the top of that screen — Translate, Live, Table, Chat — one tap each. The nine dots in the top right corner open a grid with every screen TAOS has, if you would rather see them all at once.",
-    es: "TAOS abre en la primera. Las demás son botones arriba en esa misma pantalla — Translate, Live, Table, Chat — un toque cada uno. Los nueve puntos de la esquina superior derecha abren una cuadrícula con todas las pantallas, si prefieres verlas todas juntas."
+    en: "TAOS opens on the first one. The rest are along the top of that screen: Live, Together ▾, Translate.",
+    es: "TAOS abre en la primera. Las demás están arriba en esa misma pantalla: Live, Together ▾, Translate."
   },
   entries: [
     {
@@ -178,8 +178,8 @@ const MODES: GuideSection = {
       icon: "🍽️",
       label: "Table · Mesa",
       body: {
-        en: "Tap Table along the top. Lay the phone flat between the two of you: the screen splits, and the far half is upside-down so it reads the right way up from their side. Each half is in that person's own language. TAP TO TALK, TAP WHEN DONE, and it is the other person's turn.",
-        es: "Toca Table arriba. Pon el teléfono plano entre los dos: la pantalla se divide, y la mitad de enfrente está al revés para que se lea bien desde su lado. Cada mitad está en el idioma de esa persona. TOCA PARA HABLAR, TOCA AL TERMINAR, y le toca a la otra persona."
+        en: "Under Together ▾. Lay the phone flat between the two of you: the screen splits, and the far half is upside-down so it reads the right way up from their side. Each half is in that person's own language. TAP TO TALK, TAP WHEN DONE, and it is the other person's turn.",
+        es: "Está en Together ▾. Pon el teléfono plano entre los dos: la pantalla se divide, y la mitad de enfrente está al revés para que se lea bien desde su lado. Cada mitad está en el idioma de esa persona. TOCA PARA HABLAR, TOCA AL TERMINAR, y le toca a la otra persona."
       },
       example: {
         en: "Lay the phone flat between you.",
@@ -190,8 +190,8 @@ const MODES: GuideSection = {
       icon: "💬",
       label: "Chat · Chat",
       body: {
-        en: "Texting across languages, on two phones. Tap Chat along the top, then Start a chat, and show them the QR code or send them the link. They scan it, sign in, and they are in. Everything you write arrives in their language and everything they write arrives in yours. The link works for one person and lasts 7 days.",
-        es: "Mensajes entre idiomas, en dos teléfonos. Toca Chat arriba, luego Inicia un chat, y muéstrales el código QR o envíales el enlace. Lo escanean, inician sesión y ya están dentro. Todo lo que escribes llega en su idioma y todo lo que escriben llega en el tuyo. El enlace sirve para una sola persona y dura 7 días."
+        en: "Texting across languages, on two phones. Under Together ▾ → Chat, tap Start a chat and show them the QR code, or send them the link. They scan it, sign in, and they are in. Everything you write arrives in their language and everything they write arrives in yours. The link works for one person and lasts 7 days.",
+        es: "Mensajes entre idiomas, en dos teléfonos. En Together ▾ → Chat, toca Inicia un chat y muéstrales el código QR, o envíales el enlace. Lo escanean, inician sesión y ya están dentro. Todo lo que escribes llega en su idioma y todo lo que escriben llega en el tuyo. El enlace sirve para una sola persona y dura 7 días."
       },
       example: {
         en: "Start a chat → show the QR → they scan and join.",
@@ -206,12 +206,9 @@ const MODES: GuideSection = {
 };
 
 // ── 3. Photo ───────────────────────────────────────────────────────────────
-// /vision's entry point is the LAUNCHER — the nine dots top right — not a
-// header pill and not the avatar beside it. Naming the wrong corner of the
-// screen is the fastest way to lose a reader, so it is spelled out; this
-// paragraph said "the round button with your initial in it" for a month after
-// that button stopped having an initial in it, which is what the
-// tests/guide-page.test.ts label fence is for.
+// /vision's entry point is the account menu, NOT a header pill — the round
+// button top right, which shows an initial. Naming the wrong corner of the
+// screen is the fastest way to lose a reader, so it is spelled out.
 const PHOTO: GuideSection = {
   id: "photo",
   heading: { en: "Point it at a menu", es: "Apúntala a un menú" },
@@ -220,8 +217,8 @@ const PHOTO: GuideSection = {
       icon: "📷",
       label: "Photo translator · Fotos",
       body: {
-        en: "Tap the nine dots in the top right corner — All screens · Pantallas — then Photo translator · Fotos. Point the camera at a menu, a sign, a label, a form — or choose a photo you already took — and the words come back in your language. Nothing is kept.",
-        es: "Toca los nueve puntos de la esquina superior derecha — All screens · Pantallas — y luego Photo translator · Fotos. Apunta la cámara a un menú, un letrero, una etiqueta, un formulario — o elige una foto que ya tomaste — y las palabras vuelven en tu idioma. No se guarda nada."
+        en: "Tap the round button in the top right corner (it has your initial in it), then Photo translator · Fotos. Point the camera at a menu, a sign, a label, a form — or choose a photo you already took — and the words come back in your language. Nothing is kept.",
+        es: "Toca el botón redondo de la esquina superior derecha (tiene tu inicial), y luego Photo translator · Fotos. Apunta la cámara a un menú, un letrero, una etiqueta, un formulario — o elige una foto que ya tomaste — y las palabras vuelven en tu idioma. No se guarda nada."
       },
       example: {
         en: "There is no language to set: it reads whatever the photo turns out to be.",

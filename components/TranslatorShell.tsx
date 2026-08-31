@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
 import {
   getMonthlyUsage,
   getTier,
@@ -309,57 +308,6 @@ function fileNameFor(mime: string): string {
   return "audio.webm";
 }
 
-/**
- * One 24x24 line icon for the launcher grid, in the stroke style every other
- * icon in this app already uses (see components/fast/FastMicDock.tsx and the
- * Share button below): fill none, currentColor, 2px round caps. Decorative —
- * every tile carries its own bilingual aria-label, so these are aria-hidden and
- * never the thing a screen reader announces.
- *
- * One component rather than ten inline SVGs so the sizing cannot drift tile to
- * tile, which is the only way a grid of icons stops reading as a grid.
- */
-function NavIcon({ name }: { name: NavIconName }): JSX.Element {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-5 w-5 shrink-0"
-    >
-      {NAV_ICON_PATHS[name].map((d) => (
-        <path key={d} d={d} />
-      ))}
-    </svg>
-  );
-}
-
-type NavIconName = keyof typeof NAV_ICON_PATHS;
-
-const NAV_ICON_PATHS = {
-  // The record button this screen is built around.
-  speak: ["M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z", "M5 10v1a7 7 0 0014 0v-1M12 19v3M8.5 22h7"],
-  // /translate is the TYPING screen — a keyboard, not a microphone. The two
-  // are the pair a reader is likeliest to confuse (tests/guide-page.test.ts
-  // has a whole case about it), so they get the two most different glyphs.
-  translate: ["M3 7a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z", "M7 9h.01M11 9h.01M15 9h.01M17 9h.01M7 13h.01M17 13h.01M9.5 16h5"],
-  // Listening, not talking: a speaker with a wave coming off it.
-  live: ["M11 5L6 9H3v6h3l5 4V5z", "M15.5 9.5a3.5 3.5 0 010 5M18.5 6.5a7.5 7.5 0 010 11"],
-  // The phone laid flat between two people, split down the middle.
-  table: ["M4 3h16a1 1 0 011 1v16a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z", "M3 12h18"],
-  chat: ["M21 11.5a8.4 8.4 0 01-9.1 8.4L4 21l1.1-3.9A8.4 8.4 0 1121 11.5z"],
-  call: ["M21.5 16.9v2.8a2 2 0 01-2.2 2 19.6 19.6 0 01-8.5-3 19.3 19.3 0 01-6-6 19.6 19.6 0 01-3-8.6A2 2 0 013.8 2h2.8a2 2 0 012 1.7c.1 1 .4 1.9.7 2.8a2 2 0 01-.5 2.1L7.6 9.9a16 16 0 006 6l1.3-1.2a2 2 0 012.1-.5c.9.3 1.8.6 2.8.7a2 2 0 011.7 2z"],
-  // /fast is the quickie box: a bolt.
-  fast: ["M13 2L4 14h7l-1 8 9-12h-7l1-8z"],
-  photo: ["M3 8.5A2 2 0 015 6.5h2.2L8.5 4.5h7l1.3 2H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z", "M15.5 13a3.5 3.5 0 11-7 0 3.5 3.5 0 017 0z"],
-  video: ["M3 7a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z", "M15 10.5l6-3.5v10l-6-3.5"],
-  tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"]
-} as const;
-
 export function TranslatorShell({
   email,
   profile,
@@ -397,17 +345,14 @@ export function TranslatorShell({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [wrappingUp, setWrappingUp] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  // Two menus, and the names say which is which now: the nine-dot GRID is the
-  // app launcher, the ACCOUNT menu hangs off the avatar. They used to be
-  // "account" (which held four screens) and "together" (which held two more).
-  const [gridMenuOpen, setGridMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [togetherMenuOpen, setTogetherMenuOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [personalVoiceOpen, setPersonalVoiceOpen] = useState(false);
   const personalVoiceTap = useSecretTaps(() => setPersonalVoiceOpen(true));
 
-  const gridMenuRef = useRef<HTMLDivElement | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const togetherMenuRef = useRef<HTMLDivElement | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -436,24 +381,6 @@ export function TranslatorShell({
   // Same shape as callVisible, and for the same reason: /fast is founders OR
   // everyone once NEXT_PUBLIC_ENABLE_FAST ships it.
   const fastVisible = fastVisibleTo(email);
-
-  // Which tile in the launcher is the screen you are already on. The header
-  // only renders on "/" today, so this is "/" every time — it is read from the
-  // router rather than assumed because the whole point of the grid is that it
-  // is a catalog of screens, and a catalog that has to be edited when it moves
-  // to a second screen is the kind of thing that quietly stops being true.
-  const pathname = usePathname();
-
-  // The avatar's letter. First alphanumeric of the signed-in email, or null —
-  // in which case the chip draws a person glyph instead, because "?" or a blank
-  // circle both read as an error.
-  //
-  // #45 removed exactly this arithmetic from the NINE-DOT TRIGGER, and that
-  // still stands: a disclosure whose glyph is drawn from the account renders as
-  // an X on any x@ address, and Liz watched strangers refuse to tap it. The
-  // avatar is a different control with a different job — being a function of
-  // whose phone it is, is what an avatar IS — and it never swaps to an X.
-  const avatarInitial = ((email ?? "").match(/[a-z0-9]/i)?.[0] ?? "").toUpperCase() || null;
 
   // The pair, the pill row and the sheet, shared with /live and /tabletop
   // (lib/translate/useLanguagePair.ts). pair[0] is YOUR side, pair[1] is
@@ -524,35 +451,8 @@ export function TranslatorShell({
     };
   }, [subscriber]);
 
-  // Close the grid menu on outside pointer press or Escape. Only wired while
+  // Close the account menu on outside pointer press or Escape. Only wired while
   // the menu is open so there's no idle global listener.
-  //
-  // A CONTAINMENT CHECK, not a suppressed event. This is the shape everyone
-  // reaches for when a menu appears to eat a tap, and reaching for
-  // stopPropagation instead only hides a containment check that is wrong.
-  // (The 8/31 "menu eats touches" report turned out to be geometry, not this
-  // — see the header — but the fence stays.)
-  useEffect(() => {
-    if (!gridMenuOpen) return;
-    function onPointerDown(e: PointerEvent) {
-      if (gridMenuRef.current && !gridMenuRef.current.contains(e.target as Node)) {
-        setGridMenuOpen(false);
-      }
-    }
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setGridMenuOpen(false);
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [gridMenuOpen]);
-
-  // Same close-on-outside/Escape behavior for the avatar's account menu. The
-  // two triggers also close each other on press (see the header), so moving
-  // between them is one touch rather than close-then-open.
   useEffect(() => {
     if (!accountMenuOpen) return;
     function onPointerDown(e: PointerEvent) {
@@ -570,6 +470,26 @@ export function TranslatorShell({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [accountMenuOpen]);
+
+  // Same close-on-outside/Escape behavior for the Together (Call/Chat/Table)
+  // menu — the header collapsed those pills into one so it fits a phone width.
+  useEffect(() => {
+    if (!togetherMenuOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (togetherMenuRef.current && !togetherMenuRef.current.contains(e.target as Node)) {
+        setTogetherMenuOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setTogetherMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [togetherMenuOpen]);
 
   function ensureAudioEl(): HTMLAudioElement | null {
     if (!audioRef.current) {
@@ -947,72 +867,73 @@ export function TranslatorShell({
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        {/* THE NAV IS THREE TIERS. Verbs, catalog, identity — and no dropdown
-            in the row a thumb reaches for.
+        {/* THE HEADER WRAPS. It has to, and this is the fence.
 
-            What this replaces: one pill row that mixed screens with a
-            "Together ▾" disclosure holding two of them, and a nine-dot menu
-            that held four more screens PLUS History, the guide, About and
-            Sign out. Three different kinds of thing in two menus, and which
-            menu a screen lived in was an accident of the order it shipped in.
-            Liz, taking the app to strangers: nobody opens a menu to find out
-            what an app does. Together ▾ in particular never earned itself —
-            it was created on 8/19 to fix a WIDTH (ENHANCEMENTS.md), and two
-            items behind a disclosure is a disclosure that costs a touch and
-            saves nothing now that the row wraps.
+            Tom, 8/31, on the Droid: reaching Call through Together ▾ took two
+            or three touches, every time. Not a flaky handler — the row was
+            405.9 px of content inside a 343 px container, so the nav ran off
+            the right edge of the phone and took the page's scroll width with
+            it. Measured at three widths (tests/live-fire/menu-tap-browser-check.mjs):
 
-            So:
+              viewport  nav ends at   "More ·  Más" off-screen by
+                390 px    405.9 px      15.9 px
+                360 px    405.9 px      45.9 px
+                320 px    405.9 px      85.9 px
 
-              1. PILLS — the daily verbs, top level, one touch each, no menu.
-                 Translate · Live · Table · Chat, plus Call for founders.
-                 Translate leads because it is the stranger's first magic
-                 moment: type a sentence, watch it come back.
-              2. THE NINE-DOT GRID — a true app launcher. Every surface TAOS
-                 has, as an icon, in one glance, including the screen you are
-                 standing on. It is deliberately REDUNDANT with the pills: the
-                 pills answer "take me there", the grid answers "what can this
-                 app do?", and those are different questions asked by different
-                 people. A launcher that hid the four screens you use daily
-                 would answer neither.
-              3. THE AVATAR — identity, and only identity. History, the guide,
-                 About, Sign out. These were in the nine-dot menu, mixed in
-                 among screens, which is why /vision (a SCREEN) had to be
-                 described to readers as living in "the account menu".
+            Two separate tap-eaters came out of that one number:
 
-            The geometry from #53/#54 is unchanged and load-bearing: two
-            deliberate rows, flex-wrap on the pills, both menus anchored to the
-            HEADER (never to their own trigger), 44px floors everywhere.
-            tests/nav-tap-targets.test.ts is the fence; do not take flex-wrap
-            off and do not put `relative` on a trigger's wrapper. The reasons
-            are worth re-reading before touching this:
+            1. The grid menu's trigger was PAST THE EDGE. Not clipped —
+               laid out off-screen. document.elementFromPoint() at its centre
+               returned nothing at all three widths, so the only way in was to
+               catch the sliver of it still on the glass.
+            2. document.scrollWidth (406) exceeded the viewport, which makes
+               the whole page horizontally pannable — the meta viewport sets
+               initial-scale=1 with no maximum-scale, so nothing pins it. Once
+               a page can pan, a touch that drifts sideways is a PAN, not a
+               tap, and the browser never dispatches the click. Measured on
+               the Together pill: a 12 px drift still clicks, a 20 px drift
+               scrolls the page 7 px and fires no click event whatsoever. A
+               thumb reaching across a phone drifts further than 20 px.
 
-            THE HEADER WRAPS. Tom, 8/31, on the Droid: reaching Call through
-            Together ▾ took two or three touches, every time. The row was
-            405.9px of content inside a 343px container, so the nav ran off the
-            right edge of the phone and took the page's scroll width with it.
-            Two tap-eaters out of that one number — the grid trigger was laid
-            out PAST THE EDGE (elementFromPoint at its centre returned nothing
-            at 390/360/320px), and document.scrollWidth exceeding the viewport
-            makes the page horizontally pannable, so a touch that drifts
-            sideways is a PAN and the browser dispatches no click at all
-            (measured: 20px of drift scrolled the page 7px and fired nothing).
-            A row that wraps cannot do either. This row has now grown by two
-            more controls without moving off the glass, which is the wrap
-            earning its keep.
+            So the row was eating the first touch, sliding out from under the
+            second, and landing the third. It read as a race and was geometry.
 
-            BOTH MENUS ANCHOR TO THE HEADER. A dropdown positioned against its
-            own trigger drops onto whatever is under that trigger — and what is
-            under row one is the pill row. An open menu then covers the pills
-            and a touch aimed at Translate lands on a menu item instead: not a
-            dead tap, a WRONG one. `relative` belongs on <header> and nowhere
-            else in here. */}
+            The fix is `flex-wrap` here and on the nav row below, plus
+            `min-w-0` so the nav is allowed to shrink rather than push. A row
+            that wraps cannot put anything off-screen and cannot make the
+            document wider than the viewport, so BOTH eaters die at once — and
+            they stay dead for whatever the next PR adds to this header, which
+            a hand-tuned width would not survive. This one already grew back
+            once: the Together menu was created on 8/19 to fix exactly this
+            overflow, and by 8/30 the row measured 406 px again.
+
+            tests/nav-tap-targets.test.ts pins the wrapping and the 44 px
+            targets. Do not take flex-wrap off. */}
+        {/* `relative` here, and NOT on either trigger's wrapper, is what makes
+            both dropdowns hang off the BOTTOM OF THE HEADER instead of off the
+            control that opened them.
+
+            It has to be the header. A dropdown anchored to its own trigger
+            drops onto whatever is directly beneath that trigger — and once the
+            nav is two rows, what is beneath the More button is the row of
+            pills. The menu then covers Live / Call / Together ▾ / Translate,
+            and a touch aimed at a pill lands on a menu item instead: not a
+            dead tap, a WRONG one. The browser check caught exactly that
+            ("one touch swaps from the grid menu to Together ▾") the first time
+            this header was split into two rows.
+
+            Anchored to the header, where a menu opens no longer depends on
+            where its trigger happened to wrap to. Do not put `relative` back
+            on the wrappers. */}
         <header className="relative flex flex-col gap-2">
-          {/* ROW ONE: the brand, and the three controls that are not screens —
-              Share, the app grid, and you. They sit here rather than on the end
-              of the pill row because the pill row is the part that grows: every
-              screen TAOS has added since 8/19 arrived as a pill, and the grid
-              trigger riding on the end of that row is what carried it off the
-              edge of the phone. */}
+          {/* ROW ONE: the brand, and the two controls that are not
+              screens — Share and the More grid. They sit here rather
+              than at the end of the pill row because the pill row is
+              the part that grows: every screen TAOS has added since
+              8/19 arrived as a pill, and the More trigger riding on
+              the end of that row is what carried it off the edge of
+              the phone. Anchored to the header instead, it cannot be
+              pushed anywhere by anything the next PR adds. */}
           <div className="flex items-center justify-between gap-2">
             {/* Five taps on the title open the personal-voice sheet. Looks and
                 behaves like plain text to everyone who isn't looking for it. */}
@@ -1049,33 +970,30 @@ export function TranslatorShell({
                   <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
                 </svg>
               </button>
-              {/* THE LAUNCHER. Nine dots closed, an X open — the two glyphs are
-                  stacked in one 16px box and cross-faded so the header cannot
-                  reflow on the swap.
+              {/* Tutor lives in this menu (with History) — Tom, 7/27: one fewer
+                  pill keeps the header from crowding phone widths. Hidden
+                  entirely for RC1 (lib/release.ts).
 
-                  The trigger used to draw the signed-in email's first letter,
-                  and on Tom's account (xdrabbit@) that letter is X — so the
-                  button that OPENS the menu wore the universal symbol for
+                  The trigger used to be the signed-in email's first letter, and
+                  on Tom's account (xdrabbit@) that letter is X — so the button
+                  that OPENS the menu was drawn as the universal symbol for
                   close/delete. Liz, launching the wave on 8/30: strangers read
                   it as "remove" and would not tap it. Any account whose email
                   starts with x, or with no letter at all, had the same problem.
-                  The nine-dot grid is the affordance every phone already
-                  teaches, and it is now telling the truth as well: what is
-                  behind it really is a grid of apps.
-                  tests/nav-menu-trigger.test.ts pins that this glyph is never
-                  derived from the account. The AVATAR next to it is — that is
-                  what an avatar is for, and it is not a disclosure triangle. */}
-              <div ref={gridMenuRef}>
+
+                  So the closed state is the nine-dot apps grid every phone
+                  already teaches — "there is more in here" — and the open state
+                  is an X, which now genuinely means close. Both glyphs are
+                  stacked in the same 16px box and cross-faded, so the header
+                  never reflows on the swap. */}
+              <div ref={accountMenuRef}>
                 <button
                   type="button"
-                  onClick={() => {
-                    setAccountMenuOpen(false);
-                    setGridMenuOpen((o) => !o);
-                  }}
-                  aria-label={gridMenuOpen ? "Close menu · Cerrar menú" : "All screens · Pantallas"}
+                  onClick={() => setAccountMenuOpen((o) => !o)}
+                  aria-label={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
                   aria-haspopup="menu"
-                  aria-expanded={gridMenuOpen}
-                  title={gridMenuOpen ? "Close menu · Cerrar menú" : "All screens · Pantallas"}
+                  aria-expanded={accountMenuOpen}
+                  title={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
                   className="flex h-11 w-11 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
                 >
                   <span className="relative block h-4 w-4">
@@ -1087,7 +1005,7 @@ export function TranslatorShell({
                       viewBox="0 0 24 24"
                       fill="currentColor"
                       className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
-                        gridMenuOpen ? "opacity-0" : "opacity-100"
+                        accountMenuOpen ? "opacity-0" : "opacity-100"
                       }`}
                     >
                       <circle cx="5" cy="5" r="2" />
@@ -1108,261 +1026,18 @@ export function TranslatorShell({
                       strokeWidth="2"
                       strokeLinecap="round"
                       className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
-                        gridMenuOpen ? "opacity-100" : "opacity-0"
+                        accountMenuOpen ? "opacity-100" : "opacity-0"
                       }`}
                     >
                       <path d="M6 6l12 12M18 6L6 18" />
                     </svg>
                   </span>
                 </button>
-                {gridMenuOpen ? (
-                  <div
-                    role="menu"
-                    aria-label="All screens · Pantallas"
-                    className="absolute right-0 top-full z-20 mt-2 w-[17rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
-                  >
-                    {/* Two columns on a phone, and every tile the same size —
-                        auto-rows-fr, because without it a CSS grid sizes each
-                        ROW to its own tallest tile and the labels do not wrap
-                        evenly: measured 65.8px for the Live/Table row against
-                        79.5px for Quick translate/Photo translator. Two tile
-                        sizes in one grid is the thing that stops a grid of
-                        icons reading as a grid.
-                        max-h + scroll is the backstop for a founder's ten
-                        entries on a short screen — a launcher that runs off
-                        the bottom is the same bug as one that runs off the
-                        right, and this one has been made twice. */}
-                    <div className="grid max-h-[min(28rem,calc(100vh-9rem))] grid-cols-2 auto-rows-fr gap-2 overflow-y-auto p-2">
-                      {/* The screen you are standing on is IN here. A launcher
-                          that omits the current app is a launcher with a hole
-                          in it, and this is the only tile that ever carries
-                          the current-page mark on the home screen. */}
-                      <a
-                        href="/"
-                        role="menuitem"
-                        aria-label="Speak · Hablar"
-                        aria-current={pathname === "/" ? "page" : undefined}
-                        className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                          pathname === "/"
-                            ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                            : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                        }`}
-                      >
-                        <NavIcon name="speak" />
-                        Speak · Hablar
-                      </a>
-                      <a
-                        href="/translate"
-                        role="menuitem"
-                        aria-label="Translate · Traducir"
-                        aria-current={pathname === "/translate" ? "page" : undefined}
-                        className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                          pathname === "/translate"
-                            ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                            : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                        }`}
-                      >
-                        <NavIcon name="translate" />
-                        Translate · Traducir
-                      </a>
-                      <a
-                        href="/live"
-                        role="menuitem"
-                        aria-label="Live · En vivo"
-                        aria-current={pathname === "/live" ? "page" : undefined}
-                        className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                          pathname === "/live"
-                            ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                            : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                        }`}
-                      >
-                        <NavIcon name="live" />
-                        Live · En vivo
-                      </a>
-                      <a
-                        href="/tabletop"
-                        role="menuitem"
-                        aria-label="Table · Mesa"
-                        aria-current={pathname === "/tabletop" ? "page" : undefined}
-                        className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                          pathname === "/tabletop"
-                            ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                            : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                        }`}
-                      >
-                        <NavIcon name="table" />
-                        Table · Mesa
-                      </a>
-                      <a
-                        href="/chat"
-                        role="menuitem"
-                        aria-label="Chat · Chat"
-                        aria-current={pathname === "/chat" ? "page" : undefined}
-                        className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                          pathname === "/chat"
-                            ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                            : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                        }`}
-                      >
-                        <NavIcon name="chat" />
-                        Chat · Chat
-                      </a>
-                      {/* Gated tiles carry the SAME guard as their pill and
-                          their page — callVisibleTo(), fastVisibleTo(),
-                          isFounder(), tutorEnabled() (lib/release.ts). The
-                          redundancy between grid and pills is per-screen, so a
-                          screen cannot half-appear: strip these blocks and what
-                          is left is exactly a stranger's launcher.
-                          tests/nav-completeness.test.ts strips them and checks. */}
-                      {callVisible ? (
-                        <a
-                          href="/call"
-                          role="menuitem"
-                          aria-label="Call · Llamada"
-                          aria-current={pathname === "/call" ? "page" : undefined}
-                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                            pathname === "/call"
-                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                          }`}
-                        >
-                          <NavIcon name="call" />
-                          Call · Llamada
-                        </a>
-                      ) : null}
-                      {fastVisible ? (
-                        <a
-                          href="/fast"
-                          role="menuitem"
-                          aria-label="Quick translate · Rápida"
-                          aria-current={pathname === "/fast" ? "page" : undefined}
-                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                            pathname === "/fast"
-                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                          }`}
-                        >
-                          <NavIcon name="fast" />
-                          Quick translate · Rápida
-                        </a>
-                      ) : null}
-                      <a
-                        href="/vision"
-                        role="menuitem"
-                        aria-label="Photo translator · Fotos"
-                        aria-current={pathname === "/vision" ? "page" : undefined}
-                        className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                          pathname === "/vision"
-                            ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                            : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                        }`}
-                      >
-                        <NavIcon name="photo" />
-                        Photo translator · Fotos
-                      </a>
-                      {founder ? (
-                        <a
-                          href="/video"
-                          role="menuitem"
-                          aria-label="Video captions · Subtítulos"
-                          aria-current={pathname === "/video" ? "page" : undefined}
-                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                            pathname === "/video"
-                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                          }`}
-                        >
-                          <NavIcon name="video" />
-                          Video captions · Subtítulos
-                        </a>
-                      ) : null}
-                      {tutorEnabled() ? (
-                        <a
-                          href="/tutor"
-                          role="menuitem"
-                          aria-label="Language tutor · Tutor de idiomas"
-                          aria-current={pathname === "/tutor" ? "page" : undefined}
-                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
-                            pathname === "/tutor"
-                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
-                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
-                          }`}
-                        >
-                          <NavIcon name="tutor" />
-                          Language tutor · Tutor
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-              {/* YOU. Everything that is about the account rather than about
-                  translating: who you are, what you have said, how the app
-                  works, and the way out.
-
-                  These four used to sit in the nine-dot menu underneath four
-                  screens, which is how the guide ended up telling readers that
-                  the PHOTO TRANSLATOR — a screen — lives in "the account menu".
-                  Splitting them is the whole point of this change: a person
-                  looking for Sign out and a person looking for what the app can
-                  do are never the same person.
-
-                  The initial is back, and only here. #45 took it OFF the
-                  launcher because a trigger drawn from the email meant Tom's
-                  said X and strangers read it as "close" — that reasoning is
-                  about a DISCLOSURE wearing a dismissal glyph, and it still
-                  holds for the nine dots. An avatar is supposed to be a
-                  function of whose phone it is; that is the entire convention.
-                  It never swaps to an X on open (it takes a ring instead), so
-                  it is never asked to mean "close". */}
-              <div ref={accountMenuRef}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGridMenuOpen(false);
-                    setAccountMenuOpen((o) => !o);
-                  }}
-                  aria-label={accountMenuOpen ? "Close menu · Cerrar menú" : "Account · Cuenta"}
-                  aria-haspopup="menu"
-                  aria-expanded={accountMenuOpen}
-                  title={accountMenuOpen ? "Close menu · Cerrar menú" : "Account · Cuenta"}
-                  className={`flex h-11 w-11 items-center justify-center rounded-full transition active:scale-95 ${
-                    accountMenuOpen ? "ring-2 ring-amber-300/60" : ""
-                  }`}
-                >
-                  {/* A SOLID DISC with dark type on it, not an outlined icon
-                      button like the two beside it. That is the whole reason
-                      Tom's "X" reads as a person here and read as a dismissal
-                      on the launcher: a filled amber chip is the shape every
-                      phone uses for "you", and it sits next to two hollow
-                      amber rings that are obviously controls. The distinction
-                      is carried by the SHAPE, so it survives whatever letter
-                      the account happens to start with. */}
-                  <span
-                    aria-hidden="true"
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-300 text-[13px] font-semibold text-stone-900"
-                  >
-                    {avatarInitial ?? (
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="h-4 w-4"
-                      >
-                        <circle cx="12" cy="8" r="3.5" />
-                        <path d="M5 20a7 7 0 0114 0" />
-                      </svg>
-                    )}
-                  </span>
-                </button>
                 {accountMenuOpen ? (
                   <div
                     role="menu"
-                    aria-label="Account · Cuenta"
-                    className="absolute right-0 top-full z-20 mt-2 w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
+                    aria-label="More · Más"
+                    className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                   >
                     {/* Who you are signed in as. This used to be the trigger's
                         `title`, which no phone has ever rendered — a tooltip
@@ -1372,10 +1047,53 @@ export function TranslatorShell({
                     <p className="truncate px-4 py-2 text-[11px] text-amber-100/50">
                       {email}
                     </p>
+                    {tutorEnabled() ? (
+                      <a
+                        href="/tutor"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Tutor
+                      </a>
+                    ) : null}
+                    {/* The word-for-word quickie box. In the menu rather than
+                        as a header pill for the reason the header is already
+                        overflowing at 390px (ENHANCEMENTS.md, 8/30) — and
+                        because it belongs NEXT TO the screens, not among the
+                        four ways to talk. Founders-only until the register
+                        contrast has been watched on a wave (lib/release.ts);
+                        NEXT_PUBLIC_ENABLE_FAST=1 opens it to everyone. */}
+                    {fastVisible ? (
+                      <a
+                        href="/fast"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Quick translate · Rápida
+                      </a>
+                    ) : null}
+                    {/* Video joins Tutor here rather than as a header pill —
+                        same phone-width rationale (Tom, 7/27). Founders-only
+                        in v1 (lib/release.ts). */}
+                    {founder ? (
+                      <a
+                        href="/video"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Video captions · Subtítulos
+                      </a>
+                    ) : null}
+                    <a
+                      href="/vision"
+                      role="menuitem"
+                      className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Photo translator · Fotos
+                    </a>
                     <button
                       type="button"
                       role="menuitem"
-                      aria-label="History · Historial"
                       onClick={() => {
                         setAccountMenuOpen(false);
                         setHistoryOpen(true);
@@ -1391,7 +1109,6 @@ export function TranslatorShell({
                     <a
                       href="/guide"
                       role="menuitem"
-                      aria-label="How to use TAOS · Cómo usar"
                       className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
                       How to use TAOS · Cómo usar
@@ -1403,7 +1120,6 @@ export function TranslatorShell({
                     <a
                       href="/about"
                       role="menuitem"
-                      aria-label="About TAOS · Acerca de TAOS"
                       className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
                       About TAOS · Acerca de TAOS
@@ -1411,7 +1127,6 @@ export function TranslatorShell({
                     <button
                       type="button"
                       role="menuitem"
-                      aria-label="Sign out · Salir"
                       onClick={() => {
                         setAccountMenuOpen(false);
                         onSignOut();
@@ -1425,62 +1140,109 @@ export function TranslatorShell({
               </div>
             </div>
           </div>
-          {/* ROW TWO: the verbs. Right-aligned, wrapping, 44px tall, and NOT A
-              MENU ANYWHERE IN IT — every pill is one touch to a screen.
+          {/* ROW TWO: the screens. Right-aligned, and Together ▾ keeps
+              a pill to its right, which is what guarantees its dropdown
+              (absolute right-0, 11rem wide) has room to open inside the
+              container instead of hanging off an edge. Wraps rather
+              than overflows if it ever outgrows a width again.
 
-              Translate leads. It is the screen a stranger can be handed with
-              no instructions at all (type, watch it come back), where every
-              other pill needs a sentence of explanation first, so it is the
-              one worth the leftmost, easiest reach.
+              min-h-[44px] on every pill, added 8/31 after #53. That PR
+              raised the two icon triggers to 44x44 and gave every menu
+              ITEM a 44px floor, said so in its description, and left the
+              pills at 30px tall — px-3 py-1.5 on a text-xs line — which
+              is 14px under the floor on the row a thumb reaches for
+              most. The rig measured the icons and the menu items and was
+              passed `min: 0` for the pills, so nothing caught it.
 
-              Call is a pill for founders and absent for everyone else, behind
-              the same callVisibleTo() the page gate and POST /api/call/realtime
-              ask — one question, three surfaces, so they cannot drift apart the
-              way /tabletop's nav entry once did (lib/release.ts). It also
-              appears in the grid, behind the same guard; that redundancy is on
-              purpose and is per-screen, not per-menu.
-
-              min-h-[44px] with inline-flex, not padding: min-height does
-              nothing to an inline element. These were 48x30 until #54 — the row
-              a thumb reaches for most, 14px under the floor. */}
-          <nav aria-label="Screens · Pantallas" className="flex flex-wrap items-center justify-end gap-2">
-            <a
-              href="/translate"
-              aria-label="Translate · Traducir"
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Translate
-            </a>
+              Measured at 390px: the pill goes 48x30 -> 48x44, and the
+              header 82px -> 96px. Fourteen pixels of chrome, for the row
+              a moving thumb is likeliest to miss — a 30px target needs
+              the touch to land within 15px of its centre vertically, and
+              #53's own rig measured a reaching thumb drifting 12-20px. */}
+          <nav className="flex flex-wrap items-center justify-end gap-2">
             <a
               href="/live"
-              aria-label="Live · En vivo"
               className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
               Live
             </a>
-            <a
-              href="/tabletop"
-              aria-label="Table · Mesa"
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Table
-            </a>
-            <a
-              href="/chat"
-              aria-label="Chat · Chat"
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
-            >
-              Chat
-            </a>
+            {/* Call is a PILL for founders, not a menu entry — Tom and Liz use
+                it daily and it was costing them two touches to reach through
+                Together ▾ even when the geometry above behaved. It was
+                top-level once; this puts it back, still behind the same
+                callVisibleTo() the page gate and POST /api/call/realtime ask,
+                so a stranger sees nothing here and the three surfaces cannot
+                drift apart (lib/release.ts).
+
+                It lives OUTSIDE the Together menu rather than in both places:
+                one entry per screen is what keeps nav-completeness.test.ts a
+                fence instead of a headcount. Revisit this the day /call is
+                promoted to customers — a public Call belongs back under
+                Together with Chat and Table, because at that point the pill
+                is spending a phone-width on a screen most people will not use
+                daily. Noted in ENHANCEMENTS.md. */}
             {callVisible ? (
               <a
                 href="/call"
-                aria-label="Call · Llamada"
                 className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
               >
                 Call
               </a>
             ) : null}
+            {/* Chat / Table under one pill — six pills overflowed a phone
+                width and made the whole page slide sideways, and four would
+                too: Live · Chat · Table · Translate, plus the title and two
+                icons, does not fit a 360px Droid.
+
+                This menu used to be founders-only, with customers getting a
+                plain Chat pill beside it — which is how /tabletop ended up
+                with no nav entry at all for anyone who isn't Tom or Liz.
+                Table is customer-facing now (lib/release.ts), so there is one
+                menu for everyone, and it holds the same two entries whoever
+                is signed in — Call moved up to the pill above on 8/31. */}
+            <div ref={togetherMenuRef}>
+              <button
+                type="button"
+                onClick={() => setTogetherMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={togetherMenuOpen}
+                className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              >
+                Together ▾
+              </button>
+              {togetherMenuOpen ? (
+                <div
+                  role="menu"
+                  aria-label="Together"
+                  className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
+                >
+                  {/* Chat leads the menu, so it carries no top border. Call
+                      used to sit above it behind {callVisible}; it is a
+                      top-level pill now, which is also why this list no
+                      longer changes shape depending on who is signed in. */}
+                  <a
+                    href="/chat"
+                    role="menuitem"
+                    className="flex min-h-[44px] w-full items-center px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Chat · Chat
+                  </a>
+                  <a
+                    href="/tabletop"
+                    role="menuitem"
+                    className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Table · Mesa
+                  </a>
+                </div>
+              ) : null}
+            </div>
+            <a
+              href="/translate"
+              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+            >
+              Translate
+            </a>
           </nav>
         </header>
 

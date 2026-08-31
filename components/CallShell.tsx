@@ -8,7 +8,13 @@ import {
   type ActiveCall,
   type CallState
 } from "@/lib/call/session";
-import type { CallTransport } from "@/lib/call/ice";
+import {
+  fetchRelayStatus,
+  type CallMediaFlow,
+  type CallTransport
+} from "@/lib/call/ice";
+import { relayCopy, type RelayStatusReport, type RelayTone } from "@/lib/call/relay";
+import { probeCopy, probeRelay, type RelayProbeResult } from "@/lib/call/relayProbe";
 import {
   startCallInterpreter,
   type ActiveInterpreter,
@@ -137,6 +143,33 @@ function transportLabel(t: CallTransport): string {
   }
 }
 
+/** Lobby / probe indicator colours, by the tone lib/call/relay.ts assigns. */
+const TONE_CLASS: Record<RelayTone, string> = {
+  ok: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
+  warn: "border-amber-400/30 bg-amber-400/10 text-amber-100/80",
+  bad: "border-red-400/30 bg-red-400/10 text-red-200"
+};
+
+/**
+ * One direction of the media, as a tick or a cross and a rate.
+ *
+ * The whole point is that the two directions are printed SEPARATELY. "Is
+ * audio flowing?" is true on the sending side of a one-way call, which is
+ * exactly what Liz's phone was on 8/31 — connected, relayed, heard, and
+ * hearing nothing. `sending ✓ 148/s · receiving ✗ 0/s` is that call, said in
+ * numbers, on the screen of the person it is happening to.
+ *
+ * The rate needs two samples; until the second one lands it falls back to
+ * "has anything ever arrived", which is weaker (a direction that carried
+ * audio and then stopped still shows a total) and is why it is only the
+ * first two seconds.
+ */
+function flowLine(name: string, total: number, previous: number | null, seconds: number): string {
+  const rate = previous === null || seconds <= 0 ? null : Math.round((total - previous) / seconds);
+  const moving = rate === null ? total > 0 : rate > 0;
+  return `${name} ${moving ? "✓" : "✗"} ${total} pkt${rate === null ? "" : ` · ${rate}/s`}`;
+}
+
 export function CallShell(): JSX.Element {
   const [phase, setPhase] = useState<"lobby" | "call">("lobby");
   const [room, setRoom] = useState("");
@@ -158,6 +191,15 @@ export function CallShell(): JSX.Element {
   // founders' debugging tool, and the first version of a support surface.
   const [transport, setTransport] = useState<CallTransport | null>(null);
   const [relayAvailable, setRelayAvailable] = useState<boolean | null>(null);
+  // The lobby preflight: what the server says about the keys, and what a
+  // one-tap loopback proved about the path. See the panel below Join.
+  const [relayReport, setRelayReport] = useState<RelayStatusReport | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<RelayProbeResult | null>(null);
+  // Two samples, so cumulative packet counters can be read as rates. A total
+  // alone cannot tell audio that is flowing from audio that stopped.
+  const [flow, setFlow] = useState<CallMediaFlow | null>(null);
+  const [prevFlow, setPrevFlow] = useState<CallMediaFlow | null>(null);
   const [trail, setTrail] = useState<string[]>([]);
   const [idleSecondsLeft, setIdleSecondsLeft] = useState<number | null>(null);
   const [spend, setSpend] = useState<CallSpend>(() => emptySpend("elevenlabs"));
@@ -235,6 +277,50 @@ export function CallShell(): JSX.Element {
     const q = new URLSearchParams(window.location.search).get("room");
     if (q) setRoom(normalizeRoomCode(q));
   }, []);
+
+  // ── The preflight ────────────────────────────────────────────────────────
+  // Ask the server whether Cloudflare will mint for the keys it holds, the
+  // moment the lobby is on screen. This is the answer that used to require
+  // placing a real call to Liz and watching it fail: `relay: false` was the
+  // only signal /call had, and it meant "no keys", "wrong keys" and
+  // "Cloudflare is down" indistinguishably. Re-run on every return to the
+  // lobby, because the interesting case is Tom fixing a key in Vercel and
+  // wanting to know whether it took.
+  useEffect(() => {
+    if (phase !== "lobby") return;
+    let cancelled = false;
+    setRelayReport(null);
+    void fetchRelayStatus().then((report) => {
+      if (!cancelled) setRelayReport(report);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [phase]);
+
+  // ── The breadcrumb for one-way audio ─────────────────────────────────────
+  // Liz, 5G behind CGNAT, 2026-08-31: connected, and audio in ONE direction.
+  // Nothing on the screen could tell that call from a working one — the pill
+  // said `connected` and the transport said `relay`, and both were true. Two
+  // counters, two seconds apart, make the missing direction a number.
+  useEffect(() => {
+    if (phase !== "call" || callState !== "connected") return;
+    let cancelled = false;
+    const sample = async () => {
+      const next = await callRef.current?.readMediaFlow();
+      if (cancelled || !next) return;
+      setFlow((current) => {
+        setPrevFlow(current);
+        return next;
+      });
+    };
+    void sample();
+    const id = window.setInterval(() => void sample(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [phase, callState]);
 
   // A lost "stopped" broadcast must never strand the hold-on indicator, so
   // every "speaking" signal re-arms a generous auto-clear.
@@ -462,6 +548,8 @@ export function CallShell(): JSX.Element {
     setPeerLanguage(null);
     setTransport(null);
     setRelayAvailable(null);
+    setFlow(null);
+    setPrevFlow(null);
     setTrail([]);
     inCallRef.current = true;
     setPhase("call");
@@ -609,6 +697,27 @@ export function CallShell(): JSX.Element {
     };
   }, [endCall]);
 
+  /**
+   * The "Test connection" tap.
+   *
+   * One button, ~1s, and it answers the question two people with two phones
+   * in two rooms used to have to answer by dialling each other. Traced into
+   * the same trail the call itself writes, so a screenshot of a failed probe
+   * carries the same detail as a screenshot of a failed call.
+   */
+  const runProbe = useCallback(async () => {
+    if (probing) return;
+    setProbing(true);
+    setProbe(null);
+    setTrail([]);
+    try {
+      const result = await probeRelay((line) => setTrail((t) => [...t.slice(-60), `probe ${line}`]));
+      setProbe(result);
+    } finally {
+      setProbing(false);
+    }
+  }, [probing]);
+
   const btn = (active: boolean) =>
     `rounded-xl px-3 py-2 text-xs font-medium transition ${
       active ? "bg-amber-400 text-stone-950" : "border border-white/10 bg-white/5 text-amber-100/70"
@@ -739,6 +848,95 @@ export function CallShell(): JSX.Element {
                   Same code on both phones = same call.
                 </span>
               </div>
+            </div>
+
+            {/* ── Preflight ──────────────────────────────────────────────
+                Founders only, and quiet: two lines and a button, below the
+                room code and above Join, so it is read on the way past.
+
+                It exists because until 2026-08-31 the only instrument for
+                "does the relay work" was a call between Tom and Liz on two
+                real phones — an instrument that fails for five reasons and
+                reports one word. The top line is the server's answer (will
+                Cloudflare MINT for these keys) and the button is the
+                client's (will the relay ALLOCATE and carry a packet). They
+                fail independently, which is why both are here. */}
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
+                Before you dial · Antes de llamar
+              </div>
+
+              {(() => {
+                const copy = relayCopy(relayReport?.status ?? null);
+                return (
+                  <>
+                    <div
+                      className={`mt-2 rounded-xl border px-3 py-2 text-sm ${TONE_CLASS[copy.tone]}`}
+                    >
+                      {copy.label}
+                    </div>
+                    {copy.hint ? (
+                      <p className="mt-2 text-[11px] leading-relaxed text-amber-100/50">
+                        {copy.hint}
+                      </p>
+                    ) : null}
+                    {/* Cloudflare's own status code and words. Kept because
+                        "rejected" is the state that needs a human, and the
+                        human needs to know WHICH refusal it was. */}
+                    {relayReport && relayReport.status !== "ready" && relayReport.detail ? (
+                      <p className="mt-1 font-mono text-[10px] text-amber-100/35">
+                        {relayReport.httpStatus ? `HTTP ${relayReport.httpStatus} · ` : ""}
+                        {relayReport.detail}
+                      </p>
+                    ) : null}
+                  </>
+                );
+              })()}
+
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runProbe()}
+                  disabled={probing}
+                  className={`${btn(false)} disabled:opacity-40`}
+                >
+                  {probing ? "Testing… · probando…" : "Test connection · Probar conexión"}
+                </button>
+                <span className="text-[11px] text-amber-100/40">
+                  Forces a relay-only connection to this phone. ~1s.
+                </span>
+              </div>
+
+              {probe ? (
+                (() => {
+                  const copy = probeCopy(probe);
+                  return (
+                    <div
+                      className={`mt-2 rounded-xl border px-3 py-2 text-xs ${TONE_CLASS[copy.tone]}`}
+                    >
+                      {copy.text}
+                      {probe.status !== "ok" && probe.detail ? (
+                        <div className="mt-1 font-mono text-[10px] opacity-70">{probe.detail}</div>
+                      ) : null}
+                    </div>
+                  );
+                })()
+              ) : null}
+
+              {/* The probe writes the same trail a call does, so a founder can
+                  screenshot a failed test instead of describing it. */}
+              {trail.length > 0 ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-[11px] text-amber-100/40">
+                    Test details · Detalles de la prueba
+                  </summary>
+                  <div className="mt-1 max-h-32 overflow-y-auto font-mono text-[10px] text-amber-100/35">
+                    {trail.map((line, i) => (
+                      <div key={`${i}-${line}`}>{line}</div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </div>
 
             {error ? (
@@ -965,6 +1163,63 @@ export function CallShell(): JSX.Element {
                     relay available: {relayAvailable === null ? "…" : relayAvailable ? "yes" : "no"}
                     {transport ? ` · path: ${transport}` : ""}
                   </div>
+
+                  {/* ── Per direction ───────────────────────────────────────
+                      The 8/31 field report's second symptom: connected, and
+                      audio one way only. Everything else on this panel was
+                      true during that call — which is why "connected" and a
+                      candidate pair were not enough, and these two lines are
+                      here. A ✗ next to `receiving` is the complaint, before
+                      anybody has to make it out loud. */}
+                  {flow ? (
+                    (() => {
+                      const seconds = prevFlow ? (flow.at - prevFlow.at) / 1000 : 0;
+                      return (
+                        <>
+                          <div>
+                            audio{" "}
+                            {flowLine(
+                              "sending",
+                              flow.audioPacketsSent,
+                              prevFlow?.audioPacketsSent ?? null,
+                              seconds
+                            )}{" "}
+                            ·{" "}
+                            {flowLine(
+                              "receiving",
+                              flow.audioPacketsReceived,
+                              prevFlow?.audioPacketsReceived ?? null,
+                              seconds
+                            )}
+                          </div>
+                          {flow.videoPacketsSent > 0 || flow.videoPacketsReceived > 0 ? (
+                            <div>
+                              video{" "}
+                              {flowLine(
+                                "sending",
+                                flow.videoPacketsSent,
+                                prevFlow?.videoPacketsSent ?? null,
+                                seconds
+                              )}{" "}
+                              ·{" "}
+                              {flowLine(
+                                "receiving",
+                                flow.videoPacketsReceived,
+                                prevFlow?.videoPacketsReceived ?? null,
+                                seconds
+                              )}
+                            </div>
+                          ) : null}
+                          <div>
+                            pair: {flow.localCandidate ?? "?"}/{flow.remoteCandidate ?? "?"}
+                            {flow.roundTripSeconds !== null
+                              ? ` · rtt ${Math.round(flow.roundTripSeconds * 1000)}ms`
+                              : ""}
+                          </div>
+                        </>
+                      );
+                    })()
+                  ) : null}
                   <div className="max-h-40 overflow-y-auto font-mono">
                     {trail.map((line, i) => (
                       <div key={`${i}-${line}`}>{line}</div>
