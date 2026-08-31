@@ -19,6 +19,12 @@
 //               for two founders" is not "sellable", and it has still never
 //               met a stranger's carrier NAT. See callVisibleTo() below.
 // - /video    — works, but heavy (uploads, ffmpeg) for a first release.
+// - /fast     — the word-for-word quickie box, added 2026-08-30. Not
+//               unfinished and not expensive: held back because its whole
+//               register is the OPPOSITE of what the rest of TAOS sells
+//               (literal, not "the way a friend would say it"), and handing
+//               a stranger two translation screens that disagree on purpose
+//               needs a wave's worth of watching first. See fastVisibleTo().
 //
 // /tabletop was held here too, as "niche party mode; every extra screen is a
 // day-one support surface". Tom took it back out on 8/19, walking RC1 on the
@@ -32,7 +38,7 @@
 //
 // To un-hold a screen: remove it here and un-wrap its page from
 // <FounderGate>. tests/release.test.ts pins this set — change both together.
-export const HELD_BACK_V1 = ["call", "video"] as const;
+export const HELD_BACK_V1 = ["call", "fast", "video"] as const;
 
 // /tutor is held back a different way, and for a different reason. The screens
 // above are finished work waiting on cost guards or on a day-one support
@@ -137,6 +143,47 @@ export function callEnabled(): boolean {
  */
 export function callVisibleTo(email: string | null | undefined): boolean {
   return callEnabled() || isFounder(email);
+}
+
+// /fast: FOUNDERS ONLY, on the same two-function shape as /call above —
+// a public flag that has not shipped, plus a founder bypass.
+//
+// The reason is not cost and not readiness. /fast is a one-line box that
+// translates AS YOU TYPE, and it is the only surface in TAOS that translates
+// LITERALLY: word-for-word and plain, where /translate, /live, /chat and the
+// rest all ask for "the way a fluent friend would say it". That contrast is
+// the feature — it is what makes /fast a dictionary and the others an
+// interpreter — but it is also two screens that will hand the same sentence
+// back differently, on purpose, to a person who did not read this comment.
+// Founders use it for a wave first and find out whether that reads as a
+// second tool or as a bug.
+//
+// Promoting it is ONE LINE. Set:
+//
+//     NEXT_PUBLIC_ENABLE_FAST=1
+//
+// in Vercel and redeploy — no code change, exactly like /call. The nav link,
+// the page and POST /api/fast all ask fastVisibleTo(), so they open together
+// and cannot drift apart the way /tabletop's nav entry once did.
+// NEXT_PUBLIC_ because the nav that hides the link renders in the browser;
+// the literal process.env expression is what lets Next inline it into the
+// client bundle. tests/release.test.ts pins the default.
+export function fastEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_FAST ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
+/**
+ * May this person reach /fast at all?
+ *
+ * THE question every /fast surface asks — the nav entry in the grid menu, the
+ * page gate, and POST /api/fast, which is the one that spends money. The
+ * route-level check is the load-bearing one for exactly the reason
+ * callVisibleTo() documents: the other two run in the browser off a session
+ * the client already holds, so they hide the screen without defending it.
+ */
+export function fastVisibleTo(email: string | null | undefined): boolean {
+  return fastEnabled() || isFounder(email);
 }
 
 // /live's second engine — "On-device", the Web Speech API path — is off for

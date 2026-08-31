@@ -22,7 +22,7 @@ import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
-import { callVisibleTo, isFounder, tutorEnabled } from "@/lib/release";
+import { callVisibleTo, fastVisibleTo, isFounder, tutorEnabled } from "@/lib/release";
 import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
@@ -378,6 +378,9 @@ export function TranslatorShell({
   // OR everyone, once NEXT_PUBLIC_ENABLE_CALL ships it, and the nav must not
   // be the surface that forgets the second half.
   const callVisible = callVisibleTo(email);
+  // Same shape as callVisible, and for the same reason: /fast is founders OR
+  // everyone once NEXT_PUBLIC_ENABLE_FAST ships it.
+  const fastVisible = fastVisibleTo(email);
 
   // The pair, the pill row and the sheet, shared with /live and /tabletop
   // (lib/translate/useLanguagePair.ts). pair[0] is YOUR side, pair[1] is
@@ -1054,6 +1057,22 @@ export function TranslatorShell({
                       className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
                       Tutor
+                    </a>
+                  ) : null}
+                  {/* The word-for-word quickie box. In the menu rather than
+                      as a header pill for the reason the header is already
+                      overflowing at 390px (ENHANCEMENTS.md, 8/30) — and
+                      because it belongs NEXT TO the screens, not among the
+                      four ways to talk. Founders-only until the register
+                      contrast has been watched on a wave (lib/release.ts);
+                      NEXT_PUBLIC_ENABLE_FAST=1 opens it to everyone. */}
+                  {fastVisible ? (
+                    <a
+                      href="/fast"
+                      role="menuitem"
+                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Quick translate · Rápida
                     </a>
                   ) : null}
                   {/* Video joins Tutor here rather than as a header pill —

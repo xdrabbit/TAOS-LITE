@@ -416,6 +416,47 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **/fast — the Google-quickie box, 2026-08-30** — PR #TBD. Tom's ask: a
+  single input where the translation "renders as you type", plain and
+  word-for-word — the thing everybody already knows how to do. It is the ONLY
+  literal surface in TAOS, deliberately: every other screen asks for the
+  translation "a fluent friend would say", and this one asks for the plain
+  word you would look up. That contrast IS the feature, and it is also why it
+  ships **founders-only** (`fastVisibleTo`, `NEXT_PUBLIC_ENABLE_FAST=1` to
+  promote — one env var, no code change): two translation screens that
+  disagree on purpose should meet a wave of strangers only after we have
+  watched founders read them side by side.
+  → **The engine was measured, not assumed** (`docs/fast-engine.md`, rigs in
+  `tests/live-fire/fast-engine.measure.ts`). Two findings worth keeping:
+  **(1)** the first literal prompt made the models *worse*, not more faithful —
+  told to keep source word order at any cost, `gpt-4.1-nano` returned Polish
+  with an English "the" standing in it (`jak ja dostanę się do the`), a
+  doubled word (`ile to to kosztuje`) and the wrong gender (`dwa kawy`).
+  Adding a grammar floor to the rule cleared every one. Same lesson as the
+  7/27 dropout fence: a prompt fence that only pushes one way pushes past the
+  thing it was protecting. **(2)** an LLM is roughly **10–20× CHEAPER** per
+  quickie than Azure Translator ($0.000027 vs ~$0.00026), which is backwards
+  from the assumption — Azure is bought for its *register* and its latency,
+  not its price. Azure is primary; `gpt-4.1-nano` is a real fallback, for the
+  ten catalog languages Azure cannot translate at all and for right now,
+  because **the Translator resource does not exist yet**. `AZURE_SPEECH_KEY`
+  is a different resource kind and does not open that API. Setup steps for
+  Tom are in `docs/fast-engine.md`; until then /fast works and says on screen
+  which engine answered.
+  → **Metering: two clocks, on purpose.** 300ms debounce decides when to CALL;
+  1500ms of stillness decides when it COUNTS against the free monthly
+  allowance — because everything rendered between keystrokes is a preview of a
+  sentence still being written, and billing previews would spend a free month
+  on one paragraph. It writes the same `taos_lite_translations` row the home
+  screen writes, so /fast meters into the normal allowance instead of growing
+  a private counter. Measured on the real component in a real browser: 21
+  characters typed → **2 provider calls, 1 billed row**. Server ceiling of
+  60/min per account on top, because a debounce is a courtesy the browser
+  extends; a driver ignoring it entirely got 60 served and then 429s.
+  → Verified against the real API through the shipped route: EN→ES p50 702ms,
+  EN→PL p50 627ms, auto-detect correct in both directions, non-founder 404
+  without the provider ever being called.
+
 - **The X that meant "more", 2026-08-30** — PR #TBD. Liz, taking the app to
   strangers ahead of the launch wave: the round button in the header that
   opens Tutor / Video / Photo / History / the guide / About reads as
