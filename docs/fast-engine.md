@@ -224,6 +224,91 @@ been typed. That is what makes it a quickie rather than a spoken turn: the
 transcript is a draft you can fix before it means anything, and a mis-heard
 word costs a keystroke instead of a lookup.
 
+### Two mics, one button
+
+The mic runs in one of two modes, decided **per press** (`lib/fast/useLiveDictation.ts`):
+
+| | **stream** (preferred) | **batch** (fallback) |
+| --- | --- | --- |
+| provider | Azure Speech, websocket from the phone | OpenAI Whisper, via `POST /api/fast/listen` |
+| feels like | words appear while you talk | one lump on release |
+| languages | 76 of the catalog's 100 | all 100 |
+| credential | 10-min token from `POST /api/fast/speech-token` | the session's own bearer token |
+
+Streaming is why the mic exists in this shape. The first version was batch-only,
+and Tom's field report was that it *feels dead while talking* — right feature,
+wrong screen for a progress bar. `/fast` is the screen whose whole soul is
+instant.
+
+**Audio does not go through Vercel.** The socket is opened from the browser
+straight to Azure, because a function hop per 100 ms of speech would spend
+exactly the latency this exists to save. That means a credential has to live in
+the browser — so `AZURE_SPEECH_KEY` never does. `POST /api/fast/speech-token`
+mints a ten-minute JWT that can do nothing but recognise speech, the same shape
+as `/api/realtime/session` minting an ephemeral OpenAI key. It carries the same
+`fastVisibleTo()` gate and the same `checkFastRate` buckets as everything else
+on `/fast`.
+
+> **The Speech resource is not the Translator resource.** `AZURE_SPEECH_KEY` /
+> `AZURE_SPEECH_REGION` already exist in Vercel — the tutor's Crawl
+> pronunciation scoring uses them, and streaming recognition is another API on
+> that same resource kind. They are **not** `AZURE_TRANSLATOR_KEY` /
+> `AZURE_TRANSLATOR_REGION`, which are still uncreated and which the literal
+> translation engine above wants. Crossing the two gives a 401 that reads like
+> a bug.
+
+**Partials are drawn; only finals are text.** This is the one rule that makes a
+live mic affordable here, and it is invisible when it breaks — nothing looks
+wrong, it just costs more. Azure emits a re-guessed hypothesis several times a
+second. Those render as a dimmed tail and are held *outside* `input`, so they
+never start the 300 ms debounce. Finalized segments become real editable text
+and are translated like any other keystroke — roughly one translation per pause
+for breath, which is the same rate a person typing the phrase would produce.
+Wiring partials into the box instead would have fired dozens of per-character
+billed Azure Translator calls per spoken phrase to render text that was about to
+be replaced anyway. `lib/fast/liveTranscript.ts` holds the rule.
+
+The **settle clock is untouched**: one settled input still bills one row, however
+many segments it arrived in.
+
+**Auto-detect: the pair, then the pill row, capped at four.** Azure offers
+*at-start* language identification (decide once from the opening audio, up to 4
+candidates) and *continuous* (re-decide throughout, up to 10). A quickie is one
+phrase said by one person, so `/fast` asks for at-start — and that is where the
+4 comes from. Both sides of the pair are required; if Azure cannot hear one of
+them the whole job goes to Whisper, because a recogniser that hears only one
+pill would silently mangle every sentence said in the other. Remaining slots are
+filled from the pill row (pair + recents), which is the phone's own answer to
+"what languages am I in the middle of", and left *empty* rather than padded from
+the catalog — Azure returns one of the candidates even when the audio was none
+of them, so a wider list is a wider chance of a confident wrong answer.
+
+The 24 catalog languages Azure Speech cannot hear are permanently batch-mic
+languages, listed in `lib/fast/speechLocale.ts` and pinned in
+`tests/fast-live-dictation.test.ts`. Where both providers know a language, the
+locale table **agrees with the tutor's** (`es-MX`, `pt-BR`, `ar-EG`, `zh-HK`) —
+a phone that scores Tom's Spanish as `es-MX` and transcribes it as `es-ES` would
+be two opinions about the same voice.
+
+**The fallback is silent, and it is frequent by design.** Token failure, a dead
+socket, an unsupported browser, an unstreamable pair — all of them land in the
+batch mic with nothing said about it. A mic that explains why it is in its
+slower mode is a mic that interrupts somebody mid-errand to discuss
+infrastructure. The decision is re-made on every press, because the reasons
+streaming fails are mostly weather; a phone that fell back once and then refused
+to stream for the rest of the trip would be a worse bug than the one this fixes,
+and an invisible one.
+
+While the tail is on screen the box is a live view rather than a `<textarea>` —
+same box, same metrics, no caret. A dimmed tail cannot be drawn inside a
+textarea, and showing tentative words as though they were settled text would be
+the worse lie. It ends the moment you stop talking, and the textarea returns
+with the caret at the end. For the same reason the stop button is labelled
+**Done** while streaming (the words are already in the box; there is nothing to
+take back) and **Cancel** in batch (stopping really does discard).
+
+### The batch path
+
 `POST /api/fast/listen` — audio in, transcript out, and nothing else.
 
 | | |

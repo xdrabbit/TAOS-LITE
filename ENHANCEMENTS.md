@@ -32,9 +32,14 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   real route and in headless Chrome, which is the same gap the Crawl scoring
   had. Answer that before `NEXT_PUBLIC_ENABLE_FAST=1`. (added 2026-08-30)
   The same sitting now has a third thing in it: the mic shipped on 8/30 (PR
-  #TBD) and has been walked only in headless Chrome with a fake microphone.
+  #49) and has been walked only in headless Chrome with a fake microphone.
   Hold it, say a quickie, and see whether the transcript that lands in the box
   is one you would rather fix than retype. (added 2026-08-30)
+  And a fourth, from the same PR: the mic now **streams** — the words should
+  appear while you are still saying them, not in one lump on release. On a
+  phone, on cellular, that is a latency claim nobody has tested; it was
+  measured on a laptop over wifi. Say a long sentence and watch whether the
+  dimmed tail keeps up with your mouth or trails it. (added 2026-08-30)
 
 - The header slides sideways on every phone — measured 2026-08-30 while
   swapping the menu icon (PR #TBD): the signed-in header's content is 406 px
@@ -436,7 +441,7 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **/fast grew a mic, 2026-08-30** — PR #TBD. The keyboard is still the way in;
+- **/fast grew a mic, 2026-08-30** — PR #49. The keyboard is still the way in;
   the mic is the sausage-finger lane onto the same box. Hold it or tap it, and
   the words land **in the input** as editable text rather than on screen as an
   answer — which is the whole difference between this and the home screen.
@@ -467,6 +472,41 @@ is not a prerequisite for using it.
   then a tap latches and the next tap stops it. The Chrome flag is
   `--use-fake-device-for-media-stream`, and getting it wrong opens the real
   microphone and looks exactly like a broken button.
+  → **And then it learned to stream, in the same PR.** Tom, same day: the batch
+  mic *feels dead while talking* — you talk to a button that does nothing, for
+  as long as you talk, and then everything happens at once. Right feature,
+  wrong screen for a progress bar. So the mic now opens a websocket from the
+  phone to **Azure Speech** and renders the words as they arrive. The batch
+  path stays in the build as a silent fallback and is still the only mic for
+  the 24 catalog languages Azure cannot hear.
+  → **Audio does not go through Vercel**, because a function hop per 100 ms of
+  speech would spend exactly the latency this exists to save. That needs a
+  credential in the browser, so `AZURE_SPEECH_KEY` never is one: `POST
+  /api/fast/speech-token` mints a ten-minute JWT that can only recognise
+  speech. Same resource the tutor's Crawl scoring already uses — and pointedly
+  *not* the Translator resource the literal engine still wants, which remains
+  uncreated.
+  → **Partials are drawn; only finals are text.** The one rule that makes this
+  affordable, and the only one that is invisible when it breaks — nothing
+  looks wrong, it just costs more. A hypothesis renders as a dimmed tail and
+  is held outside the input, so it never starts the 300 ms debounce; wiring it
+  in would have fired dozens of per-character billed translations per spoken
+  phrase to render text that was about to be replaced anyway. The settle clock
+  never moved: one settled quickie still bills one row, however many segments
+  it arrived in.
+  → **Four candidate languages, and the number is a consequence.** Azure does
+  at-start language identification (up to 4) or continuous (up to 10). A
+  quickie is one phrase in one language, so at-start it is. Both pills are
+  required — if Azure cannot hear one of them the whole job goes to Whisper,
+  because a recogniser that hears one side would silently mangle every
+  sentence said in the other. The spare slots come from the pill row and are
+  left empty rather than padded, since Azure returns one of the candidates
+  even when the audio was none of them.
+  → **The fallback says nothing, and is re-decided every press.** A mic that
+  explains why it is in its slower mode interrupts somebody mid-errand to
+  discuss infrastructure; a mic that fell back once and stayed there for the
+  rest of the trip would be a worse bug than the one this fixed, and an
+  invisible one.
 
 - **/fast — the Google-quickie box, 2026-08-30** — PR #46. Tom's ask: a
   single input where the translation "renders as you type", plain and
