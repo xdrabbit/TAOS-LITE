@@ -32,11 +32,24 @@ import {
   speechLocale,
   STREAMABLE_LANGUAGES
 } from "@/lib/fast/speechLocale";
-import { AZURE_TOKEN_REFRESH_MS, AZURE_TOKEN_TTL_MS } from "@/lib/fast/dictation";
+import {
+  AZURE_TOKEN_REFRESH_MS,
+  AZURE_TOKEN_TTL_MS,
+  STREAM_CONNECT_MS
+} from "@/lib/fast/dictation";
 import { assessmentLocale } from "@/lib/tutor/pronunciation";
 import { LANGUAGES, type LanguageCode } from "@/lib/languages/catalog";
 
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+/**
+ * The same file with its line comments stripped.
+ *
+ * These files EXPLAIN themselves at length, and several of them explain a bug
+ * by naming the API that caused it. An assertion that a call is gone has to
+ * look at the code and not at the paragraph describing why it went.
+ */
+const code = (path: string) => source(path).replace(/^\s*\/\/.*$/gm, "");
 
 // ───────────────────────────────────────────────────────────────────────────
 // 1. Partials, finals, and the money rule
@@ -432,8 +445,26 @@ describe("the batch mic is still there, and nothing announces it", () => {
     // The old path has to survive intact: it is the only mic for the 24
     // catalog languages Azure cannot hear, and the only one left when a
     // token, a socket or a browser says no.
+    //
+    // The option list grew by one on 8/31 — `adopt`, which hands the batch mic
+    // the microphone this hook already opened instead of making the phone
+    // grant a second one (tests/live-fire/fast-dictation-browser-check.mjs
+    // counts the streams, and caught the double-open). The relationship it
+    // pins is unchanged: the callbacks are wired straight through, and the
+    // batch hook is CALLED, not reimplemented.
     expect(hook).toContain('from "@/lib/fast/useDictation"');
-    expect(hook).toContain("useDictation({ onAudio, onError })");
+    expect(hook).toContain("useDictation({ onAudio, onError, adopt })");
+  });
+
+  it("hands the batch mic the microphone it already opened", () => {
+    // One press opens ONE microphone, however many recognisers it passes
+    // through. Stopping every track and immediately asking the phone for
+    // another is how iOS gives you a stream that records silence — and the
+    // second ask would land outside the gesture besides.
+    expect(hook).toContain("captureRef.current?.detachStream()");
+    const recover = hook.slice(hook.indexOf("const recoverToBatch = useCallback"));
+    // Before teardown, which would otherwise stop the tracks on its way past.
+    expect(recover.indexOf("handOffCapture()")).toBeLessThan(recover.indexOf("teardown()"));
   });
 
   it("falls back without telling anybody", () => {
@@ -493,6 +524,98 @@ describe("the batch mic is still there, and nothing announces it", () => {
     // somebody for talking too long by discarding what they said would be a
     // worse feature than no cap.
     expect(hook).toContain("stopStream(false), FAST_MAX_DICTATION_MS");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// 4b. The iPhone: the mic is opened in the tap, and every silence falls back
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("the microphone belongs to the hook, not to the SDK", () => {
+  const hook = source("lib/fast/useLiveDictation.ts");
+
+  it("never lets the SDK open the microphone", () => {
+    // The whole iPhone bug in one call. `fromDefaultMicrophoneInput` makes the
+    // SDK build its own AudioContext and resume it from inside
+    // startContinuousRecognitionAsync — which this hook reaches only after
+    // `await ensureWarm()`, so WebKit sees both outside the tap, refuses to
+    // start the graph, and reports nothing wrong. The recogniser is fed PCM
+    // through a push stream instead.
+    const body = code("lib/fast/useLiveDictation.ts");
+    expect(body).not.toContain("fromDefaultMicrophoneInput");
+    expect(body).not.toContain("fromMicrophoneInput");
+    expect(hook).toContain("sdk.AudioConfig.fromStreamInput(sink)");
+    expect(hook).toContain("createPushStream");
+  });
+
+  it("opens the mic in the press handler, with nothing awaited in front", () => {
+    // `press` is a plain callback and openMicCapture is reached inside it, so
+    // the AudioContext, its resume() and getUserMedia all happen in the tap's
+    // own task (lib/fast/micCapture.ts proves the three calls and their
+    // order). beginStream — the part with a network round trip in it — is only
+    // started AFTER the microphone is already open.
+    const press = hook.slice(hook.indexOf("const press = useCallback(() => {"));
+    const body = press.slice(0, press.indexOf("const release ="));
+    expect(body).toContain("openMicCapture({");
+    expect(body.indexOf("openMicCapture({")).toBeLessThan(body.indexOf("void beginStream(session)"));
+    // An await anywhere in `press` would put the gesture behind a microtask.
+    expect(body).not.toContain("await ");
+  });
+
+  it("puts a clock on the handshake the SDK does not put one on", () => {
+    // startContinuousRecognitionAsync can hang for as long as the TCP stack
+    // allows — a captive portal holds the button lit indefinitely otherwise.
+    expect(STREAM_CONNECT_MS).toBeGreaterThan(0);
+    expect(hook).toContain("connect timeout");
+    expect(hook).toContain("STREAM_CONNECT_MS");
+  });
+
+  it("watches a STARTED session, because starting proved nothing", () => {
+    // The failure this whole change exists for does not throw: the socket
+    // opens, the button lights, and no audio is ever produced. So a started
+    // session is polled against micVerdict rather than trusted.
+    expect(hook).toContain("micVerdict({");
+    expect(hook).toContain('if (verdict === "dead-graph") recoverToBatch();');
+    expect(hook).toContain("armWatchdog(session)");
+  });
+
+  it("routes a dead graph to the batch mic and keeps the finger's meaning", () => {
+    // Nothing was heard, so nothing is lost — but a LATCHED press must arrive
+    // at the batch mic still latched, or the mic closes under somebody who is
+    // still talking to it.
+    const recover = hook.slice(hook.indexOf("const recoverToBatch = useCallback"));
+    const body = recover.slice(0, recover.indexOf("const beginSalvage"));
+    expect(body).toContain("latchedRef.current");
+    expect(body).toContain("pendingLatchRef.current = true");
+    expect(body).toContain("fallBackToBatch()");
+    // Still silent. The field report's rule has not moved.
+    expect(body).not.toContain("onError");
+  });
+
+  it("salvages a deaf socket instead of asking for the sentence again", () => {
+    // Four seconds of voiced audio with no hypothesis back means the socket is
+    // one-way. The capture stays open and what it already holds is posted as
+    // one WAV — restarting into the batch mic here would throw away exactly
+    // the audio that diagnosed the problem.
+    const salvage = hook.slice(hook.indexOf("const beginSalvage = useCallback"));
+    const body = salvage.slice(0, salvage.indexOf("const stopStream"));
+    expect(body).toContain('activeRef.current = "salvage"');
+    expect(body).toContain('setMode("batch")');
+    expect(hook).toContain('onAudioRef.current(wav, "audio/wav")');
+    expect(hook).not.toContain("/api/fast/listen");
+  });
+
+  it("closes its own microphone before handing the press to the batch mic", () => {
+    // Two live captures on a phone is how you get one that records silence.
+    const start = hook.slice(hook.indexOf("void beginStream(session)"));
+    const catchBlock = start.slice(0, start.indexOf(".finally("));
+    expect(catchBlock).toContain("closeCapture()");
+  });
+
+  it("lets the retained copy go the moment Azure proves the socket", () => {
+    // Retention is memory held against a problem that is ruled out by the
+    // first partial. Thirty seconds of PCM after that is just a leak.
+    expect(hook).toContain("captureRef.current?.stopRetaining()");
   });
 });
 

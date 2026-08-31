@@ -87,9 +87,28 @@ export interface DictationOptions {
   onError: (message: string) => void;
   /** Fires when the caller should clear whatever error is on screen. */
   onStart?: () => void;
+  /**
+   * A microphone that is already open, if there is one.
+   *
+   * The live mic (lib/fast/useLiveDictation.ts) opens the microphone itself,
+   * inside the user gesture, and when streaming gives up it hands that same
+   * stream down here rather than letting this hook ask the phone for a second
+   * one. Two getUserMedia calls a second apart is how iOS gives you a stream
+   * that records silence — and the second one would land outside the gesture
+   * anyway. Returns null when there is nothing to inherit, which is the
+   * ordinary case and the one that asks for the mic normally.
+   *
+   * Consumed once: whatever it returns, this hook owns and stops.
+   */
+  adopt?: () => MediaStream | null;
 }
 
-export function useDictation({ onAudio, onError, onStart }: DictationOptions): Dictation {
+export function useDictation({
+  onAudio,
+  onError,
+  onStart,
+  adopt
+}: DictationOptions): Dictation {
   const [state, setState] = useState<DictationState>("idle");
   const [latched, setLatched] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -116,10 +135,12 @@ export function useDictation({ onAudio, onError, onStart }: DictationOptions): D
   // than closing over a particular render's copy.
   const onAudioRef = useRef(onAudio);
   const onErrorRef = useRef(onError);
+  const adoptRef = useRef(adopt);
   useEffect(() => {
     onAudioRef.current = onAudio;
     onErrorRef.current = onError;
-  }, [onAudio, onError]);
+    adoptRef.current = adopt;
+  }, [adopt, onAudio, onError]);
 
   const clearTimers = useCallback(() => {
     if (tickRef.current !== null) window.clearInterval(tickRef.current);
@@ -150,16 +171,24 @@ export function useDictation({ onAudio, onError, onStart }: DictationOptions): D
   const start = useCallback(async () => {
     if (recorderRef.current) return;
     onStart?.();
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    // An inherited microphone is still a microphone: a browser with no
+    // getUserMedia at all cannot have handed us one, but a browser whose Web
+    // Audio failed can — and that press must not be turned away here.
+    const inherited = adoptRef.current?.() ?? null;
+    if (
+      !inherited &&
+      (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia)
+    ) {
       onErrorRef.current("This browser can't record audio. Type it instead.");
       return;
     }
     if (typeof MediaRecorder === "undefined") {
+      inherited?.getTracks().forEach((t) => t.stop());
       onErrorRef.current("This browser can't record audio. Type it instead.");
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = inherited ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
       streamRef.current = stream;
       const mime = pickRecordingMime();
       mimeRef.current = mime;
