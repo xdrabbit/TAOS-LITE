@@ -15,150 +15,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { NextRequest } from "next/server";
 import { FAST_PLAN_TRANSLATIONS } from "@/lib/fast/meter";
-import { FAST_SETTLE_MS } from "@/lib/fast/settle";
+import { FAST_REPEAT_MS, FAST_SETTLE_MS } from "@/lib/fast/settle";
 import { QUOTAS, type Tier } from "@/lib/supabase";
 
-// ── A Postgres that fits in a test ─────────────────────────────────────────
-// The three functions in supabase/migrations/20260831_fast_metering.sql,
-// re-expressed against an in-memory store. It exists so the route's ORDERING
-// can be driven — reserve, then translate, then record — which is the half of
-// this fix that a SQL-only check cannot see.
+import { FastMeterDb } from "./helpers/fastMeterDb";
 
-interface FakeRow {
-  id: string;
-  user_id: string;
-  created_at: number;
-  source_lang: string;
-  target_lang: string;
-  tone: string;
-  original_text: string;
-  translation_text: string;
-  engine: string | null;
-}
-
-const db = {
-  now: Date.parse("2026-08-31T12:00:00Z"),
-  rows: [] as FakeRow[],
-  rate: new Map<string, number>(),
-  quickies: new Map<string, { pair: string; lastSeen: number; rowId: string | null }>(),
-  profiles: new Map<string, { subscription_status: string; tier: string | null }>(),
-  failBegin: false,
-  reset() {
-    db.now = Date.parse("2026-08-31T12:00:00Z");
-    db.rows = [];
-    db.rate.clear();
-    db.quickies.clear();
-    db.profiles.clear();
-    db.failBegin = false;
-  },
-  /** Rows for a user in the current calendar month — what the allowance counts. */
-  monthRows(userId: string): FakeRow[] {
-    const since = Date.UTC(2026, 7, 1);
-    return db.rows.filter((r) => r.user_id === userId && r.created_at >= since);
-  }
-};
-
-let rowSeq = 0;
-
-function bump(userId: string, window: "minute" | "hour", widthMs: number): number {
-  const bucket = Math.floor(db.now / widthMs) * widthMs;
-  const key = `${userId}|${window}|${bucket}`;
-  const next = (db.rate.get(key) ?? 0) + 1;
-  db.rate.set(key, next);
-  return next;
-}
-
-function fastBegin(a: Record<string, never | unknown>): Record<string, unknown> {
-  const userId = a.p_user_id as string;
-  const pair = `${a.p_source_lang}>${a.p_target_lang}`;
-
-  if (bump(userId, "minute", 60_000) > Math.max(a.p_minute_limit as number, 1)) {
-    return { ok: false, reason: "rate_minute" };
-  }
-  if (bump(userId, "hour", 3_600_000) > Math.max(a.p_hour_limit as number, 1)) {
-    return { ok: false, reason: "rate_hour" };
-  }
-
-  const open = db.quickies.get(userId);
-  if (
-    open &&
-    open.pair === pair &&
-    open.rowId !== null &&
-    db.now - open.lastSeen <= Math.max(a.p_window_ms as number, 0)
-  ) {
-    open.lastSeen = db.now;
-    const row = db.rows.find((r) => r.id === open.rowId && r.user_id === userId);
-    if (row) row.original_text = a.p_text as string;
-    return { ok: true, billed: false, row_id: open.rowId };
-  }
-
-  let cap = -1;
-  if (!a.p_unlimited) {
-    const profile = db.profiles.get(userId);
-    const tier =
-      profile?.subscription_status === "comp"
-        ? "comp"
-        : profile?.subscription_status === "active"
-          ? profile.tier === "premium"
-            ? "premium"
-            : "basic"
-          : "free";
-    const caps = a.p_caps as Record<string, number>;
-    cap = caps[tier] ?? caps.free ?? 25;
-  }
-
-  let used = 0;
-  if (cap >= 0) {
-    used = db.monthRows(userId).length;
-    if (used >= cap) return { ok: false, reason: "quota", used, cap };
-  }
-
-  const id = `row-${(rowSeq += 1)}`;
-  db.rows.push({
-    id,
-    user_id: userId,
-    created_at: db.now,
-    source_lang: a.p_source_lang as string,
-    target_lang: a.p_target_lang as string,
-    tone: "literal",
-    original_text: a.p_text as string,
-    translation_text: "",
-    engine: "fast"
-  });
-  db.quickies.set(userId, { pair, lastSeen: db.now, rowId: id });
-  return { ok: true, billed: true, row_id: id, used: used + 1, cap };
-}
-
-function fastRecord(a: Record<string, unknown>): null {
-  const row = db.rows.find((r) => r.id === a.p_row_id && r.user_id === a.p_user_id);
-  if (row) {
-    row.source_lang = a.p_source_lang as string;
-    row.target_lang = a.p_target_lang as string;
-    row.original_text = a.p_text as string;
-    row.translation_text = a.p_translation as string;
-    row.engine = (a.p_engine as string) || "fast";
-  }
-  return null;
-}
-
-function fastAbandon(a: Record<string, unknown>): null {
-  const open = db.quickies.get(a.p_user_id as string);
-  if (open && open.rowId === a.p_row_id) db.quickies.delete(a.p_user_id as string);
-  db.rows = db.rows.filter(
-    (r) => !(r.id === a.p_row_id && r.user_id === a.p_user_id && r.translation_text === "")
-  );
-  return null;
-}
-
-const rpcSpy = vi.fn(async (name: string, args: Record<string, unknown>) => {
-  if (name === "fast_begin") {
-    if (db.failBegin) return { data: null, error: { message: "connection reset" } };
-    return { data: fastBegin(args), error: null };
-  }
-  if (name === "fast_record") return { data: fastRecord(args), error: null };
-  if (name === "fast_abandon") return { data: fastAbandon(args), error: null };
-  throw new Error(`unexpected rpc ${name}`);
-});
+// The route's other end. tests/helpers/fastMeterDb.ts says what it is and,
+// more importantly, what it is not: it drives the ORDER the route does things
+// in, and it is not the proof that the plpgsql is right.
+const db = new FastMeterDb();
+const rpcSpy = vi.fn(db.rpc);
 
 vi.mock("@/lib/supabaseAdmin", () => ({
   hasServiceRoleKey: true,
@@ -276,7 +142,8 @@ describe("the monthly allowance, enforced before the engine is called", () => {
         tone: "casual",
         original_text: "x",
         translation_text: "y",
-        engine: "openai"
+        engine: "openai",
+        fast_sealed_at: null
       });
     }
 
@@ -520,5 +387,179 @@ describe("the money moves first", () => {
       expect(sql).toMatch(new RegExp(`revoke all on function public\\.${fn}[\\s\\S]*?authenticated`));
     }
     expect(sql).not.toMatch(/create policy \w+ on public\.fast_/);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The repeat window, with a floor under it
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Adoption has to match on a PREFIX — billing happens at the start of a
+// burst, which is somebody's first few letters, so an exact-match rule would
+// never fire while a phrase was being retyped. Unbounded, that made every
+// short opener a key to an older row.
+//
+// What is pinned here is both halves at once, because either alone is a bug:
+// the floor must stop "I" from opening "I need a doctor", AND the retype must
+// still be free. The second is what took a second attempt.
+
+/** One settled row, the way a real burst leaves one. */
+async function settledQuickie(text: string) {
+  db.now += FAST_SETTLE_MS + 1;
+  const res = await post(preview(text), { token: "t" });
+  expect(res.status).toBe(200);
+  return db.rows.at(-1)!;
+}
+
+/** A burst, one preview per element, all inside the settle window. */
+async function burst(...previews: string[]) {
+  db.now += FAST_SETTLE_MS + 1;
+  for (const text of previews) {
+    db.now += 320;
+    expect((await post(preview(text), { token: "t" })).status).toBe(200);
+  }
+}
+
+describe("a short opener is not a question somebody already answered", () => {
+  it("does not let 'I' latch onto 'I need a doctor'", async () => {
+    await settledQuickie("I need a doctor");
+    await burst("I");
+    // Two rows: the doctor, and a genuinely new lookup that happens to start
+    // with the same letter. Before the floor this was free AND invisible —
+    // an adopted burst writes nothing, so the second question never reached
+    // History at all.
+    expect(db.monthRows("u1")).toHaveLength(2);
+  });
+
+  it("does not let 'the' latch onto anything at all", async () => {
+    await settledQuickie("the bill please");
+    await burst("the");
+    expect(db.monthRows("u1")).toHaveLength(2);
+  });
+
+  it("does not let a whole word latch onto a longer phrase it opens", async () => {
+    // "where" clears the four-character floor, so this is the case the LENGTH
+    // rule alone would miss. It is refused because it neither spans a word
+    // boundary nor is the stored phrase.
+    await settledQuickie("where is the bank");
+    await burst("where");
+    expect(db.monthRows("u1")).toHaveLength(2);
+  });
+
+  it("still adopts a one-word quickie retyped in full", async () => {
+    // The other side of the same rule: "water" is not a prefix of something
+    // longer here, it IS the phrase. Refusing this would break the promise to
+    // fix the hole.
+    const first = await settledQuickie("water");
+    await burst("wat", "water");
+    expect(db.monthRows("u1")).toHaveLength(1);
+    expect(db.rows[0].id).toBe(first.id);
+  });
+});
+
+describe("the retype is still free, which is the whole reason for a repeat window", () => {
+  it("costs nothing to clear the box and type the phrase again", async () => {
+    // The promise #49's Clear button was built on. The burst opens by buying
+    // a row on "where" — it must, there is nothing else to go on yet — and
+    // then RECOGNISES itself as a retype and hands that row back.
+    const first = await settledQuickie("where is the bank");
+    await burst("where", "where is the", "where is the bank");
+    expect(db.monthRows("u1")).toHaveLength(1);
+    expect(db.rows[0].id).toBe(first.id);
+    expect(db.rows[0].original_text).toBe("where is the bank");
+  });
+
+  it("costs nothing for a SHORT phrase, where the length rule alone would charge", async () => {
+    // "how much" is eight characters, so it never reaches the twelve that
+    // stands on its own. The proportional rule is what carries it: five
+    // characters is 62% of the stored phrase.
+    const first = await settledQuickie("how much");
+    await burst("how", "how m", "how much");
+    expect(db.monthRows("u1")).toHaveLength(1);
+    expect(db.rows[0].id).toBe(first.id);
+  });
+
+  it("bills once the question actually diverges", async () => {
+    await settledQuickie("where is the bank");
+    await burst("where", "where is the", "where is the bathroom");
+    // Adopted at "where is the", then diverged. The bathroom is a different
+    // question and is billed as one.
+    expect(db.monthRows("u1")).toHaveLength(2);
+  });
+
+  it("stops adopting once the window has passed", async () => {
+    await settledQuickie("where is the bank");
+    db.now += FAST_REPEAT_MS + 1;
+    await burst("where", "where is the", "where is the bank");
+    expect(db.monthRows("u1")).toHaveLength(2);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// An adopted row is History, and the database is what says so
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("a sealed row refuses to be rewritten, whatever asks", () => {
+  it("seals the row it adopts", async () => {
+    const first = await settledQuickie("where is the pharmacy");
+    expect(first.fast_sealed_at).toBeNull();
+    await burst("where is the pharmacy");
+    expect(db.rows[0].fast_sealed_at).not.toBeNull();
+  });
+
+  it("drops a direct fast_record against a sealed row and keeps the content", async () => {
+    // The review's point, and it is about a defence that was one `if` deep:
+    // `recordFastQuickie` skips the write when the row was adopted, and if
+    // that check is ever dropped — a refactor, a new caller, a hand-typed
+    // UPDATE in the SQL editor — a paid History entry is overwritten with
+    // whatever is in somebody's box now. This call is that mistake, made on
+    // purpose, with the JS check bypassed entirely.
+    const first = await settledQuickie("where is the pharmacy");
+    await burst("where is the pharmacy");
+
+    await db.rpc("fast_record", {
+      p_user_id: "u1",
+      p_row_id: first.id,
+      p_source_lang: "es",
+      p_target_lang: "en",
+      p_text: "asdf",
+      p_translation: "garbage",
+      p_engine: "fast"
+    });
+
+    expect(db.rows[0]).toMatchObject({
+      original_text: "where is the pharmacy",
+      translation_text: "hola",
+      source_lang: "en",
+      target_lang: "es"
+    });
+  });
+
+  it("leaves an unsealed row writable, or the screen would stop working", () => {
+    // The seal is narrow on purpose. Almost every row in this table has never
+    // been near /fast, and a burst rewriting its OWN row as somebody types is
+    // the normal path.
+    db.rows.push({
+      id: "live",
+      user_id: "u1",
+      created_at: db.now,
+      source_lang: "en",
+      target_lang: "es",
+      tone: "literal",
+      original_text: "wher",
+      translation_text: "",
+      engine: "fast",
+      fast_sealed_at: null
+    });
+    db.fastRecord({
+      p_user_id: "u1",
+      p_row_id: "live",
+      p_source_lang: "en",
+      p_target_lang: "es",
+      p_text: "where",
+      p_translation: "dónde",
+      p_engine: "fast"
+    });
+    expect(db.rows.at(-1)).toMatchObject({ original_text: "where", translation_text: "dónde" });
   });
 });

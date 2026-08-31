@@ -48,6 +48,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   bug? Nobody has typed into it on a phone yet — it was verified against the
   real route and in headless Chrome, which is the same gap the Crawl scoring
   had. Answer that before `NEXT_PUBLIC_ENABLE_FAST=1`. (added 2026-08-30)
+  The mic half of this walk is **closed by removal, not by testing**: /fast has
+  no mic of its own as of 8/31 (PR #49) and the keyboard's is the mic now. What
+  is left of it is thirty seconds: tap the box, use the keyboard's dictation
+  button, and confirm the words land in the box and get translated like typed
+  ones. If they do, there is nothing else here to walk. (updated 2026-08-31)
 
 - **Put Call back under Together ▾ when /call goes public** — it is a
   top-level pill as of 8/31 (PR #53) because Tom and Liz use it daily and it
@@ -223,6 +228,71 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   the product. (added 2026-08-25)
 
 ## Ideas
+
+- **/fast's live mic — PARKED 2026-08-31, and worth reviving on Android.**
+  Tom's call, and the one-line version is: *worked on Android, killed by the
+  iOS WebKit audio stack after three fix rounds; candidate for an Android-only
+  revival; see the events log and PRs #49/#50 for the forensic file.* The
+  platform keyboard's mic replaced it — every phone already has one, it lands
+  its words in the same box, and it is the control people already know.
+
+  Nothing was deleted. `NEXT_PUBLIC_ENABLE_FAST_MIC=1` brings back the dock
+  (`components/fast/FastMicDock.tsx`), the streaming hook
+  (`lib/fast/useLiveDictation.ts`, four watchdogs), the hand-built audio graph
+  (`lib/fast/micCapture.ts`), the batch fallback (`lib/fast/useDictation.ts`),
+  the audio-seconds ledger (`lib/fast/speechMeter.ts`) and the three routes,
+  which 404 everyone while the flag is unset. `lib/release.ts` has the list;
+  `tests/fast-mic-parked.test.ts` pins that it is a park and not a deletion,
+  and every test the mic shipped with still runs.
+
+  **What killed it.** The Speech SDK opens the microphone itself, in the order
+  `new AudioContext({sampleRate: 16000})` → `resume()` → `getUserMedia`, from
+  inside `startContinuousRecognitionAsync` — which the hook only reached after
+  an `await` for a token. WebKit only starts an AudioContext built inside a
+  user gesture, and it does **not throw** for this: it resolves, leaves the
+  context stopped, and the recogniser starts, the socket opens and the button
+  lights up over a graph that never runs. Azure, hearing digital silence on a
+  continuous session, sends back no partial, no final and no cancellation, so
+  nothing rejects and no fallback fires. Round 2 moved the whole capture into
+  the press handler and added four watchdogs; round 3 found the case where the
+  *track* is the dead thing rather than the context, and the fallback was
+  inheriting it. Tom's iPhone was still dead after all of it.
+
+  **Why it is worth keeping.** It was not broken everywhere — it streamed
+  correctly in real Chrome from a real click (960 frames, 2.58s of genuine
+  16 kHz mono PCM, valid WAV; `tests/live-fire/fast-mic-capture-browser-check.mjs`),
+  and Android is the platform where a custom mic buys something the keyboard
+  cannot: **auto-detect between the two pills**. iOS keyboard dictation
+  transcribes in the KEYBOARD's language, so on an iPhone the other side of a
+  pair means switching keyboards first. That is the accepted cost of this
+  decision, and it is the thing an Android-only revival would win back.
+
+  **Two things to settle before it ever ships past founders** — both were
+  "Up next" items until the mic came off, and neither is worth carrying in a
+  live backlog for a screen nobody can reach:
+
+  1. **Relay the websocket, or accept the residual.** The mic talks straight
+     from the phone to Azure, which is what puts partial transcripts on screen
+     while somebody is still speaking, and is also why the server can never
+     count that audio directly. It is bounded (a token per press, a
+     reservation per utterance, a rolling hourly budget, a reaper) but Azure's
+     `issueToken` TTL is **ten minutes and not configurable**, with no narrower
+     scope to request — so a lifted JWT is ten minutes of recognition the
+     server hears nothing about. `TAOS_FAST_SPEECH_LIVE_TOKENS` (default 6)
+     caps unexpired tokens per account; **set it to 2 before going public** —
+     the 6 was slack for a field test with a lot of reloading. Relaying through
+     a function and metering the bytes is the only thing that closes it, and it
+     costs the latency the feature exists to buy, so it wants measuring first.
+  2. **The founder speech bypass turns itself back on.**
+     `fastSpeechUnlimited()` in `lib/release.ts` ties the bypass to the GATE
+     rather than to the person, deliberately: a meter that exempts the only
+     people who can reach the screen has never been tested. It flips on the day
+     `NEXT_PUBLIC_ENABLE_FAST=1`. Nothing to remember, only something to
+     re-read if the hourly budget feels tight —
+     `TAOS_FAST_SPEECH_SECONDS_PER_HOUR` is the dial (default 600s, about
+     twenty spoken quickies an hour).
+
+  (added 2026-08-31)
 
 - The context cap belongs on the other three realtime screens too — found
   while costing /call (PR #39, docs/realtime-cost-model.md). Every Realtime
@@ -561,6 +631,128 @@ is not a prerequisite for using it.
   relay path has only been proven against a local TURN server, never against
   Cloudflare's. The same harness runs against the real thing once the key
   exists.
+- **/fast's mic came OFF, 2026-08-31** — PR #49. Tom's decision, after three
+  rounds: the custom mic is removed from /fast and the platform keyboard's
+  dictation button replaces it. The streaming stack is parked behind
+  `NEXT_PUBLIC_ENABLE_FAST_MIC`, not deleted — the full forensic write-up, the
+  revival case, and the two things to settle before it could ever ship past
+  founders are in **Ideas**, above.
+
+  → **What was actually wrong.** Not lumpy, not slow: **dead in the shape of a
+  working mic** — button lit, timer counting, socket to Azure genuinely open,
+  and never a word. The Speech SDK opens the microphone itself in the order
+  `new AudioContext({sampleRate: 16000})` → `resume()` → `getUserMedia`, from
+  inside `startContinuousRecognitionAsync`, which the hook only reached after
+  an `await` for a token. WebKit only starts an AudioContext built inside a
+  user gesture and **does not throw** when it refuses: the promise resolves,
+  the context stays stopped, and Azure — hearing digital silence on a
+  continuous session — answers with no partial, no final and no cancellation.
+  Nothing rejected, so nothing fell back.
+
+  → **Two rounds of real fixes did not close it.** The hook took ownership of
+  the microphone (`lib/fast/micCapture.ts`: context built, resumed and handed
+  `getUserMedia` synchronously in the press handler, PCM pushed to the
+  recogniser through `AudioConfig.fromStreamInput`, sample rate deliberately
+  not forced to 16 kHz because iOS runs its capture session at the hardware
+  rate). The fallback went from one signal to four: a 3 s connect timeout, a
+  1.5 s zero-PCM watchdog, a 4 s voiced-audio-with-no-hypothesis watchdog that
+  *salvages* rather than restarting, and a 12 s backstop for the middle ground.
+  Round 3 found that "always adopt the granted stream" was wrong for exactly
+  one verdict — a `dead-graph` means the TRACK is the accused, and handing it
+  to MediaRecorder records the same zeroes. All of that is real work and all of
+  it is still in the repo. Tom's iPhone was still dead.
+
+  → **So the decision was not another fix.** Every phone TAOS ships to already
+  carries a mic on its keyboard; it lands its words in the same box; it is the
+  control people already know; and it works on the one platform ours did not.
+  /fast is a typing screen — that was always the design — so it is a typing
+  screen with an honest line under the box saying where the mic is:
+  *"💡 Your keyboard's mic works here · El micrófono de tu teclado funciona
+  aquí"*.
+
+  → **The one thing lost, stated rather than hidden.** iOS keyboard dictation
+  transcribes in the KEYBOARD's language, not in whatever is being spoken.
+  Our mic auto-detected between the two pills, which is the best thing it did.
+  Dictating the other side of a pair on an iPhone now means switching keyboards
+  first (globe key). Documented in `components/FastShell.tsx` beside the tip,
+  and accepted — the actual /fast loop is somebody typing in one language and
+  looking words up in it, and they never meet this.
+
+  → **Parked means parked, including the money doors.** `/api/fast/listen`,
+  `/api/fast/speech-token` and `/api/fast/speech-settle` now 404 everyone —
+  founders included — until the flag is set. The first buys a Whisper
+  transcription; the second hands out ten minutes of Azure recognition
+  authority in a JWT Microsoft gives no way to revoke. A paid endpoint left
+  open with no UI calling it is not a parked feature, it is an unwatched one.
+  `tests/fast-mic-parked.test.ts` pins the whole shape: flag off by default,
+  no mic UI on the screen, no streaming import in the shell, the dock reached
+  only through a guarded `dynamic()` so its chunk is never fetched, all three
+  routes shut, and every parked file still on disk.
+
+- **/fast grew a Clear button, 2026-08-31** — PR #49. Tom's field ask, and he
+  asked for it kept when the mic came off in the same PR. A quiet button beside
+  the quickie box that puts it back to the state the screen opens in: /fast is
+  used standing up, a word at a time, and the real loop is "look this up, now
+  look the next thing up" — with the last answer still on the box, emptying it
+  by hand on a phone was a long-press menu and two more taps.
+  → **It stayed the quiet one.** It shipped as ghost styling at half the mic's
+  size, in a column under it; with the mic gone it kept the size and the side
+  rather than growing into the vacancy. Clear acts on the FIELD, so it sits
+  beside the field and not under the answer. The slot is *reserved* rather than
+  faded: the button comes and goes, the box it lives in does not, so appearing
+  costs no reflow. A fade would have hidden that jump instead of removing it.
+  → **It shows only when there is something to clear** — untrimmed, so a box
+  holding three spaces still offers it. The predicate takes two arguments and
+  still does: the second one carried the streaming mic's tentative tail, which
+  is drawn on the box but held *outside* `input` on purpose so it cannot start
+  a translation, and to the thumb was still "what is on the screen right now".
+  With the mic parked it is always empty, and the rule is unchanged
+  (`lib/fast/clear.ts`).
+  → **And #51 quietly started charging for it, which this PR undoes.** Moving
+  billing server-side keyed it on a burst of previews, and two bursts of the
+  same words are two rows — so clear-and-retype began costing money it never
+  used to. The visit-long memory is back as a durable repeat window in
+  `public.fast_begin` (`FAST_REPEAT_MS`, six hours), and it is now pinned
+  against the real route rather than against a copy of the rule.
+  → **It resets the machine, not the wallet.** The tap clears the input, the
+  translation, the direction caption's detected/target pair, the engine line
+  and any error; it orphans the in-flight request so a late reply cannot paint
+  into a box somebody just emptied; and it still cancels the parked mic, one
+  setState that costs nothing while nothing is listening, because a tail
+  arriving would be text on its way into that same box. What it does **not**
+  touch is the billed set — the memory of which words have already
+  counted against the monthly allowance. Clear is a screen gesture, not a
+  purchase, and forgetting that set would have made clear-and-retype a second
+  charge for the same phrase, landing on exactly the person who cleared because
+  they wanted the answer they had just read. It is the one thing here that is
+  invisible when it breaks, so it is pinned as a negative assertion
+  (`tests/fast-clear.test.ts`).
+  → It leaves the **pinned direction** alone for the same class of reason:
+  pinning is a decision about the conversation, not about the phrase that was
+  just cleared. Somebody who pinned ES→EN to read a menu is about to read the
+  next line of the same menu.
+  → **Walked in a real browser** on 2026-08-31
+  (`tests/live-fire/fast-clear-browser-check.mjs`), because three of the four
+  claims are about pixels or about time and no source-reading test can reach
+  them. The mic measured at the same 363px from the top of the viewport empty,
+  typed-into and cleared — the no-layout-shift claim, as a number. Focus came
+  back to the box after a *real* mouse press on the button (a synthetic
+  `.click()` never focuses the button, so it would have faked a pass). And the
+  meter, counted as inserts that actually left the page: one settled quickie →
+  1 row, the clear → still 1, retyping the same words → still 1, clear then a
+  new phrase → 2. Then the flow Tom described end to end: type, clear, speak.
+  → **Re-walked after the mic came off**, because the layout-shift number was
+  measured against the mic and the mic is gone. It had to change ANCHOR, not
+  just value: the Clear slot used to take its width from the 56px mic under it,
+  so with the mic removed an empty `h-8` wrapper collapses to zero width and
+  hands it back to the textarea — the box would have resized under the caret on
+  the first keystroke, which is the exact jump the reserved slot exists to
+  prevent. The rig watches the **textarea's own geometry** now, and the fix is
+  `h-8 w-8`: box 408px wide at x=159 empty, typed and cleared, unchanged.
+  Also on the real bundle, in the same run: no dictate button on the page, the
+  keyboard-mic tip present in both languages, `/api/fast/listen` never called
+  (0), and still 0 billing rows written from the browser across all four
+  states. PASS, 2026-08-31.
 
 - **/fast metering moved to the server, 2026-08-31** — PR #51. Found
   reviewing #46-#49 rather than in the field, and it was the revenue hole:
@@ -597,6 +789,104 @@ is not a prerequisite for using it.
   founders are subscribers, so nothing is capped today. This closes the hole
   *before* `NEXT_PUBLIC_ENABLE_FAST=1` opens the door, which is the only
   moment it was ever going to be cheap to close.
+
+- **/fast grew a mic, 2026-08-30** — PR #49. The keyboard is still the way in;
+  the mic is the sausage-finger lane onto the same box. Hold it or tap it, and
+  the words land **in the input** as editable text rather than on screen as an
+  answer — which is the whole difference between this and the home screen.
+  There, speaking *is* the turn and a mis-heard word is a mis-heard turn. Here
+  it is a draft, and fixing it costs a keystroke.
+  → **No third clock.** The transcript is written into the input exactly as if
+  it had been typed, and the screen's own debounce takes it from there. What it
+  then COSTS is the server's answer, not this component's (#51) — so a spoken
+  quickie and a typed one are the same burst of previews and bill the same one
+  row, and fixing a mis-heard word bills a second, which is honest: it is a
+  different phrase, and the one the person actually meant.
+  → **The mic spends against the same meter as the keyboard.** `POST
+  /api/fast/listen` shares `/api/fast`'s founder gate *and* its
+  `checkFastRate` buckets, so 60/min is 60 of anything rather than 60 of each.
+  A mic with its own counter would have been a second way to spend on /fast
+  that the /fast ceiling could not see — and it is the pricier of the two
+  calls.
+  → **The STREAMING mic got its own ledger, after review found it had none.**
+  The live path opens a websocket from the phone straight to Azure, so no
+  server sees the audio; the first cut minted the ten-minute credential for
+  that **on mount** (a page view bought nine minutes of recognition authority)
+  and counted the audio nowhere, with the 30-second cap living in a browser
+  `setTimeout`. Now the token is minted on the first PRESS, reserves one
+  utterance against a rolling hourly budget, settles for what was actually
+  streamed, and is reaped at its full reservation if it never settles.
+  `lib/fast/speechMeter.ts` also writes down what that does **not** close:
+  Azure's token TTL is ten minutes and is not configurable, so a lifted JWT is
+  still worth ten minutes to whoever lifts it. Bounded and audited now; not
+  sealed.
+  → **It transcribes and stops.** Reaching for `/api/translate` instead would
+  have bought a `gpt-4.1` paraphrase per dictation, in the house register
+  /fast deliberately does not use, only to throw it away. Instead that route's
+  transcriber was lifted out unchanged into `lib/translate/transcribe.ts` and
+  both now call it — which is how the mic inherited the 7/27 no-guess fence
+  and the Cantonese hint rather than shipping a fourth copy of the fetch
+  without them.
+  → Walked against REAL Azure on 2026-08-30 (the key is write-only, so the
+  token came from a temporary secret-guarded probe route deployed with
+  `vercel deploy --env`, removed afterwards along with its deployments). Auto,
+  4.15 s of English: first words on screen at 2374 ms — 1777 ms *before* the
+  speech ended — then the full sentence as `[en-US]`. The same unchanged pair
+  given 6.25 s of Spanish, with nobody telling it which: first words at
+  2478 ms, `¿Dónde está la farmacia?` finalized at 2603 ms as `[es-MX]`, and
+  the next clause already guessing again. Pinned to English: 803 ms. The
+  fallback was walked separately with no Azure key present — the token route
+  404s, the mic drops to batch without a word, and the batch flow passes
+  unchanged.
+  → Walked in a real browser with a real `MediaRecorder` and a fake microphone
+  (`tests/live-fire/fast-dictation-browser-check.mjs`): held 1.5 s → 1 upload →
+  transcript in the box → 1 billed row → every audio track ended afterwards;
+  then a tap latches and the next tap stops it. The Chrome flag is
+  `--use-fake-device-for-media-stream`, and getting it wrong opens the real
+  microphone and looks exactly like a broken button.
+  → **And then it learned to stream, in the same PR.** Tom, same day: the batch
+  mic *feels dead while talking* — you talk to a button that does nothing, for
+  as long as you talk, and then everything happens at once. Right feature,
+  wrong screen for a progress bar. So the mic now opens a websocket from the
+  phone to **Azure Speech** and renders the words as they arrive. The batch
+  path stays in the build as a silent fallback and is still the only mic for
+  the 24 catalog languages Azure cannot hear.
+  → **Audio does not go through Vercel**, because a function hop per 100 ms of
+  speech would spend exactly the latency this exists to save. That needs a
+  credential in the browser, so `AZURE_SPEECH_KEY` never is one: `POST
+  /api/fast/speech-token` mints a ten-minute JWT that can only recognise
+  speech. Same resource the tutor's Crawl scoring already uses — and pointedly
+  *not* the Translator resource the literal engine still wants, which remains
+  uncreated.
+  → **Partials are drawn; only finals are text.** The one rule that makes this
+  affordable, and the only one that is invisible when it breaks — nothing
+  looks wrong, it just costs more. A hypothesis renders as a dimmed tail and
+  is held outside the input, so it never starts the 300 ms debounce; wiring it
+  in would have fired dozens of per-character billed translations per spoken
+  phrase to render text that was about to be replaced anyway. The settle clock
+  never moved: one settled quickie still bills one row, however many segments
+  it arrived in.
+  → **The candidate list is two, and a stopwatch chose it.** Azure allows 4
+  languages for at-start identification and 10 for continuous, so the obvious
+  design was to fill the list with the pair plus recents. Measured on one
+  4.15 s clip, time to the first word appearing: 1 language 0.80 s, 2
+  continuous 2.42 s, 2 at-start 3.83 s, 4 at-start 3.81 s, 4 continuous
+  4.49 s — **and all five transcribed it identically.** The extra candidates
+  bought nothing and cost up to two seconds of the only thing this feature
+  sells. A quickie is often shorter than four seconds, so the fat list would
+  have shown the words *after* you stopped talking. Hence: never more than the
+  two pills, and continuous rather than at-start.
+  → **Pinning the direction is the fast path** — one language, no
+  identification step, first words at 0.8 s instead of 2.4 s. It also rescues
+  pairs Auto has to refuse: pinning needs only the one language to be
+  hearable, so English-with-Latin still streams if you pin to English. In Auto
+  both pills are required, because a recogniser that hears one side would
+  silently mangle every sentence said in the other.
+  → **The fallback says nothing, and is re-decided every press.** A mic that
+  explains why it is in its slower mode interrupts somebody mid-errand to
+  discuss infrastructure; a mic that fell back once and stayed there for the
+  rest of the trip would be a worse bug than the one this fixed, and an
+  invisible one.
 
 - **/fast — the Google-quickie box, 2026-08-30** — PR #46. Tom's ask: a
   single input where the translation "renders as you type", plain and

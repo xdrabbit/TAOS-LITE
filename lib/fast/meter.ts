@@ -50,7 +50,13 @@
 import { isFounder } from "@/lib/release";
 import type { Tier } from "@/lib/supabase";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
-import { FAST_SETTLE_MS } from "./settle";
+import {
+  FAST_REPEAT_MIN_CHARS,
+  FAST_REPEAT_MIN_RATIO,
+  FAST_REPEAT_MS,
+  FAST_REPEAT_STRONG_CHARS,
+  FAST_SETTLE_MS
+} from "./settle";
 
 /** The one log prefix for this meter. Change it here, dashboards follow. */
 export const FAST_METER_LOG = "taos.fast.meter";
@@ -104,7 +110,19 @@ export interface FastUser {
 export type FastRefusal = "rate_minute" | "rate_hour" | "quota";
 
 export type BeginFastQuickieResult =
-  | { ok: true; rowId: string | null; billed: boolean; used?: number; cap?: number }
+  | {
+      ok: true;
+      rowId: string | null;
+      billed: boolean;
+      /**
+       * True when this request ADOPTED a row an earlier lookup already paid
+       * for (the repeat window). The row belongs to that lookup, so the
+       * caller must not write over it — see recordFastQuickie.
+       */
+      repeat: boolean;
+      used?: number;
+      cap?: number;
+    }
   | { ok: false; reason: FastRefusal; used?: number; cap?: number };
 
 /** Raised when production is missing the key the meter cannot work without. */
@@ -148,6 +166,8 @@ export interface BeginFastQuickieInput {
   sourceLanguage: string;
   targetLanguage: string;
   text: string;
+  /** True when the caller did not say which side the text is written in. */
+  auto?: boolean;
 }
 
 /**
@@ -165,7 +185,7 @@ export async function beginFastQuickie(
   if (!meteringAvailable()) {
     if (inProduction()) throw new FastMeterUnavailableError();
     unmeteredWarning();
-    return { ok: true, rowId: null, billed: false };
+    return { ok: true, rowId: null, billed: false, repeat: false };
   }
 
   const { perMinute, perHour } = fastRateLimits();
@@ -183,7 +203,20 @@ export async function beginFastQuickie(
     p_unlimited: isFounder(input.user.email),
     p_window_ms: FAST_SETTLE_MS,
     p_minute_limit: perMinute,
-    p_hour_limit: perHour
+    p_hour_limit: perHour,
+    // The visit-long billed set, restored durably (lib/fast/settle.ts). A
+    // phrase asked again inside this window adopts the row it already bought
+    // — but only once enough of it has been typed to be that phrase and not
+    // an opener every row in the table starts with. One bag rather than four
+    // arguments, so the next knob to move does not change the SQL signature
+    // again; the function reads its own defaults from it.
+    p_repeat: {
+      ms: FAST_REPEAT_MS,
+      min_chars: FAST_REPEAT_MIN_CHARS,
+      min_ratio: FAST_REPEAT_MIN_RATIO,
+      strong_chars: FAST_REPEAT_STRONG_CHARS
+    },
+    p_auto: Boolean(input.auto)
   });
 
   if (error) {
@@ -198,6 +231,7 @@ export async function beginFastQuickie(
   const verdict = (data ?? {}) as {
     ok?: boolean;
     billed?: boolean;
+    repeat?: boolean;
     row_id?: string | null;
     reason?: FastRefusal;
     used?: number;
@@ -217,6 +251,7 @@ export async function beginFastQuickie(
     ok: true,
     rowId: verdict.row_id ?? null,
     billed: Boolean(verdict.billed),
+    repeat: Boolean(verdict.repeat),
     used: verdict.used,
     cap: verdict.cap
   };
@@ -225,6 +260,8 @@ export async function beginFastQuickie(
 export interface RecordFastQuickieInput {
   user: FastUser;
   rowId: string | null;
+  /** True when the row was adopted from an earlier lookup. Then: hands off. */
+  repeat?: boolean;
   /** What the engine says was typed — auto mode only learns it here. */
   sourceLanguage: string;
   targetLanguage: string;
@@ -239,8 +276,16 @@ export interface RecordFastQuickieInput {
  * Best effort by design, and the one place in this file that is: the money
  * already moved in `beginFastQuickie`. A failure here costs a History entry
  * its text, not an allowance its count.
+ *
+ * Does nothing for an ADOPTED row. That row belongs to an earlier lookup — it
+ * is already settled, with its own finished text and translation — and writing
+ * this preview into it would overwrite that History entry with a prefix of
+ * itself. `fast_begin` guards the same row on the SQL side for the same
+ * reason; this is the other half of it, and without it the repeat window
+ * would quietly eat the answer it just saved somebody from re-buying.
  */
 export async function recordFastQuickie(input: RecordFastQuickieInput): Promise<void> {
+  if (input.repeat) return;
   if (!input.rowId || !meteringAvailable()) return;
   const { error } = await supabaseAdmin.rpc("fast_record", {
     p_user_id: input.user.id,

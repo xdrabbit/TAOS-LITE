@@ -186,6 +186,93 @@ export function fastVisibleTo(email: string | null | undefined): boolean {
   return fastEnabled() || isFounder(email);
 }
 
+/**
+ * Does a founder bypass /fast's STREAMING-SPEECH budget?
+ *
+ * Not while /fast is founders-gated. That combination is a meter that binds
+ * nobody: fastVisibleTo() says only founders can reach the screen, and an
+ * unconditional founder bypass would say founders do not count against the
+ * speech budget — so the ledger in lib/fast/speechMeter.ts would run, and
+ * refuse, for the empty set. The one population that could exercise it is the
+ * one population exempted from it, and the first time the number mattered
+ * would be the first day it applied to a stranger.
+ *
+ * So the bypass is tied to the gate rather than to the person. While /fast is
+ * held back, founders spend against the ordinary allowance — they ARE the
+ * test population, and TAOS_FAST_SPEECH_SECONDS_PER_HOUR is set generously
+ * (ten minutes of audio an hour, roughly twenty spoken quickies) precisely so
+ * that daily use walks the meter without tripping it. The day
+ * NEXT_PUBLIC_ENABLE_FAST=1 promotes the screen, this flips itself: the
+ * surface is public, strangers are the ones being bounded, and founders stop
+ * paying for their own product.
+ *
+ * NOTE the deliberate asymmetry with the TYPING meter, which still passes
+ * isFounder() straight through as p_unlimited (lib/fast/meter.ts). That one
+ * is not /fast's own: it counts rows in taos_lite_translations, the SHARED
+ * monthly allowance the home screen and /translate spend from too. Capping a
+ * founder there would cap them at 25 translations a month across the whole
+ * app to make one screen's number honest, which is a worse trade than the
+ * one this function makes.
+ */
+export function fastSpeechUnlimited(email: string | null | undefined): boolean {
+  return fastEnabled() && isFounder(email);
+}
+
+// /fast's MIC is parked — off for everyone, founders included, 2026-08-31.
+//
+// Tom's decision, after three rounds of iPhone fixes: the custom mic comes off
+// /fast and the platform keyboard's dictation button replaces it. Every phone
+// TAOS ships to already has a mic on its keyboard, it is the control people
+// already know how to use, and it puts its words in the same box ours did.
+// Against that, our mic bought partial transcripts and auto-detect — and cost
+// a week that ended with a screen that worked on Android and was dead on the
+// one phone the founders carry.
+//
+// So this is a PARK, not a delete. What survives, whole:
+//
+//   lib/fast/useLiveDictation.ts   the streaming hook, four watchdogs and all
+//   lib/fast/micCapture.ts         the hand-built audio graph iOS needed
+//   lib/fast/useDictation.ts       the batch mic it falls back to
+//   lib/fast/speechMeter.ts        the audio-seconds ledger
+//   app/api/fast/speech-token/     the credential mint
+//   app/api/fast/speech-settle/    the other end of its reservation
+//   app/api/fast/listen/           the batch transcriber
+//   components/fast/FastMicDock.tsx  the UI, lifted out of FastShell
+//
+// plus every test for all of it, which is the point: this worked on Android,
+// and reviving it there is a flag and a layout, not a rewrite. ENHANCEMENTS.md
+// carries the forensic note and PRs #49/#50 carry the file.
+//
+//     NEXT_PUBLIC_ENABLE_FAST_MIC=1
+//
+// brings it back. NEXT_PUBLIC_ because FastShell decides in the browser
+// whether to load the dock at all — and reading the literal process.env
+// expression is what lets Next inline it, so with the flag unset the
+// `import()` below it is unreachable and the streaming code never enters the
+// bundle a phone downloads. tests/fast-mic-parked.test.ts pins that.
+export function fastMicEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_FAST_MIC ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
+/**
+ * May this person reach /fast's mic — the screen AND the flag?
+ *
+ * THE question the three mic routes ask, and it is deliberately BOTH halves.
+ * Parking the mic in the browser only would leave three paid endpoints
+ * reachable with nothing calling them: /api/fast/listen buys a Whisper
+ * transcription, and /api/fast/speech-token hands out ten minutes of Azure
+ * recognition authority. A parked feature whose spend routes are still open is
+ * not parked, it is unwatched — so the flag that hides the button is the same
+ * flag that closes the doors, and they cannot drift apart.
+ *
+ * Founder-ness is still required on top of it: flipping the mic back on must
+ * not also promote /fast past the founders gate.
+ */
+export function fastMicVisibleTo(email: string | null | undefined): boolean {
+  return fastMicEnabled() && fastVisibleTo(email);
+}
+
 // /live's second engine — "On-device", the Web Speech API path — is off for
 // RC1 (Tom, 8/18: it has never once worked for him). It is not a half-built
 // feature like tutor; it is a finished feature standing on a browser API that

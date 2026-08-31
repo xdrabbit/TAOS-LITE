@@ -1,0 +1,427 @@
+// The mic on /fast — what it costs, what it is allowed to do, and where the
+// words it produces end up.
+//
+// /fast is a TYPING screen with a mic on it, and that ordering is the whole
+// design. Dictation does not produce a translation; it produces text in an
+// input box, which the screen's existing two clocks then translate and bill
+// exactly as if it had been typed (lib/fast/settle.ts). Four things have to
+// stay true for that to hold, and each of them is a way this could have
+// shipped wrong:
+//
+//   1. speaking is gated exactly as typing is — a founders-only screen with a
+//      mic anyone can reach is not a founders-only screen;
+//   2. speaking is METERED as typing is, against the SAME per-minute buckets,
+//      because a mic with its own counter is a second way to spend on /fast
+//      that the /fast ceiling cannot see — and it is the pricier call;
+//   3. the route transcribes and STOPS. Reaching for /api/translate instead
+//      would have bought a gpt-4.1 paraphrase per dictation, in the house
+//      register /fast deliberately does not use, only to throw it away;
+//   4. one spoken quickie still bills ONE row, because the billing key is the
+//      settled text and knows nothing about how the text arrived.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+import { readFileSync } from "node:fs";
+import { FAST_MAX_CHARS } from "@/lib/fast/settle";
+import { appendDictated } from "@/lib/fast/liveTranscript";
+import {
+  dictationHintFor,
+  FAST_MAX_DICTATION_BYTES,
+  FAST_MAX_DICTATION_MS,
+  FAST_MIN_DICTATION_MS
+} from "@/lib/fast/dictation";
+import { CANTONESE_STT_HINT, STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
+
+let caller: { id: string; email: string } | null = null;
+
+vi.mock("@/lib/authServer", () => ({
+  getUserFromRequest: async (req: Request) => {
+    const header = req.headers.get("authorization") ?? "";
+    return header.startsWith("Bearer ") && caller ? caller : null;
+  }
+}));
+
+/** Stands in for OpenAI. Records every call so the assertions can ask which
+ *  endpoint was reached, and with what prompt. */
+const calls: { url: string; body: unknown }[] = [];
+let transcript = "where is the pharmacy";
+
+const fetchSpy = vi.fn(async (url: unknown, init?: RequestInit) => {
+  const href = String(url);
+  calls.push({ url: href, body: init?.body });
+  if (href.includes("/audio/transcriptions")) {
+    return new Response(JSON.stringify({ text: transcript }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  return new Response(JSON.stringify({ choices: [{ message: { content: "hola" } }] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+});
+
+const ORIGINAL_FETCH = globalThis.fetch;
+const ORIGINAL_KEY = process.env.OPENAI_API_KEY;
+const ORIGINAL_FLAG = process.env.NEXT_PUBLIC_ENABLE_FAST;
+const ORIGINAL_MIC_FLAG = process.env.NEXT_PUBLIC_ENABLE_FAST_MIC;
+
+beforeEach(async () => {
+  caller = null;
+  transcript = "where is the pharmacy";
+  calls.length = 0;
+  fetchSpy.mockClear();
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  process.env.OPENAI_API_KEY = "sk-test";
+  delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  // The mic is parked (lib/release.ts) and /api/fast/listen 404s without this.
+  // This file describes the batch mic behind the flag; the parking is pinned
+  // in tests/fast-mic-parked.test.ts.
+  process.env.NEXT_PUBLIC_ENABLE_FAST_MIC = "1";
+  delete process.env.AZURE_TRANSLATOR_KEY;
+  delete process.env.AZURE_TRANSLATOR_REGION;
+  const { resetFastRateLimits } = await import("@/lib/fast/rateLimit");
+  resetFastRateLimits();
+});
+
+afterEach(() => {
+  globalThis.fetch = ORIGINAL_FETCH;
+  if (ORIGINAL_KEY === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = ORIGINAL_KEY;
+  if (ORIGINAL_FLAG === undefined) delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  else process.env.NEXT_PUBLIC_ENABLE_FAST = ORIGINAL_FLAG;
+  if (ORIGINAL_MIC_FLAG === undefined) delete process.env.NEXT_PUBLIC_ENABLE_FAST_MIC;
+  else process.env.NEXT_PUBLIC_ENABLE_FAST_MIC = ORIGINAL_MIC_FLAG;
+  vi.resetModules();
+});
+
+/** A recording, the shape FastShell uploads: a named File in a FormData. */
+function dictation(
+  { bytes = 4096, pair = ["en", "es"] }: { bytes?: number; pair?: [string, string] } = {}
+): FormData {
+  const form = new FormData();
+  form.append("audio", new File([new Uint8Array(bytes)], "quickie.webm", { type: "audio/webm" }));
+  form.append("pairA", pair[0]);
+  form.append("pairB", pair[1]);
+  return form;
+}
+
+function listenRequest(form: FormData, token?: string): NextRequest {
+  return new NextRequest("https://taoslite.com/api/fast/listen", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form
+  });
+}
+
+async function listen(form = dictation(), token?: string) {
+  const { POST } = await import("@/app/api/fast/listen/route");
+  return POST(listenRequest(form, token));
+}
+
+const routeSource = (path: string) =>
+  readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+describe("POST /api/fast/listen — who may speak into it", () => {
+  it("404s a signed-out stranger without touching a provider", async () => {
+    const res = await listen();
+    expect(res.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("404s a signed-in customer without touching a provider", async () => {
+    caller = { id: "u1", email: "stranger@example.com" };
+    const res = await listen(dictation(), "token");
+    expect(res.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("transcribes for a founder", async () => {
+    caller = { id: "u2", email: "xdrabbit@gmail.com" };
+    const res = await listen(dictation(), "token");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ text: "where is the pharmacy" });
+  });
+
+  it("opens to everyone on the same flag the typing does", async () => {
+    // One env var opens the screen, the translate route and the mic together.
+    // A mic that needed a second flag is a mic that ships dark by accident.
+    process.env.NEXT_PUBLIC_ENABLE_FAST = "1";
+    caller = { id: "u3", email: "stranger@example.com" };
+    expect((await listen(dictation(), "token")).status).toBe(200);
+  });
+
+  it("identifies the caller before it reads the upload", async () => {
+    // The ordering that makes the 404 free, and here it matters more than it
+    // does next door: the body this refuses to read is an audio file.
+    const src = routeSource("app/api/fast/listen/route.ts");
+    const guard = src.indexOf("await guardSpend(req)");
+    const gate = src.indexOf("fastMicVisibleTo(email)");
+    // The STATEMENT, not the word: the header comment above says why the
+    // buckets are shared, and it says it before any of this runs.
+    const rate = src.indexOf("const rate = checkFastRate(");
+    const body = src.indexOf("await req.formData()");
+    expect(guard).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(guard);
+    expect(rate).toBeGreaterThan(gate);
+    expect(body).toBeGreaterThan(rate);
+  });
+});
+
+describe("the mic spends against the SAME meter as the keyboard", () => {
+  beforeEach(() => {
+    caller = { id: "founder-1", email: "xdrabbit@gmail.com" };
+  });
+
+  it("counts a dictation against /fast's per-minute ceiling", async () => {
+    // Sixty of anything, then a refusal. The number is checkFastRate's, and
+    // this route reads the same buckets rather than a private copy.
+    const statuses: number[] = [];
+    for (let i = 0; i < 62; i += 1) statuses.push((await listen(dictation(), "t")).status);
+    expect(statuses.filter((s) => s === 200)).toHaveLength(60);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(2);
+  });
+
+  it("shares one budget with typing — speaking does not top it up", async () => {
+    // The bug this forbids: 60 typed quickies AND 60 spoken ones in the same
+    // minute, because each route counted only itself.
+    const { POST: translatePost } = await import("@/app/api/fast/route");
+    const type = (text: string) =>
+      translatePost(
+        new NextRequest("https://taoslite.com/api/fast", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer t" },
+          body: JSON.stringify({ text, sourceLanguage: "en", targetLanguage: "es" })
+        })
+      );
+
+    for (let i = 0; i < 30; i += 1) expect((await type(`q${i}`)).status).toBe(200);
+    for (let i = 0; i < 30; i += 1) expect((await listen(dictation(), "t")).status).toBe(200);
+    // Sixty served between them. The sixty-first is refused whichever door it
+    // comes through.
+    expect((await listen(dictation(), "t")).status).toBe(429);
+    expect((await type("one more")).status).toBe(429);
+  });
+
+  it("refuses before the upload is read, so a big one costs nothing", async () => {
+    for (let i = 0; i < 60; i += 1) await listen(dictation(), "t");
+    calls.length = 0;
+    const res = await listen(dictation({ bytes: 1_000_000 }), "t");
+    expect(res.status).toBe(429);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("what the route does with the audio", () => {
+  beforeEach(() => {
+    caller = { id: "founder-1", email: "xdrabbit@gmail.com" };
+  });
+
+  it("transcribes and STOPS — no paraphrase is bought and thrown away", async () => {
+    // The reason this route exists instead of a call to /api/translate. That
+    // one transcribes AND paraphrases; /fast would discard the paraphrase,
+    // having paid for it in the wrong register.
+    await listen(dictation(), "t");
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://api.openai.com/v1/audio/transcriptions"
+    ]);
+  });
+
+  it("asks for no language, because the box does not know which one is coming", async () => {
+    // Auto-detect, the same as the direction row says. A source hint here
+    // would make the mic disagree with the screen it is on.
+    await listen(dictation(), "t");
+    const form = calls[0].body as FormData;
+    expect(String(form.get("prompt"))).not.toContain("Spoken ");
+  });
+
+  it("carries the no-guess rule — a dropout is a gap, never an invented word", async () => {
+    // Liz, 7/27: a signal dip turned "montar bicicleta" into "montar un
+    // caballo". Sharing lib/translate/transcribe.ts is what gets this fence
+    // for free; a hand-rolled fourth copy of the fetch would not have it.
+    await listen(dictation(), "t");
+    expect(String((calls[0].body as FormData).get("prompt"))).toContain(STT_NO_GUESS_RULE);
+  });
+
+  it("adds the Cantonese hint when the pair could be Cantonese", async () => {
+    await listen(dictation({ pair: ["en", "yue"] }), "t");
+    expect(String((calls[0].body as FormData).get("prompt"))).toContain(CANTONESE_STT_HINT);
+  });
+
+  it("leaves the hint out when it cannot be", async () => {
+    await listen(dictation({ pair: ["en", "es"] }), "t");
+    expect(String((calls[0].body as FormData).get("prompt"))).not.toContain(CANTONESE_STT_HINT);
+    expect(dictationHintFor(["en", "es"])).toBeUndefined();
+  });
+
+  it("answers a silent recording with the retry line, not provider JSON", async () => {
+    transcript = "";
+    const res = await listen(dictation(), "t");
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("Nothing was heard");
+  });
+
+  it("refuses an oversized upload without paying to find out", async () => {
+    const res = await listen(dictation({ bytes: FAST_MAX_DICTATION_BYTES + 1 }), "t");
+    expect(res.status).toBe(413);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses an empty upload", async () => {
+    const form = new FormData();
+    form.append("audio", new File([], "quickie.webm", { type: "audio/webm" }));
+    expect((await listen(form, "t")).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("the fences on a spoken quickie", () => {
+  it("caps a dictation far below a spoken TURN — this is a phrase, not a story", () => {
+    // /api/translate's ceiling is five minutes because somebody there is
+    // telling a pharmacist what happened. Nobody speaks 500 characters (the
+    // /fast text cap) in thirty seconds, so this is generous for the screen
+    // and mean to a pocket-dialled mic.
+    expect(FAST_MAX_DICTATION_MS).toBe(30000);
+    expect(FAST_MAX_DICTATION_MS).toBeLessThan(300000);
+  });
+
+  it("throws away a fumbled tap before it leaves the phone", () => {
+    // Sub-second clips carry no usable speech and the shortest ones lack
+    // complete container headers, so the provider rejects them as corrupted.
+    // Same 600ms as TranslatorShell's MIN_TURN_DURATION_MS.
+    expect(FAST_MIN_DICTATION_MS).toBe(600);
+    expect(FAST_MIN_DICTATION_MS).toBeLessThan(FAST_MAX_DICTATION_MS);
+  });
+
+  it("sizes the byte cap above a full-length recording at the shell's bitrate", () => {
+    // 32 kbps for 30s is ~120 KB. The cap is an order of magnitude above that
+    // because FAST_MAX_DICTATION_MS is enforced in a browser, and a browser is
+    // not where a spend bound belongs.
+    const fullLengthBytes = (32000 / 8) * (FAST_MAX_DICTATION_MS / 1000);
+    expect(FAST_MAX_DICTATION_BYTES).toBeGreaterThan(fullLengthBytes * 8);
+  });
+});
+
+describe("transcript → input → translation, and what it bills", () => {
+  it("puts the words in the INPUT, not on screen as an answer", () => {
+    // The point of dictating into a text field rather than at a translator:
+    // the transcript is a draft you can fix. So the shell's dictation handler
+    // writes `input` and nothing else — it must not set `translation`, which
+    // would put an unedited mis-hearing on screen as a result.
+    //
+    // The handler lives in the parked dock now (lib/release.ts): the mic came
+    // off /fast on 8/31 and the whole streaming stack moved behind
+    // NEXT_PUBLIC_ENABLE_FAST_MIC. The rule is unchanged and still pinned,
+    // because the drawer it went into is meant to be reopenable.
+    const shell = routeSource("components/fast/FastMicDock.tsx");
+    const start = shell.indexOf("const receiveDictation");
+    const end = shell.indexOf("const candidates = useMemo");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const handler = shell.slice(start, end);
+    // It commits through the ONE path dictated words enter the box by — the
+    // same one the live mic's finalized segments use (commitDictated →
+    // appendDictated). What matters is unchanged: words go to the input, and
+    // nothing here writes the answer.
+    expect(handler).toContain("commitDictated(");
+    expect(handler).not.toContain("setTranslation(");
+    expect(shell).toMatch(/const commitDictated[\s\S]*?setInput\(/);
+  });
+
+  it("cannot bill at all — the mic only puts words in the box", () => {
+    // The allowance is a count of taos_lite_translations rows, and since #51
+    // the SERVER writes them, from POST /api/fast, off the gaps between
+    // requests (lib/fast/meter.ts). So the strong form of this test is
+    // available now and it is a flat negative: nothing on this path writes a
+    // row. Not the dictation handler, not the shell, not the listen route.
+    //
+    // That matters more here than it looks. A mic that billed on its own would
+    // charge for a transcript nobody had finished editing — and editing a
+    // mis-heard word is the entire reason the words land in a box instead of
+    // on screen.
+    const dock = routeSource("components/fast/FastMicDock.tsx");
+    expect(dock).not.toContain("saveTranslation");
+    expect(routeSource("components/FastShell.tsx")).not.toContain("saveTranslation");
+    expect(routeSource("app/api/fast/listen/route.ts")).not.toContain("saveTranslation");
+    // The transcript reaches the meter the only way it can: as text in the
+    // input, which the debounce then sends to the route like any keystroke.
+    expect(dock).toContain("commitDictated");
+  });
+
+  it("bills a spoken quickie exactly as it bills a typed one — once", () => {
+    // The unit is a BURST of previews over the input (lib/fast/meter.ts), and
+    // the input knows nothing about how its text arrived. That is the whole
+    // reason dictation needed no third clock: speak it, or type it, or speak
+    // it and then fix a word — it is the same box, and the same server rule
+    // decides what it costs.
+    //
+    // What is pinned HERE is only the negative that makes that true: nothing
+    // on the dictation path counts anything. The arithmetic itself belongs to
+    // the route and is walked there (tests/fast-metering.test.ts), because a
+    // second copy of the billing rule in a mic test is a second rule.
+    const shell = routeSource("components/FastShell.tsx");
+    expect(shell).not.toContain("saveTranslation");
+    expect(routeSource("components/fast/FastMicDock.tsx")).not.toContain("saveTranslation");
+    // `billedRef` survives only as prose explaining why it is gone, so the
+    // assertion is on the code shape rather than on the word.
+    expect(shell).not.toContain("billedRef.current");
+    expect(routeSource("app/api/fast/listen/route.ts")).not.toContain("saveTranslation");
+  });
+
+  it("appends to the box rather than replacing what is in it", () => {
+    // There is no undo on this screen. Somebody who typed half a phrase and
+    // then said the rest has not asked for the typed half to be thrown away.
+    //
+    // The rule itself now lives in lib/fast/liveTranscript.ts, because the
+    // live mic has to obey it too — one append rule, so a spoken quickie
+    // reads the same whether the words arrived one segment at a time or in
+    // one lump. tests/fast-live-dictation.test.ts exercises it on real
+    // strings; what this pins is that the batch handler still goes through it.
+    expect(appendDictated("where is", "the pharmacy", FAST_MAX_CHARS)).toBe(
+      "where is the pharmacy"
+    );
+    expect(appendDictated("a".repeat(495), "bbbbbbbbbb", FAST_MAX_CHARS)).toHaveLength(
+      FAST_MAX_CHARS
+    ); // and still respects the cap
+    const dock = routeSource("components/fast/FastMicDock.tsx");
+    expect(dock).toContain("appendDictated(current, heard, FAST_MAX_CHARS)");
+  });
+
+  it("sends the upload without a Content-Type of its own", () => {
+    // authHeaders, not jsonAuthHeaders: the browser must set its own multipart
+    // boundary, and a Content-Type set here corrupts the body (lib/authClient).
+    const shell = routeSource("components/fast/FastMicDock.tsx");
+    const start = shell.indexOf("const receiveDictation");
+    const handler = shell.slice(start, shell.indexOf("const candidates = useMemo"));
+    expect(handler).toContain("headers: await authHeaders()");
+    expect(handler).not.toContain("await jsonAuthHeaders()");
+    expect(handler).not.toContain('"Content-Type"');
+  });
+});
+
+describe("the transcriber is shared, not copied", () => {
+  it("is the one /api/translate uses", () => {
+    // The extraction that made this feature small. Both routes call the same
+    // function, so the STT fences cannot drift apart — and a fifth copy of the
+    // transcription fetch is a fifth chance to forget one.
+    expect(routeSource("app/api/translate/route.ts")).toContain(
+      'from "@/lib/translate/transcribe"'
+    );
+    expect(routeSource("app/api/fast/listen/route.ts")).toContain(
+      'from "@/lib/translate/transcribe"'
+    );
+    expect(routeSource("app/api/fast/listen/route.ts")).not.toContain(
+      "api.openai.com/v1/audio/transcriptions"
+    );
+  });
+
+  it("waits less on a phrase than /api/translate waits on a five-minute turn", async () => {
+    const { TRANSCRIBE_TIMEOUT_MS } = await import("@/lib/translate/transcribe");
+    const src = routeSource("app/api/fast/listen/route.ts");
+    const listenTimeout = Number(/LISTEN_TIMEOUT_MS = (\d+)/.exec(src)?.[1]);
+    expect(listenTimeout).toBeLessThan(TRANSCRIBE_TIMEOUT_MS);
+    // And still under this route's own maxDuration, or a stall reaches the
+    // phone as Safari's opaque "Load failed" instead of something retryable.
+    const maxDuration = Number(/maxDuration = (\d+)/.exec(src)?.[1]);
+    expect(listenTimeout).toBeLessThan(maxDuration * 1000);
+  });
+});

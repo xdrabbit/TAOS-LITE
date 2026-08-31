@@ -38,6 +38,70 @@ export const FAST_DEBOUNCE_MS = 300;
 export const FAST_SETTLE_MS = 1500;
 
 /**
+ * How long a question stays already-asked.
+ *
+ * Before the meter moved server-side, FastShell held a set of everything it
+ * had billed for the life of the visit, so deleting a word and putting it back
+ * — or clearing the box and retyping the same phrase — cost nothing more.
+ * That is a real promise about a screen people use standing up, a word at a
+ * time, and #49's Clear button was built on it.
+ *
+ * The burst rule alone loses it: two bursts of the same words are two bills.
+ * So `public.fast_begin` looks for a settled row this text is a meaningful
+ * prefix of, between these two languages, inside this window, and ADOPTS it
+ * instead of buying another.
+ *
+ * Thirty minutes, down from six hours. Six hours was never the promise being
+ * restored: what FastShell held was a set for the life of a VISIT, and a
+ * visit is somebody standing at a counter, not an afternoon. The window is
+ * how long a stale row stays reachable by a prefix somebody happens to type,
+ * so the shorter it is the smaller that surface — and thirty minutes still
+ * covers every retype anybody actually makes.
+ */
+export const FAST_REPEAT_MS = 30 * 60 * 1000;
+
+/**
+ * The floor under an adoptable prefix — the shortest text that may open an
+ * older row.
+ *
+ * Adoption HAS to match on a prefix: billing happens at the start of a burst,
+ * which is somebody's first few letters, so an exact-match rule would never
+ * fire while a phrase was being retyped. Unbounded, though, that makes every
+ * short opener a key to a stranger's row — "I" matched "I need a doctor",
+ * "the" matched anything at all. Four characters is the cheapest cut that
+ * removes the openers without touching a real quickie.
+ */
+export const FAST_REPEAT_MIN_CHARS = 4;
+
+/**
+ * How far through the stored phrase a prefix must reach to count as the same
+ * question, when it is not long enough to stand on its own.
+ *
+ * Sixty percent is what keeps the promise for SHORT quickies: retyping "how
+ * much" adopts at "how m" rather than being billed a second time. It is the
+ * proportional half of the rule; FAST_REPEAT_STRONG_CHARS is the absolute
+ * half, and either one is enough.
+ */
+export const FAST_REPEAT_MIN_RATIO = 0.6;
+
+/**
+ * The length at which a prefix means something on its own, whatever it is a
+ * prefix of.
+ *
+ * Twelve characters is two or three words. Below it the ratio above decides;
+ * at or above it, this much typing is not an accidental collision with
+ * somebody's older lookup.
+ *
+ * There is a third clause that lives only in SQL because it is about the
+ * shape of the text rather than a number: the prefix must span a word
+ * boundary or BE the whole stored phrase. That is what stops "where" from
+ * opening "where is the bank" while still letting the one-word quickie
+ * "where" be retyped for free. See public.fast_repeat_match in
+ * supabase/migrations/20260831_fast_history_guard.sql.
+ */
+export const FAST_REPEAT_STRONG_CHARS = 12;
+
+/**
  * The longest quickie /fast will translate.
  *
  * A cap on both engines, and it is not the same kind of cap on each: Azure
