@@ -253,7 +253,14 @@ export function FastShell(): JSX.Element {
       const form = new FormData();
       // A filename with an extension the container matches: the transcriber
       // sniffs it, and a webm blob called .bin comes back "unsupported".
-      const ext = mimeType.includes("mp4") || mimeType.includes("aac") ? "mp4" : "webm";
+      // Three containers reach here, not two — wav is the salvaged PCM from a
+      // streaming session whose socket went deaf (lib/fast/useLiveDictation.ts),
+      // which is the only path that hands up audio this hook recorded itself.
+      const ext = mimeType.includes("wav")
+        ? "wav"
+        : mimeType.includes("mp4") || mimeType.includes("aac")
+          ? "mp4"
+          : "webm";
       form.append("audio", new File([blob], `quickie.${ext}`, { type: mimeType }));
       // Only so the transcriber knows whether Cantonese is possible
       // (lib/fast/dictation.ts). It is NOT a source hint — the box does not

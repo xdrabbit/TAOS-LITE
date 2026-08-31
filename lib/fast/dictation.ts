@@ -77,3 +77,41 @@ export const AZURE_TOKEN_REFRESH_MS = 60 * 1000;
 export function dictationHintFor(pair: readonly LanguageCode[]): string | undefined {
   return pair.includes("yue") ? CANTONESE_STT_HINT : undefined;
 }
+
+/**
+ * How long a started stream may deliver NO audio before it is not a mic.
+ *
+ * The iPhone bug this fence was written for (lib/fast/micCapture.ts): a
+ * suspended AudioContext lets the recogniser start, the socket open and the
+ * button light up while zero PCM is ever produced. Azure, hearing digital
+ * silence on a continuous session, never emits a partial, a final OR a
+ * cancellation — so nothing throws and nothing falls back. The old mic waited
+ * forever. A running audio graph delivers its first chunk in a few tens of
+ * milliseconds, so a second and a half is enormous headroom for "it works" and
+ * still fast enough that the fallback feels like a slow mic rather than a
+ * broken one.
+ */
+export const MIC_SILENT_MS = 1500;
+
+/**
+ * How long to wait for the socket to open before taking the batch mic.
+ *
+ * `startContinuousRecognitionAsync` has no timeout of its own — on a tunnelled
+ * or captive network it can hang for as long as the TCP stack will let it,
+ * with the button lit the whole time. Three seconds is well past a healthy
+ * handshake (measured in the low hundreds of ms) and well short of somebody
+ * deciding the mic is broken.
+ */
+export const STREAM_CONNECT_MS = 3000;
+
+/**
+ * How much SPEECH may go unanswered before the socket is presumed deaf.
+ *
+ * Measured in voiced audio and not wall clock, deliberately: somebody who
+ * presses the mic and then thinks for four seconds has not found a bug, and
+ * dropping them into the slower mic for it would be a worse one. Only audio
+ * with speech-like energy in it advances this clock (lib/fast/micCapture.ts),
+ * so it means what it says — four seconds of actual talking, no hypothesis
+ * back, therefore nobody is listening.
+ */
+export const STREAM_DEAF_MS = 4000;

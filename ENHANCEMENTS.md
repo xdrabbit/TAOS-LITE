@@ -40,6 +40,13 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   phone, on cellular, that is a latency claim nobody has tested; it was
   measured on a laptop over wifi. Say a long sentence and watch whether the
   dimmed tail keeps up with your mouth or trails it. (added 2026-08-30)
+  That walk is now the one thing blocking the iPhone mic fix (PR #TBD,
+  2026-08-31): the mic was DEAD on iPhone and is believed fixed, but the bug
+  is invisible to every browser engine CI can reach, so only a phone can
+  confirm it. **`docs/fast-engine.md` ends with a two-minute checklist** —
+  Safari tab and installed PWA, six observations, three possible answers per
+  press (streaming / lumpy / dead). Run that before anything else in this
+  sitting. (added 2026-08-31)
 
 - The header slides sideways on every phone — measured 2026-08-30 while
   swapping the menu icon (PR #TBD): the signed-in header's content is 406 px
@@ -440,6 +447,70 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **/fast's mic was dead on iPhone — fixed, 2026-08-31** — PR #TBD. Tom's field
+  report: the mic "has trouble" on iPhone; desktop fine. It was not lumpy or
+  slow, it was **dead in the shape of a working mic** — button lit, timer
+  counting, socket to Azure genuinely open, and never a word.
+
+  → **Root cause: the AudioContext was built outside the tap.** The Speech SDK
+  opens the mic itself, and does it in the order `new AudioContext({sampleRate:
+  16000})` → `resume()` → `getUserMedia`, all from inside
+  `startContinuousRecognitionAsync` — which the hook only reached after
+  `await ensureWarm()` fetched a token. WebKit only starts an AudioContext
+  built inside a user gesture, and by then the tap was long over. **It does not
+  throw for this**: it resolves the promise and leaves the context stopped. The
+  recogniser started, the socket opened, the AudioWorklet never ran, and Azure
+  — hearing digital silence on a continuous session — sent back no partial, no
+  final and no cancellation. Nothing rejected, so the fallback never fired.
+
+  → **The hook owns the microphone now** (`lib/fast/micCapture.ts`). The
+  context is constructed, resumed and handed `getUserMedia` **synchronously in
+  the press handler**, with no `await` in front of any of them, and the PCM is
+  pushed to the recogniser through `AudioConfig.fromStreamInput`. The SDK never
+  touches the mic. The sample rate is deliberately not forced to 16 kHz — iOS
+  runs its capture session at the hardware rate, and a graph built at a rate
+  the session is not running at is a second, separate silence bug — so audio is
+  resampled on the way out using the same box average the SDK itself uses.
+
+  → **The fallback fired on one signal; now it fires on four.** The old one
+  waited for `beginStream` to throw, and this is the one platform that never
+  throws. Added: a 3 s connect timeout; a 1.5 s **zero-PCM** watchdog (the
+  iPhone signature — nothing was heard, so the whole press goes to the batch
+  mic and no word is lost); and a 4 s **voiced-audio-with-no-hypothesis**
+  watchdog, measured in speech rather than wall clock so that thinking for ten
+  seconds is not mistaken for a broken socket. That last one *salvages* instead
+  of restarting: the capture stays open and what it already holds is posted as
+  one WAV, because restarting into the batch mic would throw away exactly the
+  audio that diagnosed the problem.
+
+  → **One press opens one microphone.** A fallback hands its already-granted
+  stream down (`detachStream()` / `adopt`) rather than stopping every track and
+  asking the phone again — a close/reopen cycle in the same second is how iOS
+  gives you a stream that records silence, and the second ask would land
+  outside the gesture besides. The first draft got this wrong and
+  `tests/live-fire/fast-dictation-browser-check.mjs` caught it by counting
+  streams: 2, where the fence says 1.
+
+  → **The bug is invisible to every engine CI can reach**, which is why it
+  shipped. Chrome reports a fresh AudioContext as `running` at birth —
+  measured both with and without `--autoplay-policy=user-gesture-required`, and
+  with and without mic permission. Playwright's WebKit is a desktop build that
+  does not enforce the phone's audio-session rules and will not launch here
+  without root-installed system libraries. So the tests prove the two halves
+  that *are* reachable: `tests/fast-mic-capture.test.ts` drives the module
+  against a fake Web Audio that stays suspended the way WebKit does and pins
+  the call order, every counter and every `micVerdict` branch
+  (mutation-checked — reintroducing the await, forcing 16 kHz, or dropping the
+  dead-graph rule each turns a test red), and
+  `tests/live-fire/fast-mic-capture-browser-check.mjs` runs the shipped module
+  in real Chrome from a real click: 960 frames, 2.58 s of genuine 16 kHz mono
+  PCM, a valid WAV.
+
+  → **Still unconfirmed on the thing it was written for.** Nobody has held this
+  mic on an iPhone. `docs/fast-engine.md` ends with a two-minute checklist —
+  Safari tab and installed PWA, three possible answers per press — and that
+  walk is the only thing that can close this out.
 
 - **/fast grew a Clear button, 2026-08-31** — PR #49, folded into the mic
   branch. Tom's field ask: a quiet button directly above the mic that puts the

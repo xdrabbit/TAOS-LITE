@@ -441,3 +441,119 @@ One trap for whoever runs that rig next: Chrome's fake-microphone flag is
 misspelled Chrome flag is silently ignored, so the first run opened the
 machine's real microphone, got `NotReadableError`, and looked exactly like a
 broken mic button.
+
+### The iPhone, and the mic that looked alive
+
+**2026-08-31.** Tom's field report: the mic "has trouble" on iPhone. Desktop
+fine. The failure was the worst shape a mic can take — the button lit, the
+timer counted, the socket to Azure was genuinely open, and no word ever
+appeared. A dead mic wearing a working one's face.
+
+**Root cause: the AudioContext was built outside the tap.** The Speech SDK's
+`MicAudioSource.turnOn()` does three things in this order —
+`new AudioContext({ sampleRate: 16000 })`, then `resume()` if it is suspended,
+then `getUserMedia`. WebKit only lets an AudioContext start if it was
+constructed *inside* a user gesture, and only lets `resume()` start one if
+`resume()` is itself called inside one. The SDK does both from inside
+`startContinuousRecognitionAsync`, and the hook reached that only after
+`await ensureWarm()` — a token fetch. By then the tap's task was over.
+
+WebKit does not throw for this. It resolves the promise and leaves the context
+stopped. So:
+
+```
+  press → token fetched → recogniser starts → socket OPENS → button lights
+        → AudioWorklet never runs → zero PCM sent
+        → Azure hears digital silence on a continuous session
+        → no partial, no final, NO CANCELLATION
+        → nothing rejects → nothing falls back → dead until you leave the page
+```
+
+The old fallback fired on exactly one signal — `beginStream` threw — and this
+is the one platform that never throws.
+
+**The fix (`lib/fast/micCapture.ts`).** The hook owns the microphone now. The
+context is constructed, resumed, and handed `getUserMedia` **synchronously in
+the press handler**, with no `await` in front of any of them, and the PCM is
+pushed into the recogniser through `AudioConfig.fromStreamInput`. The SDK never
+touches the mic. Two details are load-bearing:
+
+- **No forced sample rate.** The SDK asks for a 16 kHz context; iOS runs its
+  capture session at the hardware rate and a graph built at a rate the session
+  is not running at is a second, separate silence bug. Take what the phone
+  gives and resample (the same box average the SDK's own `RiffPcmEncoder` uses,
+  so Azure hears what it always did).
+- **`openMicCapture` is not `async`.** The moment it becomes an async function
+  the three calls move behind a microtask and the bug returns invisibly. There
+  is a test that fails if it does.
+
+**Four ways streaming gives up, not one.** Three of them are watchdogs
+(`micVerdict`), because the failure that mattered never raised anything:
+
+| # | signal | fence | what happens |
+| --- | --- | --- | --- |
+| 1 | `beginStream` threw | — | batch mic, silently |
+| 2 | handshake still hanging | `STREAM_CONNECT_MS` 3 s | batch mic, silently |
+| 3 | **zero PCM delivered** | `MIC_SILENT_MS` 1.5 s | batch mic — the iPhone case; nothing was heard, so nothing is lost |
+| 4 | voiced audio, no hypothesis back | `STREAM_DEAF_MS` 4 s | **salvage**: keep the capture, post what it already holds as one WAV |
+
+Row 4 is measured in *voiced* audio and not wall clock, so somebody who presses
+the mic and then thinks for ten seconds is not read as a broken socket. And it
+salvages rather than restarts, because restarting into the batch mic would
+throw away exactly the four seconds that diagnosed the problem.
+
+One press opens **one** microphone however many recognisers it passes through:
+a fallback hands its already-granted stream down via `detachStream()` /
+`adopt`, rather than stopping every track and asking the phone again. The
+browser rig counts the streams, and caught that regression when it was written
+the other way.
+
+**What no engine here could prove.** Chrome reports a fresh `AudioContext` as
+`running` at birth — measured both with and without
+`--autoplay-policy=user-gesture-required`, and with and without microphone
+permission. Firefox has no gesture rule for the capture graph either.
+Playwright's WebKit is a desktop build that does not enforce the phone's
+audio-session rules, and on this machine will not launch without root-installed
+system libraries. **This bug is invisible to every engine CI can reach**, which
+is exactly why it shipped. What *is* proven automatically:
+
+- `tests/fast-mic-capture.test.ts` — the three calls and their order, against a
+  fake Web Audio that stays suspended the way WebKit does; every counter and
+  every `micVerdict` branch. Mutation-checked: reintroducing the await, forcing
+  16 kHz, or dropping the dead-graph rule each turns a test red.
+- `tests/live-fire/fast-mic-capture-browser-check.mjs` — the shipped module in
+  real Chrome, opened from a real click: 960 frames, 2.58 s of genuine 16 kHz
+  mono PCM, a valid WAV.
+
+### The two-minute phone check — for Tom
+
+Run it **twice**: once in a **Safari tab**, once in the **installed PWA**
+(Share → Add to Home Screen, then open from the icon). Permission and capture
+behave differently in standalone, and that is the pair that has never been
+compared.
+
+1. Open `/fast`. Leave the pills on **Auto**, English ↔ Spanish.
+2. **Hold** the mic and say, slowly: *"where is the pharmacy"*. Keep holding
+   for a beat after you finish, then let go.
+
+   Watch the box **while you are still talking**, and score it:
+
+   | | what you see | verdict |
+   | --- | --- | --- |
+   | ✅ | dim words appear mid-sentence and firm up as you go | **streaming** — fixed |
+   | ⚠️ | nothing until you let go, then the whole phrase lands ~1–3 s later | **lumpy** — the fallback did its job; say which |
+   | ❌ | nothing lands, ever, button stays lit | **dead** — not fixed; say so |
+
+   The first press of the visit includes the permission prompt, so judge on the
+   **second** press.
+3. **Tap** the mic instead of holding it. The banner must read *"Listening —
+   tap to stop"* and it must keep listening with your finger off the glass.
+   Say something, tap again, check the words land.
+4. Fix one word in the box by typing. The translation underneath should follow.
+5. Only if you saw ⚠️ or ❌: note **which context** (tab or PWA), whether the
+   first press differed from the second, and whether it was on **wifi or
+   cellular**.
+
+That is the whole run. What matters most is step 2's three-way answer in each
+of the two contexts — six observations, and the difference between "the fix
+landed", "it fell back safely" and "it is still broken".
