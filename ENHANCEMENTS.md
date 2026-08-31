@@ -31,6 +31,10 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   bug? Nobody has typed into it on a phone yet — it was verified against the
   real route and in headless Chrome, which is the same gap the Crawl scoring
   had. Answer that before `NEXT_PUBLIC_ENABLE_FAST=1`. (added 2026-08-30)
+  The same sitting now has a third thing in it: the mic shipped on 8/30 (PR
+  #TBD) and has been walked only in headless Chrome with a fake microphone.
+  Hold it, say a quickie, and see whether the transcript that lands in the box
+  is one you would rather fix than retype. (added 2026-08-30)
 
 - The header slides sideways on every phone — measured 2026-08-30 while
   swapping the menu icon (PR #TBD): the signed-in header's content is 406 px
@@ -431,6 +435,38 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **/fast grew a mic, 2026-08-30** — PR #TBD. The keyboard is still the way in;
+  the mic is the sausage-finger lane onto the same box. Hold it or tap it, and
+  the words land **in the input** as editable text rather than on screen as an
+  answer — which is the whole difference between this and the home screen.
+  There, speaking *is* the turn and a mis-heard word is a mis-heard turn. Here
+  it is a draft, and fixing it costs a keystroke.
+  → **No third clock.** The transcript is written into the input exactly as if
+  it had been typed, and the two clocks that were already there take it from
+  the top: 300 ms later it is translated, 1500 ms after that it counts. One
+  spoken quickie bills one row, the same as one typed one; fixing a mis-heard
+  word bills a second, which is honest — it is a different phrase, and the one
+  the person actually meant.
+  → **The mic spends against the same meter as the keyboard.** `POST
+  /api/fast/listen` shares `/api/fast`'s founder gate *and* its
+  `checkFastRate` buckets, so 60/min is 60 of anything rather than 60 of each.
+  A mic with its own counter would have been a second way to spend on /fast
+  that the /fast ceiling could not see — and it is the pricier of the two
+  calls.
+  → **It transcribes and stops.** Reaching for `/api/translate` instead would
+  have bought a `gpt-4.1` paraphrase per dictation, in the house register
+  /fast deliberately does not use, only to throw it away. Instead that route's
+  transcriber was lifted out unchanged into `lib/translate/transcribe.ts` and
+  both now call it — which is how the mic inherited the 7/27 no-guess fence
+  and the Cantonese hint rather than shipping a fourth copy of the fetch
+  without them.
+  → Walked in a real browser with a real `MediaRecorder` and a fake microphone
+  (`tests/live-fire/fast-dictation-browser-check.mjs`): held 1.5 s → 1 upload →
+  transcript in the box → 1 billed row → every audio track ended afterwards;
+  then a tap latches and the next tap stops it. The Chrome flag is
+  `--use-fake-device-for-media-stream`, and getting it wrong opens the real
+  microphone and looks exactly like a broken button.
 
 - **/fast — the Google-quickie box, 2026-08-30** — PR #46. Tom's ask: a
   single input where the translation "renders as you type", plain and

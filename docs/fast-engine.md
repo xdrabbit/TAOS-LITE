@@ -214,3 +214,68 @@ The free monthly allowance is a **count of `taos_lite_translations` rows**
 when a spoken turn finishes. `/fast` writes one per *settled* input, so it
 meters into the normal allowance rather than growing a private counter that
 would have to be reconciled later. It is the History entry too.
+
+## The mic
+
+`/fast` is a typing screen with a mic on it, and that ordering is the design.
+Dictating does not produce a *translation* — it produces **text in the input
+box**, which the two clocks above then translate and bill exactly as if it had
+been typed. That is what makes it a quickie rather than a spoken turn: the
+transcript is a draft you can fix before it means anything, and a mis-heard
+word costs a keystroke instead of a lookup.
+
+`POST /api/fast/listen` — audio in, transcript out, and nothing else.
+
+| | |
+| --- | --- |
+| gate | `fastVisibleTo()`, same 404-not-403 as `POST /api/fast` |
+| meter | the **same** `checkFastRate` buckets as typing — 60/min, 600/hr |
+| allowance | none of its own; the row is still written when the input settles |
+| max recording | 30 s (client), 2 MB (server) |
+| min recording | 600 ms — below that it is a fumbled tap, dropped before upload |
+| upstream timeout | 45 s, under the route's 60 s `maxDuration` |
+
+Three deliberate choices worth keeping:
+
+**It is not a call to `/api/translate`.** That route transcribes *and*
+paraphrases, and `/fast` would throw the paraphrase away: it wants the words in
+a box, and the translation then comes from the literal engine above rather than
+the house voice. Calling it would have bought a `gpt-4.1` completion per
+dictation, in the wrong register, to discard it.
+
+**The transcriber is shared, not copied.** `lib/translate/transcribe.ts` is
+`/api/translate`'s transcriber lifted out unchanged, and both routes call it.
+Its fences are not incidental — `STT_NO_GUESS_RULE` (Liz, 7/27: a signal dip
+turned *montar bicicleta* into *montar un caballo*), the Cantonese
+colloquial-written-form hint, and the "no usable speech" path that makes a
+rapid double-tap a gentle retry instead of raw provider JSON. A fourth
+hand-rolled copy of that fetch would have shipped with none of them.
+
+**The rate buckets are shared on purpose.** A mic with its own counter is a
+second way to spend on `/fast` that the `/fast` ceiling cannot see, and it is
+the *pricier* of the two calls. Speaking is metered against the same minute as
+typing.
+
+Walked in a real browser with a real `MediaRecorder`
+(`tests/live-fire/fast-dictation-browser-check.mjs`, 2026-08-30):
+
+```
+  held the mic 1.5s
+  upload(s) to /api/fast/listen  1
+  transcript landed in the box   "where is the pharmacy"
+  translation on screen          "dónde está la farmacia"
+  billed rows                    1
+  every track ended afterwards   true
+
+  then " open" typed onto the transcript:
+  billed rows (cumulative)       2     <- an edit is a second, honest lookup
+
+  then a TAP instead of a hold:
+  still listening after release  true  <- latched; the next tap ends it
+```
+
+One trap for whoever runs that rig next: Chrome's fake-microphone flag is
+`--use-fake-device-for-media-**stream**`, not `-for-media-capture`. A
+misspelled Chrome flag is silently ignored, so the first run opened the
+machine's real microphone, got `NotReadableError`, and looked exactly like a
+broken mic button.
