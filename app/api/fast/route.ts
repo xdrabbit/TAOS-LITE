@@ -169,6 +169,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await recordFastQuickie({
       user: caller,
       rowId: begun.rowId,
+      repeat: begun.repeat,
       sourceLanguage: result.detectedSource,
       targetLanguage: result.targetLanguage,
       text,

@@ -100,6 +100,25 @@ async function settleQuickie(text: string): Promise<void> {
   db.now += FAST_SETTLE_MS + 1;
 }
 
+/** One preview and then a pause — somebody who started retyping and stopped. */
+async function previewOnce(text: string): Promise<void> {
+  const { POST } = await import("@/app/api/fast/route");
+  db.now += 320;
+  await POST(
+    new NextRequest("https://taoslite.com/api/fast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer t" },
+      body: JSON.stringify({
+        text,
+        sourceLanguage: "en",
+        targetLanguage: "es",
+        direction: "auto"
+      })
+    })
+  );
+  db.now += FAST_SETTLE_MS + 1;
+}
+
 /** Tapping Clear does nothing to the server; it just ends the sitting. */
 function clearTheBox(): void {
   db.now += FAST_SETTLE_MS + 1;
@@ -281,6 +300,26 @@ describe("clear is a screen gesture, not a payment", () => {
     clearTheBox();
     await settleQuickie("how much is this");
     expect(db.monthRows(USER)).toHaveLength(2);
+  });
+
+  it("does not overwrite the answer it just saved somebody from re-buying", async () => {
+    // The trap in adopting a row instead of buying one: the route still has a
+    // translation in hand, and recording it writes over the finished phrase
+    // the earlier lookup paid for. It shows up when the retype is PARTIAL —
+    // start typing the phrase again, then stop — because then the prefix is
+    // the last thing written. The History entry would quietly become
+    // "where is the", with a translation of that fragment attached, which is
+    // worse than the double charge the repeat window exists to prevent.
+    await settleQuickie("where is the pharmacy");
+    expect(db.rows).toHaveLength(1);
+    const before = { ...db.rows[0] };
+
+    clearTheBox();
+    await previewOnce("where is the");
+
+    expect(db.rows).toHaveLength(1); // still not re-bought
+    expect(db.rows[0].original_text).toBe("where is the pharmacy");
+    expect(db.rows[0].translation_text).toBe(before.translation_text);
   });
 
   it("bills a phrase again once it is no longer the same sitting", async () => {
