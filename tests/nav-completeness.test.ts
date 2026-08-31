@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 
 /** Nav surfaces: everything a person can tap without typing a URL. */
 const SURFACES = {
-  /** The signed-in home screen — header pills, Together menu, account menu. */
+  /** The signed-in home screen — pill row, launcher grid, avatar menu. */
   app: "components/TranslatorShell.tsx",
   /** The logged-out storefront, which is what a QR code opens. */
   landing: "components/Landing.tsx",
@@ -110,6 +110,44 @@ function withGuardsOff(source: string, guards: string[]): string {
   return out;
 }
 
+/**
+ * The three tiers of the signed-in header, sliced apart.
+ *
+ * The nav restructure made "is it linked from the app surface?" too coarse a
+ * question: the same screen is deliberately in two places now, and one of the
+ * two tiers holds nothing but account items. What matters per screen is WHICH
+ * tier it landed in — /vision spent months in a menu labelled "More" mixed in
+ * among Sign out, which is how the guide came to tell readers that the photo
+ * translator lives in "the account menu".
+ *
+ * Sliced by landmark rather than by brace-matching: the launcher menu opens
+ * first in the source, the account menu second, and the pill row is <nav>.
+ * `role="menuitem"` does not match `role="menu"` — the closing quote is what
+ * keeps those apart.
+ */
+function tiers(guardsOff: boolean): { grid: string; avatar: string; pills: string } {
+  let source = code(SURFACES.app);
+  if (guardsOff) source = withGuardsOff(source, Object.values(GATED));
+  const h = source.slice(source.indexOf("<header"), source.indexOf("</header>"));
+  const first = h.indexOf('role="menu"');
+  const second = h.indexOf('role="menu"', first + 1);
+  const nav = h.indexOf("<nav");
+  expect(first, "no launcher menu in the header").toBeGreaterThan(-1);
+  expect(second, "no account menu in the header").toBeGreaterThan(first);
+  expect(nav, "no pill row in the header").toBeGreaterThan(second);
+  return {
+    grid: h.slice(first, second),
+    avatar: h.slice(second, nav),
+    pills: h.slice(nav, h.indexOf("</nav>", nav))
+  };
+}
+
+function hrefs(region: string): Set<string> {
+  const found = new Set<string>();
+  for (const m of region.matchAll(/href="\/([a-z-]*)"/g)) found.add(m[1]);
+  return found;
+}
+
 /** Route segments under app/, minus the API surface. */
 function appRoutes(): string[] {
   return readdirSync(new URL("../app", import.meta.url), { withFileTypes: true })
@@ -189,4 +227,97 @@ describe("gated screens stay off the nav", () => {
       expect(links("app", false)).toContain(screen);
     });
   }
+});
+
+// ── The three tiers ────────────────────────────────────────────────────────
+// Pills are the daily verbs. The launcher is the whole catalog. The avatar is
+// identity. A screen may be in both of the first two — that redundancy is the
+// point of the restructure and is asserted here rather than merely tolerated —
+// but nothing about the ACCOUNT belongs in either of them, and no screen
+// belongs in the avatar menu.
+describe("the nav is three tiers, and each holds its own kind of thing", () => {
+  /** Daily verbs. Ungated ones — Call is a founder's fifth pill, below. */
+  const PILLS = ["translate", "live", "tabletop", "chat"];
+  /** Every surface, gates aside. "" is the home screen, href="/". */
+  const GRID = ["", "translate", "live", "tabletop", "chat", "vision"];
+  /** Identity, and the two reading screens that go with it. */
+  const AVATAR = ["guide", "about"];
+
+  for (const screen of PILLS) {
+    it(`/${screen} is one touch from the pill row`, () => {
+      expect(hrefs(tiers(true).pills)).toContain(screen);
+    });
+  }
+
+  for (const screen of GRID) {
+    it(`/${screen} is in the launcher grid`, () => {
+      // Including "" — the screen you are standing on. A launcher that omits
+      // the current app has a hole in it exactly where a stranger looks first.
+      expect(hrefs(tiers(true).grid)).toContain(screen);
+    });
+  }
+
+  it("puts every daily verb in BOTH tiers, on purpose", () => {
+    // Stated as its own case because the previous fence said the opposite —
+    // "one entry per screen" — and someone reading only the diff would take
+    // this for the duplication that rule was guarding against. It is not: the
+    // pills answer "take me there" and the grid answers "what can this app
+    // do?", and those are different questions from different people.
+    const t = tiers(true);
+    for (const screen of PILLS) {
+      expect(hrefs(t.pills)).toContain(screen);
+      expect(hrefs(t.grid)).toContain(screen);
+    }
+  });
+
+  it("keeps the account menu free of screens, and the screens free of account items", () => {
+    const t = tiers(true);
+    for (const screen of AVATAR) expect(hrefs(t.avatar)).toContain(screen);
+    // No screen in the avatar menu...
+    for (const screen of [...GRID, ...Object.keys(GATED)]) {
+      if (screen === "") continue;
+      expect(hrefs(t.avatar)).not.toContain(screen);
+    }
+    // ...and no account item in either nav tier.
+    for (const account of AVATAR) {
+      expect(hrefs(t.pills)).not.toContain(account);
+      expect(hrefs(t.grid)).not.toContain(account);
+    }
+    // Sign out and History are buttons, not hrefs — assert them by label.
+    expect(t.avatar).toContain("Sign out · Salir");
+    expect(t.avatar).toContain("History · Historial");
+    expect(t.pills).not.toContain("Sign out");
+    expect(t.grid).not.toContain("Sign out");
+  });
+
+  it("shows a stranger no gated screen in any tier", () => {
+    const t = tiers(true);
+    for (const screen of Object.keys(GATED)) {
+      expect(hrefs(t.grid)).not.toContain(screen);
+      expect(hrefs(t.pills)).not.toContain(screen);
+      expect(hrefs(t.avatar)).not.toContain(screen);
+    }
+  });
+
+  it("brings every gated screen back into the launcher when its guard is on", () => {
+    // The other half: a gated entry must still EXIST behind its guard, or the
+    // flag does nothing. Call additionally returns as a pill — Tom and Liz use
+    // it daily and it was two touches deep until 8/31.
+    const t = tiers(false);
+    for (const screen of Object.keys(GATED)) {
+      expect(hrefs(t.grid)).toContain(screen);
+    }
+    expect(hrefs(t.pills)).toContain("call");
+  });
+
+  it("has no disclosure left anywhere in the pill row", () => {
+    // "Together ▾" held /chat and /tabletop behind a touch. Both are pills now,
+    // and this is the assertion that stops a fourth screen quietly collapsing
+    // back into a menu the next time the row feels crowded — which is exactly
+    // how Together ▾ was born on 8/19.
+    const pills = tiers(true).pills;
+    expect(pills).not.toContain("▾");
+    expect(pills).not.toContain('role="menu"');
+    expect(pills).not.toContain("aria-haspopup");
+  });
 });

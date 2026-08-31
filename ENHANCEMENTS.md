@@ -61,6 +61,14 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   where a public Call belongs, beside Chat and Table. Do it in the same change
   that sets `NEXT_PUBLIC_ENABLE_CALL=1` — the pill and the menu entry are both
   guarded by `callVisible`, so it is a move, not a rewrite. (added 2026-08-31)
+  **Superseded 2026-08-31 by the nav IA restructure (PR #55).** Together ▾ no
+  longer exists — two items behind a disclosure did not earn one, and it only
+  existed to fix a width in the first place. Call is a pill AND a launcher
+  tile, both behind `callVisible`, and the question this entry asked ("is a
+  fifth pill worth a phone width for a screen most customers will not open
+  daily?") is now answered by dropping the PILL and keeping the TILE, which is
+  still one extra touch rather than a screen with no entry at all. Same
+  one-line change, same guard, one fewer place to put it. (2026-08-31)
 
 - Chat delete, one real tap — the hygiene pass (PR #37) shipped
   "either partner can burn the chat" and proved the semantics against the
@@ -519,6 +527,83 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **The nav is three tiers now: verbs, catalog, identity, 2026-08-31** —
+  PR #55. Liz has been handing the app to strangers, and the header was three
+  different kinds of thing in two menus: a pill row that mixed screens with a
+  "Together ▾" disclosure holding two more, and a nine-dot menu holding FOUR
+  screens plus History, the guide, About and Sign out. Which menu a screen
+  lived in was an accident of the order it shipped in — which is how /guide
+  came to tell readers, correctly, that the PHOTO TRANSLATOR lives in "the
+  account menu".
+
+  | | before | after |
+  |---|---|---|
+  | Pills | Live · Call · Together ▾ · Translate | **Translate · Live · Table · Chat · Call** |
+  | Dropdowns in the pill row | one (Together ▾) | **none** |
+  | Touches to /chat, /tabletop | 2 | **1** |
+  | Nine-dot menu | 4 screens + 4 account items | **10 screens, as a 2-col icon grid** |
+  | Account items | mixed in with screens | **their own avatar menu** |
+  | Header height @390 / @320 | 96px / 148px | 96px / 148px (unchanged) |
+
+  1. **Pills are the daily verbs, and nothing else.** Translate leads — it is
+     the screen a stranger can be handed with no instructions at all, where
+     every other pill needs a sentence first. Together ▾ is gone entirely: it
+     was created on 8/19 to fix a WIDTH, not because two items earned a menu,
+     and the row wraps now. /chat and /tabletop cost one touch instead of two.
+  2. **The nine dots became a real app launcher.** Every surface TAOS has, as
+     a 2-column icon grid with bilingual labels — including the screen you are
+     standing on, because a launcher with a hole where the current app should
+     be makes you doubt the rest of it. Deliberately redundant with the pills:
+     the pills answer "take me there", the grid answers "what can this app
+     do?", and those are different questions from different people.
+  3. **A new avatar chip holds identity.** Email header, History, How to use,
+     About, Sign out. The initial is back and ONLY here — #45 took it off the
+     LAUNCHER because a disclosure drawn from the account renders as an X on
+     any `x@` address and strangers read it as "remove". That reasoning is
+     about a disclosure wearing a dismissal glyph; being a function of whose
+     phone it is, is what an avatar is FOR. It is a solid amber disc rather
+     than a hollow ring, so it reads as "you" beside two obvious controls, and
+     it never swaps to an X (it takes a ring instead).
+
+  No new menu physics. The geometry from #53/#54 is reused unchanged and is
+  still load-bearing: two deliberate rows, `flex-wrap`, both menus anchored to
+  the HEADER rather than to their own trigger, 44px floors. The row carries
+  five pills and three icon buttons where it carried four and two, and it
+  still cannot push anything off the glass.
+
+  Verification — `tests/live-fire/menu-tap-browser-check.mjs`, rewritten for
+  three tiers and re-run at 390/360/320px, founder and customer, real touch
+  events, `mobile: true`: **ALL CHECKS PASSED**. It measures one touch to each
+  of the five pills, two touches to any launcher tile and any account item,
+  every control ≥44×44 at every width (smallest: the Call pill at 46.7×44,
+  every launcher tile 123×79.5), `scrollWidth` never exceeding the layout
+  width, and — new — that an OPEN launcher does not cover the pill row, which
+  is the trap this header fell into the first time it was split in two.
+
+  Three things the rig found that source-reading could not:
+  - Both triggers relabel to "Close menu · Cerrar menú" while open, which is
+    right for a screen reader and silently broke a selector that matched them
+    by label. The rig picks them by position now.
+  - A CSS grid sizes each ROW to its own tallest tile, so the tiles came out
+    65.8px and 79.5px in the same grid. `auto-rows-fr` fixes it; two tile
+    sizes is what stops a grid of icons reading as a grid.
+  - `tutorEnabled()` has no founder bypass, unlike the other three gates — it
+    is on for everyone or off for everyone. The rig now asserts that as
+    all-or-nothing rather than assuming Tutor is founders-only.
+
+  Fences: `tests/nav-completeness.test.ts` gained a whole tier layer — it
+  slices the header into launcher / avatar / pills and asserts per screen
+  which tier it landed in, that every daily verb is in BOTH (stated as its own
+  case, since the previous fence said the opposite), that no screen is in the
+  avatar menu and no account item is in either nav tier, and that the pill row
+  contains no `role="menu"`, no `aria-haspopup` and no "▾". `nav-tap-targets`
+  and `nav-menu-trigger` were updated in the same PR for the renames and the
+  three-way split. `lib/guide.ts` was wrong the moment Together ▾ went away —
+  `tests/guide-page.test.ts` caught it, which is that fence working — so the
+  guide now names the launcher and no longer tells anyone to look for "the
+  round button with your initial in it", which had already been false since
+  #45.
 
 - **The header that ate touches, 2026-08-31** — PR #53. Tom, on the Droid:
   reaching Call through Together ▾ took two or three touches, reliably. The
