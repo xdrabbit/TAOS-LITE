@@ -61,14 +61,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   where a public Call belongs, beside Chat and Table. Do it in the same change
   that sets `NEXT_PUBLIC_ENABLE_CALL=1` — the pill and the menu entry are both
   guarded by `callVisible`, so it is a move, not a rewrite. (added 2026-08-31)
-  **Superseded 2026-08-31 by the nav IA restructure (PR #55).** Together ▾ no
-  longer exists — two items behind a disclosure did not earn one, and it only
-  existed to fix a width in the first place. Call is a pill AND a launcher
-  tile, both behind `callVisible`, and the question this entry asked ("is a
-  fifth pill worth a phone width for a screen most customers will not open
-  daily?") is now answered by dropping the PILL and keeping the TILE, which is
-  still one extra touch rather than a screen with no entry at all. Same
-  one-line change, same guard, one fewer place to put it. (2026-08-31)
 
 - Chat delete, one real tap — the hygiene pass (PR #37) shipped
   "either partner can burn the chat" and proved the semantics against the
@@ -528,82 +520,69 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **The nav is three tiers now: verbs, catalog, identity, 2026-08-31** —
-  PR #55. Liz has been handing the app to strangers, and the header was three
-  different kinds of thing in two menus: a pill row that mixed screens with a
-  "Together ▾" disclosure holding two more, and a nine-dot menu holding FOUR
-  screens plus History, the guide, About and Sign out. Which menu a screen
-  lived in was an accident of the order it shipped in — which is how /guide
-  came to tell readers, correctly, that the PHOTO TRANSLATOR lives in "the
-  account menu".
-
-  | | before | after |
-  |---|---|---|
-  | Pills | Live · Call · Together ▾ · Translate | **Translate · Live · Table · Chat · Call** |
-  | Dropdowns in the pill row | one (Together ▾) | **none** |
-  | Touches to /chat, /tabletop | 2 | **1** |
-  | Nine-dot menu | 4 screens + 4 account items | **10 screens, as a 2-col icon grid** |
-  | Account items | mixed in with screens | **their own avatar menu** |
-  | Header height @390 / @320 | 96px / 148px | 96px / 148px (unchanged) |
-
-  1. **Pills are the daily verbs, and nothing else.** Translate leads — it is
-     the screen a stranger can be handed with no instructions at all, where
-     every other pill needs a sentence first. Together ▾ is gone entirely: it
-     was created on 8/19 to fix a WIDTH, not because two items earned a menu,
-     and the row wraps now. /chat and /tabletop cost one touch instead of two.
-  2. **The nine dots became a real app launcher.** Every surface TAOS has, as
-     a 2-column icon grid with bilingual labels — including the screen you are
-     standing on, because a launcher with a hole where the current app should
-     be makes you doubt the rest of it. Deliberately redundant with the pills:
-     the pills answer "take me there", the grid answers "what can this app
-     do?", and those are different questions from different people.
-  3. **A new avatar chip holds identity.** Email header, History, How to use,
-     About, Sign out. The initial is back and ONLY here — #45 took it off the
-     LAUNCHER because a disclosure drawn from the account renders as an X on
-     any `x@` address and strangers read it as "remove". That reasoning is
-     about a disclosure wearing a dismissal glyph; being a function of whose
-     phone it is, is what an avatar is FOR. It is a solid amber disc rather
-     than a hollow ring, so it reads as "you" beside two obvious controls, and
-     it never swaps to an X (it takes a ring instead).
-
-  No new menu physics. The geometry from #53/#54 is reused unchanged and is
-  still load-bearing: two deliberate rows, `flex-wrap`, both menus anchored to
-  the HEADER rather than to their own trigger, 44px floors. The row carries
-  five pills and three icon buttons where it carried four and two, and it
-  still cannot push anything off the glass.
-
-  Verification — `tests/live-fire/menu-tap-browser-check.mjs`, rewritten for
-  three tiers and re-run at 390/360/320px, founder and customer, real touch
-  events, `mobile: true`: **ALL CHECKS PASSED**. It measures one touch to each
-  of the five pills, two touches to any launcher tile and any account item,
-  every control ≥44×44 at every width (smallest: the Call pill at 46.7×44,
-  every launcher tile 123×79.5), `scrollWidth` never exceeding the layout
-  width, and — new — that an OPEN launcher does not cover the pill row, which
-  is the trap this header fell into the first time it was split in two.
-
-  Three things the rig found that source-reading could not:
-  - Both triggers relabel to "Close menu · Cerrar menú" while open, which is
-    right for a screen reader and silently broke a selector that matched them
-    by label. The rig picks them by position now.
-  - A CSS grid sizes each ROW to its own tallest tile, so the tiles came out
-    65.8px and 79.5px in the same grid. `auto-rows-fr` fixes it; two tile
-    sizes is what stops a grid of icons reading as a grid.
-  - `tutorEnabled()` has no founder bypass, unlike the other three gates — it
-    is on for everyone or off for everyone. The rig now asserts that as
-    all-or-nothing rather than assuming Tutor is founders-only.
-
-  Fences: `tests/nav-completeness.test.ts` gained a whole tier layer — it
-  slices the header into launcher / avatar / pills and asserts per screen
-  which tier it landed in, that every daily verb is in BOTH (stated as its own
-  case, since the previous fence said the opposite), that no screen is in the
-  avatar menu and no account item is in either nav tier, and that the pill row
-  contains no `role="menu"`, no `aria-haspopup` and no "▾". `nav-tap-targets`
-  and `nav-menu-trigger` were updated in the same PR for the renames and the
-  three-way split. `lib/guide.ts` was wrong the moment Together ▾ went away —
-  `tests/guide-page.test.ts` caught it, which is that fence working — so the
-  guide now names the launcher and no longer tells anyone to look for "the
-  round button with your initial in it", which had already been false since
-  #45.
+- **The relay tells you it works before you dial, 2026-08-31** — PR #TBD.
+  Tom entered `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` in
+  Vercel and redeployed, and then nobody could find out whether they took.
+  Every test of the relay since PR #52 has been the same procedure: two
+  founders, two phones, two rooms, dial and see — and it had never once been
+  observed connecting. A call is a terrible instrument. It answers five
+  questions at once (keys, allocation, NAT, signaling, media) with one word,
+  and PR #52 shipped exactly one bit of state to describe all of it:
+  `relay: true | false`. False meant "no keys", "wrong keys" and "Cloudflare
+  is down" indistinguishably, and the three want three different responses.
+  → **The lobby now says, before anyone taps Join.**
+  1. **Four words instead of one bit.** `not_configured` / `ready` /
+     `rejected` / `error`, minted for real on the server —
+     `POST /api/call/relay-status`, founders-only, same gate and same order
+     as `/api/call/ice`. `rejected` is the one that earns the route: it means
+     the keys are present and WRONG, which is a two-minute fix in Vercel that
+     nobody could previously know to make. The credential it mints is thrown
+     away; the response carries no ICE server, no username and no secret, so
+     it is safe to run on every lobby render. The mint itself moved to
+     `lib/call/turnMint.ts` so both routes ask Cloudflare the same question
+     and cannot drift.
+  2. **"Test connection · Probar conexión".** One tap, ~300 ms:
+     `lib/call/relayProbe.ts` is `tests/live-fire/call-relay-check.mjs` with
+     the terminal removed — two peer connections under
+     `iceTransportPolicy: "relay"`, which forbids them the loopback they
+     would otherwise take, so a connection that comes up came up through
+     Cloudflare on this phone's real network. It uses a data channel, never
+     the microphone: a preflight tapped idly in a lobby must not prompt, and
+     on iOS a `getUserMedia` here would burn the gesture the real Join needs.
+     **Minting and allocating are different questions** — a credential
+     Cloudflare happily mints can still be refused by the TURN server, which
+     no server-side check can see and which looks like "connecting…" forever
+     on a phone. That is what the button is for.
+  3. **One-way audio is a number now.** The other half of the 8/31 field
+     report: Liz on 5G behind CGNAT, connected, heard, hearing nothing. Every
+     word on the screen was true — `connected`, `relay`, a real candidate
+     pair — because /call had no word for "connected, and half of it works".
+     Connection details now polls `getStats` every 2 s and prints the two
+     directions APART: `audio sending ✓ 1480 pkt · 49/s · receiving ✗ 0 pkt
+     · 0/s`. A single "is audio flowing" boolean is TRUE on the sending side
+     of a one-way call, which is why both phones would have shown green.
+  → **Measured against the real thing, twice.** The Cloudflare keys mint
+  (HTTP 201). `tests/live-fire/call-relay-check.mjs` — the run PR #52 could
+  not do, because the key did not exist yet — connected two headless peers
+  through real Cloudflare in **207 ms** on a relay/relay pair, 6 relay
+  candidates, zero host or srflx. And the SHIPPED `probeRelay` was then
+  driven in Chrome against real Cloudflare: **270 ms, relay/relay, 20 relay
+  candidates**, with a negative control (a deliberately corrupted credential)
+  correctly reported as `no_allocation` / TURN error 400 rather than a false
+  green. Details in `docs/call-relay-verification.md`.
+  → **And the answer to the question that started this.** The Cloudflare
+  variables in Vercel are Sensitive and cannot be read back, so they were
+  asked instead — a temporary secret-guarded route on a throwaway preview,
+  deleted after: **`status: ready`, HTTP 201, six TURN URLs.** The keys Tom
+  entered are GOOD. Cloudflare is not rejecting anything, which means the
+  asymmetric audio Liz saw is not a credential problem and the per-direction
+  counters above are now the instrument that matters.
+  → **What this does NOT close.** It says nothing about carrier NAT. Both
+  ends of the loopback are one phone, so it proves the relay is reachable and
+  authenticating from where you are standing — not that Tom's phone and Liz's
+  phone can meet on it. That is still a two-phone question; the difference is
+  that when it fails now, three of the five reasons have already been ruled
+  out on screen.
 
 - **The header that ate touches, 2026-08-31** — PR #53. Tom, on the Droid:
   reaching Call through Together ▾ took two or three touches, reliably. The
@@ -752,6 +731,9 @@ is not a prerequisite for using it.
   relay path has only been proven against a local TURN server, never against
   Cloudflare's. The same harness runs against the real thing once the key
   exists.
+  → **Both closed 2026-08-31**, see "The relay tells you it works before you
+  dial" above: the keys exist and mint, and the harness has now been run
+  against real Cloudflare (207 ms, relay/relay).
 - **/fast's mic came OFF, 2026-08-31** — PR #49. Tom's decision, after three
   rounds: the custom mic is removed from /fast and the platform keyboard's
   dictation button replaces it. The streaming stack is parked behind

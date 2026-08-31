@@ -163,11 +163,7 @@ describe("the labels it quotes are the labels on the screen", () => {
     ["TAP WHEN DONE", "components/TabletopShell.tsx"],
     ["Table · Mesa", "components/TranslatorShell.tsx"],
     ["Chat · Chat", "components/TranslatorShell.tsx"],
-    // "Together ▾" was here until the nav restructure removed it. The guide
-    // pointed readers at a disclosure that no longer exists; the fence caught
-    // it, which is the fence working. Its replacement is the launcher's own
-    // label — the string a reader is told to look for in the top right corner.
-    ["All screens · Pantallas", "components/TranslatorShell.tsx"],
+    ["Together ▾", "components/TranslatorShell.tsx"],
     ["Photo translator · Fotos", "components/TranslatorShell.tsx"],
     ["+ More · Más", "components/LanguagePicker.tsx"],
     ["Text only · Solo texto", "components/TextOnly.tsx"],

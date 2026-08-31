@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
+import { mintTurnServers } from "@/lib/call/turnMint";
+import type { RelayStatus, RTCIceServerPayload } from "@/lib/call/relay";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -31,69 +33,29 @@ export const maxDuration = 15;
 // NEXT_PUBLIC_TURN_* path this replaces had exactly that shape — it was never
 // configured, which is the only reason it never cost anything.
 //
-// So the API token stays on the server, and the browser gets a credential
-// that expires. Cloudflare checks it when the phone ALLOCATES a relay, not
-// continuously, so the TTL has to outlive the call it is minted for (an
-// ICE restart mid-call allocates again) — an hour, not the two minutes the
-// realtime client secret gets.
-//
-// ── Why Cloudflare and not Twilio ──────────────────────────────────────────
-// Both were in the stack and both mint short-lived credentials from an API.
-// Read 2026-08-31:
-//
-//   Cloudflare Realtime TURN   $0.05/GB egress, first 1,000 GB/month free
-//   Twilio Network Traversal   $0.40/GB relayed
-//
-// Eight times the price, and Cloudflare's free tier covers every call two
-// founders will ever place (a relayed video call is ~1 GB/hour — see
-// docs/realtime-cost-model.md). Cloudflare also needs no SDK: one POST with
-// a bearer token, so package.json does not grow. Twilio would have been the
-// answer if the account had already been carrying TURN traffic; it is not.
+// The mint itself now lives in lib/call/turnMint.ts, because
+// /api/call/relay-status asks Cloudflare the same question and throws the
+// credential away. See that file for the TTL and the Cloudflare-vs-Twilio
+// arithmetic that used to be written out here.
 //
 // ── Degrading, rather than breaking ────────────────────────────────────────
-// If the Cloudflare variables are absent — which is true of production until
-// Tom creates the key — this route still answers 200 with STUN and
-// `relay: false`. Today's behaviour is STUN-only, so an unconfigured relay
-// must leave /call exactly as good as it is now, never worse. The honest
-// signal goes to the UI, which says so on screen rather than pretending.
+// If the mint fails for any reason — no keys, wrong keys, Cloudflare down —
+// this route still answers 200 with STUN and `relay: false`. Pre-relay
+// behaviour was STUN-only, so a broken relay must leave /call exactly as good
+// as it is now, never worse. The honest signal goes to the UI, which says so
+// on screen rather than pretending; `status` is the same word
+// /api/call/relay-status uses, so a call that started badly and a lobby
+// indicator cannot disagree about why.
 
-/** Cloudflare's credential-minting endpoint. `{keyId}` is substituted below. */
-const CLOUDFLARE_TURN_URL =
-  process.env.CLOUDFLARE_TURN_API_URL?.trim() ||
-  "https://rtc.live.cloudflare.com/v1/turn/keys/{keyId}/credentials/generate-ice-servers";
-
-/**
- * How long a minted credential stays good for, in seconds.
- *
- * Cloudflare validates it at ALLOCATE time, so this only has to outlive the
- * moment a phone reaches for the relay — but a call that drops onto a new
- * cell tower ICE-restarts and allocates again, an hour in. So: an hour, and
- * a fresh one every time somebody joins a room.
- */
-const CREDENTIAL_TTL_SECONDS = (() => {
-  const raw = Number(process.env.CLOUDFLARE_TURN_TTL_SECONDS);
-  return Number.isFinite(raw) && raw >= 60 ? Math.floor(raw) : 3600;
-})();
-
-/**
- * The STUN server /call has always used, and the floor this route degrades
- * to. STUN is free and costs nothing to keep alongside TURN: it is what finds
- * the direct path that means no relay bandwidth is spent at all.
- */
-const FALLBACK_ICE: RTCIceServerPayload[] = [{ urls: ["stun:stun.l.google.com:19302"] }];
-
-/** The subset of RTCIceServer that survives JSON. */
-export interface RTCIceServerPayload {
-  urls: string[];
-  username?: string;
-  credential?: string;
-}
+export type { RTCIceServerPayload };
 
 export interface IceResponse {
   iceServers: RTCIceServerPayload[];
   /** True when a TURN relay is among them — the client shows this honestly. */
   relay: boolean;
   ttlSeconds: number;
+  /** Why, when `relay` is false. Same vocabulary as /api/call/relay-status. */
+  status: RelayStatus;
 }
 
 function notFound(): NextResponse {
@@ -101,31 +63,6 @@ function notFound(): NextResponse {
     { error: "not_found" },
     { status: 404, headers: { "Cache-Control": "no-store" } }
   );
-}
-
-function iceJson(body: IceResponse): NextResponse {
-  // no-store, always: a credential with an expiry must never be handed to a
-  // second caller by a cache that outlives it.
-  return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
-}
-
-/** Keep only the fields WebRTC reads, and only if they are the right shape. */
-function sanitizeServers(raw: unknown): RTCIceServerPayload[] {
-  if (!Array.isArray(raw)) return [];
-  const out: RTCIceServerPayload[] = [];
-  for (const entry of raw) {
-    const server = entry as { urls?: unknown; username?: unknown; credential?: unknown };
-    const urls = (Array.isArray(server?.urls) ? server.urls : [server?.urls]).filter(
-      (u): u is string => typeof u === "string" && /^(stun|turn)s?:/.test(u)
-    );
-    if (urls.length === 0) continue;
-    out.push({
-      urls,
-      ...(typeof server.username === "string" ? { username: server.username } : {}),
-      ...(typeof server.credential === "string" ? { credential: server.credential } : {})
-    });
-  }
-  return out;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -137,51 +74,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!callVisibleTo(email)) return notFound();
   if (!guard.ok) return guard.response;
 
-  const keyId = process.env.CLOUDFLARE_TURN_KEY_ID?.trim();
-  const token = process.env.CLOUDFLARE_TURN_API_TOKEN?.trim();
-  if (!keyId || !token) {
-    // Unconfigured is not an error — it is production as of 2026-08-31.
-    console.info("[taos-call-ice] relay=none reason=unconfigured");
-    return iceJson({ iceServers: FALLBACK_ICE, relay: false, ttlSeconds: 0 });
-  }
+  const mint = await mintTurnServers(guard.user?.id ?? null);
+  const relay = mint.status === "ready";
 
-  try {
-    const res = await fetch(CLOUDFLARE_TURN_URL.replace("{keyId}", encodeURIComponent(keyId)), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ttl: CREDENTIAL_TTL_SECONDS,
-        // Tags the credential so Cloudflare's analytics can attribute relay
-        // GB to one phone. The opaque Supabase user id, never the email —
-        // this is a third party and an email is the one identifier they have
-        // no reason to hold.
-        ...(guard.user?.id ? { customIdentifier: `taos-${guard.user.id}` } : {})
-      }),
-      cache: "no-store"
-    });
+  // One log line per mint, greppable in Vercel runtime logs under the same
+  // prefix the browser console uses, so a founder's screenshot and the server
+  // read as one story. The HTTP status is the diagnostic that matters: a 401
+  // here is the difference between "Tom has not made the key yet" and "the
+  // key Tom made is wrong", which is a question nobody could answer from a
+  // phone before 2026-08-31.
+  const log = relay ? console.info : console.warn;
+  log(
+    `[taos-call-ice] relay=${mint.status} servers=${mint.iceServers.length} ` +
+      `http=${mint.httpStatus ?? "none"} ttl=${mint.ttlSeconds}s` +
+      (mint.detail ? ` detail=${mint.detail}` : "")
+  );
 
-    const payload = (await res.json().catch(() => null)) as { iceServers?: unknown } | null;
-    const servers = sanitizeServers(payload?.iceServers);
-    const hasRelay = servers.some((s) => s.urls.some((u) => u.startsWith("turn")));
-
-    if (!res.ok || !hasRelay) {
-      // A relay that cannot be minted must not take the call down with it —
-      // STUN still connects the same wifi-to-wifi pairs it connects today.
-      // The log line is how this gets noticed, since the screen still works.
-      console.warn(
-        `[taos-call-ice] relay=failed status=${res.status} ` +
-          `detail=${JSON.stringify(payload ?? {}).slice(0, 200)}`
-      );
-      return iceJson({ iceServers: FALLBACK_ICE, relay: false, ttlSeconds: 0 });
-    }
-
-    console.info(
-      `[taos-call-ice] relay=cloudflare servers=${servers.length} ttl=${CREDENTIAL_TTL_SECONDS}s`
-    );
-    return iceJson({ iceServers: servers, relay: true, ttlSeconds: CREDENTIAL_TTL_SECONDS });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown";
-    console.warn(`[taos-call-ice] relay=error detail=${message}`);
-    return iceJson({ iceServers: FALLBACK_ICE, relay: false, ttlSeconds: 0 });
-  }
+  // no-store, always: a credential with an expiry must never be handed to a
+  // second caller by a cache that outlives it.
+  return NextResponse.json(
+    {
+      iceServers: mint.iceServers,
+      relay,
+      ttlSeconds: mint.ttlSeconds,
+      status: mint.status
+    } satisfies IceResponse,
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }

@@ -2,7 +2,13 @@
 
 import { supabase } from "@/lib/supabase";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { fetchIceServers, readTransport, type CallTransport } from "./ice";
+import {
+  fetchIceServers,
+  readMediaFlow,
+  readTransport,
+  type CallMediaFlow,
+  type CallTransport
+} from "./ice";
 
 // 1:1 WebRTC call between Tom and Liz, signaled over a Supabase Realtime
 // broadcast channel (no extra infra: the app's existing Supabase project
@@ -126,6 +132,16 @@ export interface ActiveCall {
   sendInterpreterSpeaking: (speaking: boolean) => void;
   /** Announce a language change on this phone, so their interpreter follows. */
   sendLanguage: (code: string) => void;
+  /**
+   * A sample of what is actually moving, per direction, off the live
+   * connection. Null before the peer connection exists or after it is gone.
+   *
+   * The screen polls this so that one-way audio — the second half of the
+   * 2026-08-31 field report, and a state /call previously had no word for —
+   * shows up as two numbers rather than as a person saying "I can't hear
+   * you" into a call that says `connected`.
+   */
+  readMediaFlow: () => Promise<CallMediaFlow | null>;
 }
 
 interface SignalMessage {
@@ -709,7 +725,8 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     iceServers = ice.iceServers;
     relayAvailable = ice.relay;
     diagnose(
-      `ice_servers count=${iceServers.length} relay_available=${relayAvailable}`
+      `ice_servers count=${iceServers.length} relay_available=${relayAvailable} ` +
+        `mint=${ice.status}`
     );
     events.onRelayAvailable?.(relayAvailable);
 
@@ -848,7 +865,8 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       sendLanguage: (code: string) => {
         myLanguage = code;
         announceLanguage();
-      }
+      },
+      readMediaFlow: async () => (pc && !ended ? readMediaFlow(pc) : null)
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start the call.";
