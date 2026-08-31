@@ -35,7 +35,12 @@ import {
   SPEECH_SAMPLE_RATE,
   type MicCapture
 } from "@/lib/fast/micCapture";
-import { MIC_SILENT_MS, STREAM_DEAF_MS } from "@/lib/fast/dictation";
+import {
+  MIC_SILENT_MS,
+  STREAM_DEAF_MS,
+  STREAM_MUTE_MS,
+  STREAM_NO_RESULT_MS
+} from "@/lib/fast/dictation";
 
 // ───────────────────────────────────────────────────────────────────────────
 // A Web Audio that can be told to behave like an iPhone
@@ -280,30 +285,58 @@ describe("a suspended context is a mic that hears nothing", () => {
 // 3. The fallback rule, with numbers on it
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("micVerdict — the three failures that never threw", () => {
+describe("micVerdict — the failures that never threw", () => {
   it("keeps the socket the instant Azure says anything at all", () => {
     // One hypothesis proves both halves: the graph runs and the socket is
     // two-way. Nothing else can override it.
     expect(
-      micVerdict({ frames: 0, voicedMs: 99999, sinceStartMs: 99999, heard: true })
+      micVerdict({
+        frames: 0,
+        voicedMs: 99999,
+        audibleMs: 0,
+        sinceStartMs: 99999,
+        heard: true
+      })
     ).toBe("streaming");
   });
 
   it("calls a graph that delivered nothing dead, and only after the fence", () => {
     // The iPhone case. Before MIC_SILENT_MS it is just a mic warming up.
     expect(
-      micVerdict({ frames: 0, voicedMs: 0, sinceStartMs: MIC_SILENT_MS - 1, heard: false })
+      micVerdict({
+        frames: 0,
+        voicedMs: 0,
+        audibleMs: 0,
+        sinceStartMs: MIC_SILENT_MS - 1,
+        heard: false
+      })
     ).toBe("streaming");
     expect(
-      micVerdict({ frames: 0, voicedMs: 0, sinceStartMs: MIC_SILENT_MS, heard: false })
+      micVerdict({
+        frames: 0,
+        voicedMs: 0,
+        audibleMs: 0,
+        sinceStartMs: MIC_SILENT_MS,
+        heard: false
+      })
     ).toBe("dead-graph");
   });
 
   it("does not call a running graph dead just because nobody has spoken", () => {
     // Audio is flowing, it is simply quiet. Dropping this press into the
-    // slower mic would be a bug invented by the fix for the other one.
+    // slower mic would be a bug invented by the fix for the other one. Note
+    // what makes this reading different from the dead-capture one below: the
+    // chunks carry room tone, not zeroes.
     expect(
-      micVerdict({ frames: 200, voicedMs: 0, sinceStartMs: 60000, heard: false })
+      micVerdict({
+        frames: 200,
+        voicedMs: 0,
+        // Room tone. Quiet, and emphatically not zero — that difference is
+        // the whole of STREAM_MUTE_MS.
+        audibleMs: 60000,
+        sinceStartMs: STREAM_NO_RESULT_MS - 1,
+        heard: false
+      })
     ).toBe("streaming");
   });
 
@@ -311,11 +344,123 @@ describe("micVerdict — the three failures that never threw", () => {
     // Somebody who presses the mic and then thinks for ten seconds has not
     // found a broken socket. Only real speech advances this clock.
     expect(
-      micVerdict({ frames: 500, voicedMs: STREAM_DEAF_MS - 1, sinceStartMs: 30000, heard: false })
+      micVerdict({
+        frames: 500,
+        voicedMs: STREAM_DEAF_MS - 1,
+        audibleMs: 5000,
+        sinceStartMs: STREAM_NO_RESULT_MS - 1,
+        heard: false
+      })
     ).toBe("streaming");
     expect(
-      micVerdict({ frames: 500, voicedMs: STREAM_DEAF_MS, sinceStartMs: 30000, heard: false })
+      micVerdict({
+        frames: 500,
+        voicedMs: STREAM_DEAF_MS,
+        audibleMs: 30000,
+        sinceStartMs: 30000,
+        heard: false
+      })
     ).toBe("deaf-socket");
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Tom's 8/31 field report, as a reading. This is the one the branch exists
+  // for and the one `frames` alone could never see.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it("calls a RUNNING graph dead when every chunk it delivers is zeroes", () => {
+    // Button lit, timer counting, Azure connected, `frames` climbing, not one
+    // word. The old rule read this as a healthy microphone forever, because
+    // the only question it asked was whether chunks were arriving.
+    expect(
+      micVerdict({
+        frames: 400,
+        voicedMs: 0,
+        audibleMs: 0,
+        sinceStartMs: STREAM_MUTE_MS - 1,
+        heard: false
+      })
+    ).toBe("streaming");
+    expect(
+      micVerdict({
+        frames: 400,
+        voicedMs: 0,
+        audibleMs: 0,
+        sinceStartMs: STREAM_MUTE_MS,
+        heard: false
+      })
+    ).toBe("dead-graph");
+  });
+
+  it("sends digital silence to BATCH, not to salvage", () => {
+    // The distinction that decides whether the fallback works. What was
+    // retained during a silent capture is that same silence, so uploading it
+    // would transcribe nothing; `recoverToBatch` re-opens the microphone
+    // through MediaRecorder instead, which does not touch Web Audio at all.
+    expect(
+      micVerdict({
+        frames: 400,
+        voicedMs: 0,
+        audibleMs: 0,
+        sinceStartMs: 30000,
+        heard: false
+      })
+    ).not.toBe("deaf-socket");
+  });
+
+  it("backstops the middle ground: signal, no speech, no answer, forever", () => {
+    // A capture path delivering a DC offset or a trickle of dither clears
+    // DIGITAL_SILENCE_RMS, so rule 3 lets it past, and never becomes a word,
+    // so rule 4 never fires. Twelve seconds of that is not a mic either.
+    expect(
+      micVerdict({
+        frames: 500,
+        voicedMs: 0,
+        audibleMs: 11000,
+        sinceStartMs: STREAM_NO_RESULT_MS - 1,
+        heard: false
+      })
+    ).toBe("streaming");
+    expect(
+      micVerdict({
+        frames: 500,
+        voicedMs: 0,
+        audibleMs: 12000,
+        sinceStartMs: STREAM_NO_RESULT_MS,
+        heard: false
+      })
+    ).toBe("dead-graph");
+  });
+
+  it("keeps the recording when the backstop fires on audio that had speech in it", () => {
+    // Same twelve seconds, but somebody DID talk into it — under the deaf
+    // fence, so rule 4 never tripped. There is a real recording to salvage
+    // and losing it would be the worse bug.
+    expect(
+      micVerdict({
+        frames: 500,
+        voicedMs: STREAM_DEAF_MS - 1,
+        audibleMs: 12000,
+        sinceStartMs: STREAM_NO_RESULT_MS,
+        heard: false
+      })
+    ).toBe("deaf-socket");
+  });
+
+  it("never leaves a connected, wordless session undiagnosed", () => {
+    // The property behind the whole ladder, asserted as a property: past the
+    // backstop there is no combination of counters that still reads
+    // "streaming" while Azure has said nothing. That is the shape of the bug
+    // — lit, counting, silent — and it is now unreachable.
+    for (const frames of [0, 1, 400]) {
+      for (const voicedMs of [0, 10, STREAM_DEAF_MS]) {
+        for (const audibleMs of [0, 500, 12000]) {
+          expect(
+            micVerdict({ frames, voicedMs, audibleMs, sinceStartMs: 30000, heard: false })
+          ).not.toBe("streaming");
+        }
+      }
+    }
   });
 
   it("prefers the lossless diagnosis when both could apply", () => {
@@ -326,6 +471,7 @@ describe("micVerdict — the three failures that never threw", () => {
       micVerdict({
         frames: 0,
         voicedMs: STREAM_DEAF_MS,
+        audibleMs: STREAM_DEAF_MS,
         sinceStartMs: MIC_SILENT_MS,
         heard: false
       })

@@ -24,6 +24,8 @@ export interface FakeRow {
   original_text: string;
   translation_text: string;
   engine: string | null;
+  /** Set when a later burst adopted this row. Content then refuses rewrites. */
+  fast_sealed_at: number | null;
 }
 
 export interface FakeSpeechSession {
@@ -32,10 +34,20 @@ export interface FakeSpeechSession {
   minted_at: number;
   expires_at: number;
   granted_seconds: number;
+  /** When the JWT issued for this row dies, or null if none was issued. */
+  token_expires_at: number | null;
   reported_seconds: number | null;
   billed_seconds: number;
   settled_at: number | null;
   end_reason: string | null;
+}
+
+/** The repeat-window knobs `p_repeat` carries, unpacked. */
+interface RepeatKnobs {
+  ms: number;
+  minChars: number;
+  minRatio: number;
+  strongChars: number;
 }
 
 let seq = 0;
@@ -81,6 +93,58 @@ export class FastMeterDb {
     return billed + held;
   }
 
+  /**
+   * public.fast_repeat_match, in TypeScript.
+   *
+   * The one rule in this file worth reading twice, because it is the one the
+   * review found a hole in: a prefix may only open an older row once it is
+   * long enough, spans a word boundary (or is the whole phrase), and reaches
+   * far enough through what it matched.
+   */
+  repeatMatches(typed: string, stored: string, a: RepeatKnobs): boolean {
+    if (typed.length < Math.max(a.minChars, 1)) return false;
+    if (!stored.startsWith(typed)) return false;
+    if (typed !== stored && !typed.includes(" ")) return false;
+    return (
+      typed.length >= Math.max(a.strongChars, 1) ||
+      typed.length >= Math.ceil(stored.length * Math.max(a.minRatio, 0))
+    );
+  }
+
+  private repeatKnobs(a: Record<string, unknown>): RepeatKnobs {
+    const bag = (a.p_repeat ?? null) as Record<string, number> | null;
+    return {
+      ms: Math.max(bag?.ms ?? 0, 0),
+      minChars: bag?.min_chars ?? 4,
+      minRatio: bag?.min_ratio ?? 0.6,
+      strongChars: bag?.strong_chars ?? 12
+    };
+  }
+
+  /** Every settled row this text is a meaningful prefix of, newest first. */
+  private repeatHit(
+    userId: string,
+    typed: string,
+    src: string,
+    tgt: string,
+    auto: boolean,
+    knobs: RepeatKnobs,
+    excludeId?: string | null
+  ): FakeRow | undefined {
+    return [...this.rows]
+      .reverse()
+      .find(
+        (r) =>
+          r.user_id === userId &&
+          r.id !== excludeId &&
+          r.translation_text !== "" &&
+          this.repeatMatches(typed, r.original_text.trim(), knobs) &&
+          ((r.source_lang === src && r.target_lang === tgt) ||
+            (auto && r.source_lang === tgt && r.target_lang === src)) &&
+          r.created_at >= this.now - knobs.ms
+      );
+  }
+
   private bump(userId: string, window: string, widthMs: number): number {
     const bucket = Math.floor(this.now / widthMs) * widthMs;
     const key = `${userId}|${window}|${bucket}`;
@@ -94,7 +158,10 @@ export class FastMeterDb {
     const src = a.p_source_lang as string;
     const tgt = a.p_target_lang as string;
     const text = a.p_text as string;
+    const typed = text.trim();
     const pair = `${src}>${tgt}`;
+    const auto = Boolean(a.p_auto);
+    const knobs = this.repeatKnobs(a);
 
     if (this.bump(userId, "minute", 60_000) > Math.max(a.p_minute_limit as number, 1)) {
       return { ok: false, reason: "rate_minute" };
@@ -111,34 +178,40 @@ export class FastMeterDb {
       this.now - open.lastSeen <= Math.max(a.p_window_ms as number, 0)
     ) {
       if (open.adoptedText === null) {
+        // The burst bought its row on its first few letters. Look again now
+        // that there is more text: if this is a retype, adopt the older answer
+        // and hand this burst's own reservation back.
+        if (knobs.ms > 0) {
+          const grown = this.repeatHit(userId, typed, src, tgt, auto, knobs, open.rowId);
+          if (grown) {
+            this.rows = this.rows.filter(
+              (r) => !(r.id === open.rowId && r.user_id === userId && r.fast_sealed_at === null)
+            );
+            grown.fast_sealed_at = grown.fast_sealed_at ?? this.now;
+            open.lastSeen = this.now;
+            open.rowId = grown.id;
+            open.adoptedText = grown.original_text.trim();
+            return { ok: true, billed: false, row_id: grown.id, repeat: true };
+          }
+        }
         open.lastSeen = this.now;
         const row = this.rows.find((r) => r.id === open.rowId && r.user_id === userId);
-        if (row) row.original_text = text;
+        if (row) row.original_text = typed;
         return { ok: true, billed: false, row_id: open.rowId };
       }
-      if (open.adoptedText.startsWith(text.trim())) {
+      if (open.adoptedText.startsWith(typed)) {
         open.lastSeen = this.now;
         return { ok: true, billed: false, row_id: open.rowId, repeat: true };
       }
       // Diverged from what was adopted: a different question now.
     }
 
-    // The visit-long billed set, durably: a settled row for these exact words
-    // between these exact two languages, either way round, inside the window.
-    const repeatMs = Math.max((a.p_repeat_ms as number) ?? 0, 0);
-    if (repeatMs > 0) {
-      const hit = [...this.rows]
-        .reverse()
-        .find(
-          (r) =>
-            r.user_id === userId &&
-            r.translation_text !== "" &&
-            r.original_text.trim().startsWith(text.trim()) &&
-            ((r.source_lang === src && r.target_lang === tgt) ||
-              (Boolean(a.p_auto) && r.source_lang === tgt && r.target_lang === src)) &&
-            r.created_at >= this.now - repeatMs
-        );
+    // The visit-long billed set, durably: a settled row this text is a
+    // MEANINGFUL prefix of, between these two languages, inside the window.
+    if (knobs.ms > 0) {
+      const hit = this.repeatHit(userId, typed, src, tgt, auto, knobs);
       if (hit) {
+        hit.fast_sealed_at = hit.fast_sealed_at ?? this.now;
         this.quickies.set(userId, {
           pair,
           lastSeen: this.now,
@@ -178,9 +251,10 @@ export class FastMeterDb {
       source_lang: src,
       target_lang: tgt,
       tone: "literal",
-      original_text: text,
+      original_text: typed,
       translation_text: "",
-      engine: "fast"
+      engine: "fast",
+      fast_sealed_at: null
     });
     this.quickies.set(userId, { pair, lastSeen: this.now, rowId: id, adoptedText: null });
     return { ok: true, billed: true, row_id: id, used: cap >= 0 ? used + 1 : null, cap };
@@ -188,13 +262,16 @@ export class FastMeterDb {
 
   fastRecord(a: Record<string, unknown>): null {
     const row = this.rows.find((r) => r.id === a.p_row_id && r.user_id === a.p_user_id);
-    if (row) {
-      row.source_lang = a.p_source_lang as string;
-      row.target_lang = a.p_target_lang as string;
-      row.original_text = a.p_text as string;
-      row.translation_text = a.p_translation as string;
-      row.engine = (a.p_engine as string) || "fast";
-    }
+    if (!row) return null;
+    // The trigger, mirrored: a sealed row's content is not this caller's to
+    // rewrite, however it got hold of the id. Silently dropped, exactly as
+    // public.fast_guard_sealed drops it.
+    if (row.fast_sealed_at !== null) return null;
+    row.source_lang = a.p_source_lang as string;
+    row.target_lang = a.p_target_lang as string;
+    row.original_text = a.p_text as string;
+    row.translation_text = a.p_translation as string;
+    row.engine = (a.p_engine as string) || "fast";
     return null;
   }
 
@@ -221,6 +298,22 @@ export class FastMeterDb {
       }
     }
 
+    // The live-token ceiling, and it is NOT conditioned on p_unlimited: it
+    // bounds recognition AUTHORITY, not spend, and a founder's stolen token
+    // buys the same Azure minutes as anybody else's. Only checked when a
+    // credential would actually be issued — a reservation taken against a
+    // token the caller already holds adds nothing to the count.
+    const issue = a.p_issue !== false;
+    const tokenLimit = (a.p_live_token_limit as number) ?? 6;
+    if (issue && tokenLimit > 0) {
+      const live = this.speech.filter(
+        (s) => s.user_id === userId && s.token_expires_at !== null && s.token_expires_at > this.now
+      ).length;
+      if (live >= tokenLimit) {
+        return { ok: false, reason: "live_tokens", live, limit: tokenLimit };
+      }
+    }
+
     const budget = a.p_budget_seconds as number;
     if (!a.p_unlimited && budget >= 0) {
       const used = this.speechSecondsHeld(userId);
@@ -236,6 +329,9 @@ export class FastMeterDb {
       minted_at: this.now,
       expires_at: this.now + Math.max(a.p_ttl_ms as number, 0),
       granted_seconds: grant,
+      token_expires_at: issue
+        ? this.now + Math.max((a.p_token_ttl_ms as number) ?? 600_000, 0)
+        : null,
       reported_seconds: null,
       billed_seconds: 0,
       settled_at: null,
@@ -245,6 +341,7 @@ export class FastMeterDb {
       ok: true,
       session_id: id,
       granted_seconds: grant,
+      issued: issue,
       used_seconds: this.speechSecondsHeld(userId),
       budget
     };

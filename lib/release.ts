@@ -186,6 +186,38 @@ export function fastVisibleTo(email: string | null | undefined): boolean {
   return fastEnabled() || isFounder(email);
 }
 
+/**
+ * Does a founder bypass /fast's STREAMING-SPEECH budget?
+ *
+ * Not while /fast is founders-gated. That combination is a meter that binds
+ * nobody: fastVisibleTo() says only founders can reach the screen, and an
+ * unconditional founder bypass would say founders do not count against the
+ * speech budget — so the ledger in lib/fast/speechMeter.ts would run, and
+ * refuse, for the empty set. The one population that could exercise it is the
+ * one population exempted from it, and the first time the number mattered
+ * would be the first day it applied to a stranger.
+ *
+ * So the bypass is tied to the gate rather than to the person. While /fast is
+ * held back, founders spend against the ordinary allowance — they ARE the
+ * test population, and TAOS_FAST_SPEECH_SECONDS_PER_HOUR is set generously
+ * (ten minutes of audio an hour, roughly twenty spoken quickies) precisely so
+ * that daily use walks the meter without tripping it. The day
+ * NEXT_PUBLIC_ENABLE_FAST=1 promotes the screen, this flips itself: the
+ * surface is public, strangers are the ones being bounded, and founders stop
+ * paying for their own product.
+ *
+ * NOTE the deliberate asymmetry with the TYPING meter, which still passes
+ * isFounder() straight through as p_unlimited (lib/fast/meter.ts). That one
+ * is not /fast's own: it counts rows in taos_lite_translations, the SHARED
+ * monthly allowance the home screen and /translate spend from too. Capping a
+ * founder there would cap them at 25 translations a month across the whole
+ * app to make one screen's number honest, which is a worse trade than the
+ * one this function makes.
+ */
+export function fastSpeechUnlimited(email: string | null | undefined): boolean {
+  return fastEnabled() && isFounder(email);
+}
+
 // /live's second engine — "On-device", the Web Speech API path — is off for
 // RC1 (Tom, 8/18: it has never once worked for him). It is not a half-built
 // feature like tutor; it is a finished feature standing on a browser API that

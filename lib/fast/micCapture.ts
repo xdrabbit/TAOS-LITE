@@ -63,7 +63,12 @@
 // `voicedMs()` is for. Between them the mic can tell a dead audio graph from a
 // dead socket from somebody who simply has not started talking yet.
 
-import { MIC_SILENT_MS, STREAM_DEAF_MS } from "@/lib/fast/dictation";
+import {
+  MIC_SILENT_MS,
+  STREAM_DEAF_MS,
+  STREAM_MUTE_MS,
+  STREAM_NO_RESULT_MS
+} from "@/lib/fast/dictation";
 
 /** What Azure's push stream is fed, and what everything here resamples to. */
 export const SPEECH_SAMPLE_RATE = 16000;
@@ -76,6 +81,19 @@ export const SPEECH_SAMPLE_RATE = 16000;
  * Only audio with speech-like energy in it starts that clock.
  */
 const VOICED_RMS = 0.01;
+
+/**
+ * RMS below which a chunk carries no signal AT ALL — not room tone, nothing.
+ *
+ * Two orders of magnitude under VOICED_RMS, and the gap between them is the
+ * point. VOICED_RMS asks "is somebody talking?"; this asks the much narrower
+ * question "is this capture path alive?", which is the one Tom's 8/31 field
+ * report turns on. A microphone that is merely in a silent room still clears
+ * this by a wide margin — self-noise alone is around 1e-3 — so a run of
+ * chunks under it means the samples are zeroes and the mic is not really
+ * open. See STREAM_MUTE_MS.
+ */
+const DIGITAL_SILENCE_RMS = 1e-4;
 
 export interface MicCaptureOptions {
   /** One chunk of mono 16-bit little-endian PCM at SPEECH_SAMPLE_RATE. */
@@ -101,6 +119,12 @@ export interface MicCapture {
   frames: () => number;
   /** Milliseconds of delivered audio that had speech-like energy in it. */
   voicedMs: () => number;
+  /**
+   * Milliseconds of delivered audio carrying ANY signal — the much lower bar
+   * of "these samples are not all zero". `frames()` says the graph is running;
+   * this says the graph is running and the microphone is attached to it.
+   */
+  audibleMs: () => number;
   /** Everything retained, as a WAV file, or null if nothing was retained. */
   toWav: () => Blob | null;
   /** Let the retained copy go — the socket is proven, nothing to salvage. */
@@ -229,6 +253,7 @@ export function openMicCapture(options: MicCaptureOptions): MicCapture {
   let ownsStream = true;
   let frames = 0;
   let voicedMs = 0;
+  let audibleMs = 0;
   let retained: ArrayBuffer[] | null = retain ? [] : null;
   let stream: MediaStream | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
@@ -241,7 +266,10 @@ export function openMicCapture(options: MicCaptureOptions): MicCapture {
     const frame = downsample(raw, context.sampleRate);
     if (!frame.length) return;
     frames++;
-    if (rms(frame) >= VOICED_RMS) voicedMs += (frame.length / SPEECH_SAMPLE_RATE) * 1000;
+    const level = rms(frame);
+    const ms = (frame.length / SPEECH_SAMPLE_RATE) * 1000;
+    if (level >= VOICED_RMS) voicedMs += ms;
+    if (level >= DIGITAL_SILENCE_RMS) audibleMs += ms;
     const pcm = toPcm16(frame);
     if (retained) retained.push(pcm.slice(0));
     onPcm(pcm);
@@ -324,6 +352,7 @@ export function openMicCapture(options: MicCaptureOptions): MicCapture {
     started,
     frames: () => frames,
     voicedMs: () => voicedMs,
+    audibleMs: () => audibleMs,
     toWav: () => (retained && retained.length ? wavFrom(retained) : null),
     stopRetaining: () => {
       retained = null;
@@ -364,6 +393,8 @@ export interface MicReading {
   frames: number;
   /** Milliseconds of delivered audio with speech-like energy in it. */
   voicedMs: number;
+  /** Milliseconds of delivered audio carrying any signal above digital zero. */
+  audibleMs: number;
   /** Wall clock since the recogniser reported itself started. */
   sinceStartMs: number;
   /** Has Azure sent back a hypothesis, a final, or anything at all? */
@@ -376,18 +407,48 @@ export interface MicReading {
  * Pure and separate from the hook on purpose: this is the rule the iPhone bug
  * was missing, and a rule that only exists inside a React effect is a rule no
  * test can put a number to.
+ *
+ * Four rules, in order, and they are ordered by how much they can prove. Each
+ * one below the first is a different way of noticing the SAME failure — a
+ * session that is connected and producing no words — because that failure has
+ * more than one cause and only one appearance. The whole point of the ladder
+ * is that no arrangement of "connected, lit, counting, silent" is allowed to
+ * last indefinitely: something always fires.
  */
 export function micVerdict(reading: MicReading): MicVerdict {
-  // Azure answered. Whatever else is true, this socket is two-way and this
+  // 1. Azure answered. Whatever else is true, this socket is two-way and this
   // graph is running — every other signal here is a proxy for that one.
   if (reading.heard) return "streaming";
-  // Nothing has been captured AT ALL well after the recogniser started. A
+
+  // 2. Nothing has been captured AT ALL well after the recogniser started. A
   // running graph delivers its first chunk in tens of milliseconds, so this is
   // a context that never actually started: WebKit's answer to an AudioContext
   // built outside the tap. Nothing has been heard, so nothing can be lost.
   if (reading.frames === 0 && reading.sinceStartMs >= MIC_SILENT_MS) return "dead-graph";
-  // Audio is flowing and somebody is talking into it, and Azure has said
-  // nothing back for four seconds of it. The graph is fine; the socket is not.
+
+  // 3. Chunks ARE arriving and every one of them is zeroes. This is the case
+  // rule 2 misses and Tom hit: the graph runs, `frames` climbs, the timer
+  // counts, and the microphone on the other end of it is not delivering audio.
+  // A real mic in a silent room clears DIGITAL_SILENCE_RMS on its self-noise,
+  // so four seconds of literal zero is a capture path and not a quiet person.
+  // Batch, not salvage: what was retained is that same silence, and the
+  // fallback re-opens the microphone through MediaRecorder, which does not go
+  // through Web Audio at all.
+  if (reading.audibleMs === 0 && reading.sinceStartMs >= STREAM_MUTE_MS) return "dead-graph";
+
+  // 4. Audio is flowing and somebody is talking into it, and Azure has said
+  // nothing back for four seconds of it. The graph is fine; the socket is not,
+  // and the retained copy is worth uploading.
   if (reading.voicedMs >= STREAM_DEAF_MS) return "deaf-socket";
+
+  // 5. The backstop, for the middle ground the three above leave: a trickle of
+  // signal that is neither zero nor speech, unanswered for long enough that no
+  // explanation is left. Where it goes depends on whether there is anything
+  // worth salvaging — if real speech went in, the retained copy is a
+  // transcription somebody is owed; if it did not, re-open the mic instead.
+  if (reading.sinceStartMs >= STREAM_NO_RESULT_MS) {
+    return reading.voicedMs > 0 ? "deaf-socket" : "dead-graph";
+  }
+
   return "streaming";
 }

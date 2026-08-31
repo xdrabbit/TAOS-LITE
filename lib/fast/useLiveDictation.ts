@@ -84,7 +84,7 @@
 // what that means — same division as the batch mic, and the reason a spoken
 // quickie still costs exactly one settled row (lib/fast/settle.ts).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
+import { jsonAuthHeaders } from "@/lib/authClient";
 import {
   AZURE_TOKEN_REFRESH_MS,
   FAST_MAX_DICTATION_MS,
@@ -168,11 +168,13 @@ interface HeldToken {
   /** Wall-clock ms after which this token is no good. */
   expiresAt: number;
   /**
-   * The ledger row this token reserved (lib/fast/speechMeter.ts).
+   * The ledger row THIS UTTERANCE reserved (lib/fast/speechMeter.ts).
    *
-   * Held here rather than beside the session, because the thing that has to be
-   * settled is the RESERVATION, and the reservation belongs to the token: a
-   * press that never manages to open a socket still has to give it back.
+   * Null between utterances, and that is the distinction the second review
+   * drew: the token lives for its ten minutes and is reused, the reservation
+   * lives for one press. A press that never manages to open a socket still has
+   * to give its reservation back; it does not have to throw the credential
+   * away with it, and throwing it away was never free — see the header.
    */
   sessionId: string | null;
 }
@@ -205,6 +207,15 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
   // the stream stops, so the reservation behind it (lib/fast/speechMeter.ts)
   // matches one utterance instead of standing open for ten minutes.
   const sdkRef = useRef<SpeechSdk | null>(null);
+  /**
+   * The import ITSELF, not just its result.
+   *
+   * `sdkRef` alone is set only once the module has arrived, so two callers who
+   * both start before it does both pass the guard and both import. The mount
+   * effect and the first press are exactly those two callers, every time —
+   * they overlap by design, which is the point of preloading at all.
+   */
+  const sdkLoadRef = useRef<Promise<SpeechSdk> | null>(null);
   const tokenRef = useRef<HeldToken | null>(null);
   const warmRef = useRef<Promise<void> | null>(null);
 
@@ -366,43 +377,66 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
   const preload = useCallback(async (): Promise<void> => {
     if (sdkRef.current) return;
     // Dynamically imported so the recogniser is not in the bundle every
-    // /fast visitor downloads to type a word.
-    sdkRef.current = await import("microsoft-cognitiveservices-speech-sdk");
+    // /fast visitor downloads to type a word — and imported ONCE, however
+    // many callers ask. Two overlapping imports of a megabyte of SDK is the
+    // small cost; the real one is that the second assignment wins, so whoever
+    // captured `sdkRef` in between is holding a module nobody else is using.
+    if (!sdkLoadRef.current) {
+      sdkLoadRef.current = import("microsoft-cognitiveservices-speech-sdk");
+    }
+    sdkRef.current = await sdkLoadRef.current;
   }, []);
 
   /**
-   * Load the SDK and hold a valid token.
+   * Load the SDK, take a reservation for THIS utterance, and hold a token.
    *
    * Called from the PRESS, never from mount. #49 called this on mount and it
    * was the review's finding: opening /fast bought a ten-minute Azure Speech
    * JWT, so roughly nine minutes of recognition authority were issued to
    * anybody who came to type a word and never touched the mic.
    *
-   * A token that is still comfortably alive is reused — a second quickie
-   * thirty seconds after the first should not pay for a round trip — but it
-   * carries its own reservation, and `settleToken` closes that one before this
-   * mints the next. So the ledger holds one utterance at a time whichever way
-   * the token goes.
+   * Every press goes to the server — that is the per-utterance re-auth, and it
+   * is what makes the ledger in lib/fast/speechMeter.ts mean something. What
+   * every press does NOT do any more is ask for a new credential. A token this
+   * hook already holds is sent back as `reuse: true`, and the server answers
+   * with a reservation and no JWT.
+   *
+   * The first cut had this backwards. It dropped the token after each
+   * utterance and minted a fresh one on the next press, on the reasoning that
+   * a used token should not linger — but dropping a JWT is a local gesture
+   * that Azure never hears, so the discarded one stayed valid for the rest of
+   * its ten minutes anyway. Twenty presses meant twenty live credentials
+   * instead of one. Reuse is the cheaper AND the tighter option.
    */
   const warm = useCallback(async (): Promise<void> => {
     await preload();
     const held = tokenRef.current;
-    if (held && Date.now() < held.expiresAt - AZURE_TOKEN_REFRESH_MS) return;
-    if (held) {
-      tokenRef.current = null;
-      void settleToken(held, 0, "unknown");
-    }
+    const reuse = Boolean(held && Date.now() < held.expiresAt - AZURE_TOKEN_REFRESH_MS);
     const res = await fetch("/api/fast/speech-token", {
       method: "POST",
-      headers: await authHeaders()
+      headers: await jsonAuthHeaders(),
+      body: JSON.stringify({ reuse })
     });
-    if (!res.ok) throw new Error(`speech-token ${res.status}`);
+    if (!res.ok) {
+      // A refusal invalidates the held credential too: whether it was the
+      // hourly budget or the live-token ceiling, the answer is the batch mic,
+      // and a token kept past a refusal would make the next press look
+      // authorised when it is not.
+      tokenRef.current = null;
+      throw new Error(`speech-token ${res.status}`);
+    }
     const payload = (await res.json()) as {
       token?: string;
       region?: string;
       expiresInMs?: number;
       sessionId?: string | null;
     };
+    if (reuse && held) {
+      // Same credential, new reservation. Nothing about the token changed, so
+      // its own expiry clock is not restarted.
+      tokenRef.current = { ...held, sessionId: payload.sessionId ?? null };
+      return;
+    }
     if (!payload.token || !payload.region) throw new Error("speech-token incomplete");
     tokenRef.current = {
       token: payload.token,
@@ -410,18 +444,32 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       expiresAt: Date.now() + (payload.expiresInMs ?? 0),
       sessionId: payload.sessionId ?? null
     };
-  }, [preload, settleToken]);
+  }, [preload]);
 
   useEffect(() => {
     settleRef.current = settleToken;
   }, [settleToken]);
 
-  /** One warm-up at a time, and a failed one does not poison the next press. */
+  /**
+   * One warm-up at a time — and only for as long as it is in flight.
+   *
+   * The `if (!warmRef.current)` guard exists to collapse two presses that race
+   * inside one round trip. It must NOT survive the round trip, and in the
+   * first cut it did: a resolved promise stayed in the ref forever, so the
+   * second press on a page got an instantly-resolved `ensureWarm()`, found
+   * `tokenRef` empty (teardown had cleared it), and threw "speech
+   * unavailable". Silently, into the batch mic. First dictation streams, every
+   * one after it is lumpy — a bug that only shows up on the SECOND press,
+   * which is exactly the press a desktop walkthrough tends not to make.
+   *
+   * Clearing on settle rather than only on failure is what makes every press
+   * re-authorise. `finally` re-throws the original rejection unchanged, so a
+   * failed warm-up still falls back and still does not poison the next press.
+   */
   const ensureWarm = useCallback((): Promise<void> => {
     if (!warmRef.current) {
-      warmRef.current = warm().catch((e: unknown) => {
+      warmRef.current = warm().finally(() => {
         warmRef.current = null;
-        throw e;
       });
     }
     return warmRef.current;
@@ -464,7 +512,11 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       const held = tokenRef.current;
       const spokenMs = performance.now() - streamedRef.current;
       streamedRef.current = 0;
-      tokenRef.current = null; // one reservation per utterance; the next press mints
+      // The RESERVATION is per utterance and closes here; the CREDENTIAL is
+      // not and does not. Keeping the token means the next press asks for a
+      // reservation against it (`reuse: true`) instead of leaving a second
+      // ten-minute JWT alive behind it — see `warm` above.
+      if (held) tokenRef.current = { ...held, sessionId: null };
       void settleToken(held, spokenMs, endReasonRef.current);
       endReasonRef.current = "user";
     }
@@ -615,6 +667,7 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
         const verdict = micVerdict({
           frames: capture.frames(),
           voicedMs: capture.voicedMs(),
+          audibleMs: capture.audibleMs(),
           sinceStartMs: performance.now() - startedAt,
           heard: heardRef.current
         });

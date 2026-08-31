@@ -24,7 +24,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { NextRequest } from "next/server";
-import { AZURE_TOKEN_TTL_MS, FAST_MAX_DICTATION_MS } from "@/lib/fast/dictation";
+import {
+  AZURE_TOKEN_TTL_MS,
+  FAST_MAX_DICTATION_MS,
+  FAST_SPEECH_HOLD_MS
+} from "@/lib/fast/dictation";
 import { FastMeterDb } from "./helpers/fastMeterDb";
 
 const db = new FastMeterDb();
@@ -73,12 +77,13 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function mint(token = "t") {
+async function mint(token = "t", body?: Record<string, unknown>) {
   const { POST } = await import("@/app/api/fast/speech-token/route");
   return POST(
     new NextRequest("https://taoslite.com/api/fast/speech-token", {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      ...(body ? { body: JSON.stringify(body) } : {})
     })
   );
 }
@@ -287,12 +292,200 @@ describe("the browser closes what it opened", () => {
     expect(body).toContain("keepalive: true");
   });
 
-  it("drops the token with the reservation, so the next press mints its own", () => {
-    // One reservation outstanding at a time. A token kept across utterances
-    // would be a hold that covers one of them and authority that covers ten
-    // minutes of them.
+  it("KEEPS the token across utterances and drops only the reservation", () => {
+    // This reverses what the first cut pinned here, and the old reasoning is
+    // worth keeping because it is the instructive part: "a token kept across
+    // utterances would be authority that covers ten minutes of them". True,
+    // and it does not follow that dropping it helps — a JWT discarded in a
+    // browser is not a JWT Azure stops honouring. Minting per press did not
+    // replace the ten minutes of authority, it ADDED ten more, so a busy
+    // visit left twenty live credentials where one would have done.
+    //
+    // The reservation is still per utterance. That is the half that was
+    // right, and it is asserted above.
     const start = hook.indexOf("const teardown = useCallback");
     const end = hook.indexOf("}, [clearTimers", start);
-    expect(hook.slice(start, end)).toContain("tokenRef.current = null");
+    const body = hook.slice(start, end);
+    expect(body).not.toContain("tokenRef.current = null");
+    expect(body).toContain("tokenRef.current = { ...held, sessionId: null }");
+  });
+
+  it("re-authorises on EVERY press, token or no token", () => {
+    // The reservation is what the ledger counts, so a press that skipped the
+    // round trip would be a spoken quickie nothing metered. `reuse` changes
+    // what comes back, never whether the server was asked.
+    const start = hook.indexOf("const warm = useCallback");
+    const end = hook.indexOf("const ensureWarm = useCallback", start);
+    const body = hook.slice(start, end);
+    expect(body).toContain("/api/fast/speech-token");
+    expect(body).toContain("JSON.stringify({ reuse })");
+    // The early return that used to skip the fetch on a live token is gone.
+    expect(body).not.toMatch(/if \(held && Date\.now\(\) <[^)]*\) return;/);
+  });
+
+  it("does not cache a SETTLED warm-up, or the second press falls back forever", () => {
+    // The bug this found: `warmRef` held a resolved promise for the life of
+    // the page, so press two got an instant `ensureWarm()`, found no token,
+    // threw, and went silently to the batch mic. Every press after the first
+    // was the lumpy mic — invisible on desktop, where the first press is
+    // usually the only one anybody makes.
+    const start = hook.indexOf("const ensureWarm = useCallback");
+    const end = hook.indexOf("}, [warm]);", start);
+    const body = hook.slice(start, end);
+    expect(body).toContain("warmRef.current = null");
+    expect(body).toContain(".finally(");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The meter binds the people who can actually reach the screen
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("a founder-gated screen does not exempt founders from its own meter", () => {
+  beforeEach(() => {
+    caller = { id: "u1", email: "xdrabbit@gmail.com" };
+    // The state /fast is actually in: held back, so only founders are here.
+    delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  });
+
+  it("spends a founder's presses against the ordinary hourly budget", async () => {
+    // The paradox the review named. fastVisibleTo() says only founders can
+    // reach /fast; an unconditional founder bypass would say founders do not
+    // count. The meter would then run, and refuse, for nobody — and the first
+    // day it applied to a real person would be the first day it was tested.
+    process.env.TAOS_FAST_SPEECH_SECONDS_PER_HOUR = String(GRANT * 2);
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(200);
+    const third = await mint();
+    expect(third.status).toBe(429);
+    expect(await third.json()).toMatchObject({ error: "speech_budget_spent" });
+  });
+
+  it("gives the bypass back the moment the screen is public", async () => {
+    // Not a person-shaped rule, a gate-shaped one. NEXT_PUBLIC_ENABLE_FAST=1
+    // means strangers are the population being bounded, and founders stop
+    // paying for their own product. One flag, both halves.
+    process.env.NEXT_PUBLIC_ENABLE_FAST = "1";
+    process.env.TAOS_FAST_SPEECH_SECONDS_PER_HOUR = String(GRANT * 2);
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(200);
+  });
+
+  it("still bills a founder's seconds either way — logged, not ignored", async () => {
+    process.env.NEXT_PUBLIC_ENABLE_FAST = "1";
+    const body = (await (await mint()).json()) as { sessionId: string };
+    await settle({ sessionId: body.sessionId, seconds: 7, reason: "user" });
+    expect(db.speech.at(-1)).toMatchObject({ billed_seconds: 7, user_id: "u1" });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// A reservation is not a credential
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("reserving without issuing", () => {
+  it("takes the hold and never reaches Azure when the caller has a token", async () => {
+    const res = await mint("t", { reuse: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    // A reservation is real — this is the press that re-authorised.
+    expect(body.sessionId).toEqual(expect.any(String));
+    expect(body.grantedSeconds).toBe(GRANT);
+    // And no credential came back, because none was minted.
+    expect(body.token).toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(db.speech).toHaveLength(1);
+    expect(db.speech[0].token_expires_at).toBeNull();
+  });
+
+  it("a reuse-only press does not count toward the live-token ceiling", async () => {
+    // It adds no credential to the world, so refusing it would push a
+    // well-behaved client into the batch mic for being well-behaved.
+    process.env.TAOS_FAST_SPEECH_LIVE_TOKENS = "1";
+    expect((await mint()).status).toBe(200);
+    for (let i = 0; i < 5; i += 1) {
+      expect((await mint("t", { reuse: true })).status).toBe(200);
+    }
+    delete process.env.TAOS_FAST_SPEECH_LIVE_TOKENS;
+  });
+
+  it("treats a missing or unreadable body as 'I have no token'", async () => {
+    // The safe reading of silence. It costs a credential, never a refusal.
+    const res = await mint();
+    expect(res.status).toBe(200);
+    expect((await res.json()).token).toBe(AZURE_JWT);
+  });
+});
+
+describe("the live-token ceiling — the only bound a fixed, unrevokable TTL leaves", () => {
+  beforeEach(() => {
+    process.env.TAOS_FAST_SPEECH_LIVE_TOKENS = "2";
+    // Take the hourly budget out of the picture: this is about authority.
+    process.env.TAOS_FAST_SPEECH_SECONDS_PER_HOUR = "100000";
+  });
+  afterEach(() => {
+    delete process.env.TAOS_FAST_SPEECH_LIVE_TOKENS;
+  });
+
+  it("refuses the credential past the ceiling, before Azure is reached", async () => {
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(200);
+    fetchSpy.mockClear();
+    const third = await mint();
+    expect(third.status).toBe(429);
+    expect(await third.json()).toMatchObject({ error: "speech_tokens_live" });
+    // The refusal costs nothing: no token minted is no socket opened.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("counts tokens, not reservations — settling one does not free a slot", async () => {
+    // This is the distinction that makes the ceiling mean anything. A JWT
+    // Azure issued keeps working for its full ten minutes whatever this
+    // server records about it, so a settled reservation must NOT be read as
+    // a returned credential.
+    const first = (await (await mint()).json()) as { sessionId: string };
+    await settle({ sessionId: first.sessionId, seconds: 3, reason: "user" });
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(429);
+  });
+
+  it("frees the slot when the token actually expires, and not before", async () => {
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(429);
+    db.now += AZURE_TOKEN_TTL_MS + 1;
+    expect((await mint()).status).toBe(200);
+  });
+
+  it("applies to a founder too, because a stolen token spends the same money", async () => {
+    // Deliberately not conditioned on p_unlimited. Every other number in the
+    // meter is about a bill; this one is about how much recognition authority
+    // is loose in the world under one account's name.
+    process.env.NEXT_PUBLIC_ENABLE_FAST = "1";
+    caller = { id: "u1", email: "xdrabbit@gmail.com" };
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(200);
+    expect((await mint()).status).toBe(429);
+  });
+});
+
+describe("the reservation's clock is one utterance, not one token", () => {
+  it("reaps an abandoned hold a minute after the utterance could have ended", async () => {
+    // The first cut reaped at the token TTL, so a tab that died mid-sentence
+    // kept thirty seconds of the hourly budget encumbered for ten minutes —
+    // ten times longer than the utterance it was reserving could last.
+    await mint();
+    expect(db.speech[0].expires_at - db.speech[0].minted_at).toBe(FAST_SPEECH_HOLD_MS);
+    expect(FAST_SPEECH_HOLD_MS).toBeLessThan(AZURE_TOKEN_TTL_MS);
+
+    db.now += FAST_SPEECH_HOLD_MS + 1;
+    await mint("t", { reuse: true });
+    expect(db.speech[0]).toMatchObject({ end_reason: "lost", billed_seconds: GRANT });
+  });
+
+  it("still gives the JWT its full ten minutes, because Azure does", async () => {
+    await mint();
+    expect(db.speech[0].token_expires_at! - db.speech[0].minted_at).toBe(AZURE_TOKEN_TTL_MS);
   });
 });

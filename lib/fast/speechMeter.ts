@@ -35,22 +35,51 @@
 // lights and the mic is live before anything is awaited (lib/fast/micCapture.ts).
 // The mint overlaps the socket handshake rather than delaying the gesture.
 //
+// ── A reservation is not a credential ──────────────────────────────────────
+// Those are two different things and the second review is what separated
+// them. Reserving happens once per UTTERANCE; issuing a JWT happens once per
+// TEN MINUTES, because that is how long Azure's JWT lives whatever we do.
+//
+// The first cut minted a fresh token on every press and threw the old one
+// away — but "throwing away" a JWT does nothing at Azure, so twenty presses
+// left twenty live credentials, each good for its full ten minutes. Holding
+// ONE token across its lifetime and re-reserving against it per press is
+// strictly less exposure for exactly the same behaviour on screen. The client
+// asks with `reuse: true` when it still holds a live token; the server then
+// takes the reservation and issues nothing.
+//
+// That makes a second bound possible, and it is the one Azure's fixed TTL
+// leaves room for: a ceiling on how many of an account's tokens may be ALIVE
+// at once (`TAOS_FAST_SPEECH_LIVE_TOKENS`). It is a security bound rather
+// than a spend bound, so it applies to founders too.
+//
 // ── What this does not close, said plainly ─────────────────────────────────
-// Azure's `issueToken` TTL is ten minutes and is not configurable, and there
-// is no narrower scope to ask for. Somebody who lifts a live JWT out of their
-// own browser can stream for its full ten minutes, and the server will only
-// ever hear the seconds the client chose to report. What changed is the size
-// and the visibility: from an unbounded, uncounted hole opened by every page
-// view, to a bounded number of tokens an hour, each minted against a ledger
-// and reaped if it never settles.
+// `issueToken`'s TTL is ten minutes, it is not configurable, there is no
+// narrower scope to ask for, and Azure offers no revocation for a token
+// already issued. So there is no arrangement of this file in which a lifted
+// JWT is worth less than the remainder of its ten minutes. What can be
+// bounded is how many exist:
+//
+//   before this branch   a token per PAGE VIEW, unbounded, uncounted
+//   first cut            a token per PRESS — up to 20/hour live at once
+//   now                  at most TAOS_FAST_SPEECH_LIVE_TOKENS live at once
+//                        (default 6), each ledgered, plus the hourly budget
+//
+// Residual exposure, stated as a number rather than a shrug: somebody willing
+// to lift tokens out of their own browser can hold six at a time, so up to
+// sixty minutes of recognition authority per ten-minute window — about a
+// dollar an hour of Azure at list price, against one account we can see in
+// `fast_speech_sessions` and disable. The default is loose on purpose while
+// /fast is a founders-only field test that involves a lot of reloading; two
+// is the right number once the screen is public, and it is one env var.
 //
 // The only thing that would make streamed audio as auditable as typed text is
 // to proxy it through a function — which is the trade /fast made on purpose.
 // It is written down in ENHANCEMENTS.md rather than pretended away.
 
-import { isFounder } from "@/lib/release";
+import { fastSpeechUnlimited } from "@/lib/release";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
-import { AZURE_TOKEN_TTL_MS, FAST_MAX_DICTATION_MS } from "./dictation";
+import { AZURE_TOKEN_TTL_MS, FAST_SPEECH_HOLD_MS, FAST_MAX_DICTATION_MS } from "./dictation";
 import type { FastUser } from "./meter";
 
 /** The one log prefix for the streaming meter. */
@@ -75,9 +104,38 @@ export function fastSpeechGrantSeconds(): number {
   return Math.ceil(FAST_MAX_DICTATION_MS / 1000);
 }
 
+/**
+ * How many of one account's Azure tokens may be alive at the same time.
+ *
+ * The only lever Azure's fixed ten-minute TTL leaves. Six is loose, and it is
+ * loose deliberately: a token lives in memory and does not survive a reload,
+ * so a founder walking the field-test matrix — Safari tab, installed PWA,
+ * force-quit, reopen — legitimately mints several inside one ten-minute
+ * window, and the failure mode of a cap that bites is the streaming mic
+ * silently becoming the batch mic in the middle of the test that is supposed
+ * to judge the streaming mic.
+ *
+ * Two is the right number for a public /fast. It is this env var and nothing
+ * else: TAOS_FAST_SPEECH_LIVE_TOKENS.
+ */
+export function fastSpeechLiveTokenLimit(): number {
+  const raw = Number(process.env.TAOS_FAST_SPEECH_LIVE_TOKENS);
+  return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 6;
+}
+
+export type SpeechMintRefusal = "budget" | "live_tokens";
+
 export type SpeechMintResult =
-  | { ok: true; sessionId: string | null; grantedSeconds: number; usedSeconds?: number; budget?: number }
-  | { ok: false; reason: "budget"; usedSeconds?: number; budget?: number };
+  | {
+      ok: true;
+      sessionId: string | null;
+      grantedSeconds: number;
+      /** Did this call issue a NEW Azure JWT, or only take a reservation? */
+      issued: boolean;
+      usedSeconds?: number;
+      budget?: number;
+    }
+  | { ok: false; reason: SpeechMintRefusal; usedSeconds?: number; budget?: number };
 
 /** Raised when production is missing the key the ledger cannot work without. */
 export class FastSpeechMeterUnavailableError extends Error {
@@ -105,25 +163,47 @@ function meteringAvailable(): boolean {
  * never mints is a socket it never opens. Same ordering rule as every other
  * spend path here (lib/spendGuard.ts).
  */
-export async function mintFastSpeechSession(user: FastUser): Promise<SpeechMintResult> {
+export async function mintFastSpeechSession(
+  user: FastUser,
+  /**
+   * The caller still holds a live JWT and wants only a reservation.
+   *
+   * Unverifiable, and it does not need to be: a client that lies gets a
+   * session id and no credential, which buys it nothing. Lying the other way
+   * — always asking for a fresh token — is what the live-token ceiling is
+   * for.
+   */
+  options: { reuse?: boolean } = {}
+): Promise<SpeechMintResult> {
   const grantedSeconds = fastSpeechGrantSeconds();
+  const issue = !options.reuse;
 
   if (!meteringAvailable()) {
     if (inProduction()) throw new FastSpeechMeterUnavailableError();
     // eslint-disable-next-line no-console
     console.warn(`${FAST_SPEECH_LOG} meter_unavailable · no service-role key · unmetered`);
-    return { ok: true, sessionId: null, grantedSeconds };
+    return { ok: true, sessionId: null, grantedSeconds, issued: issue };
   }
 
   const { data, error } = await supabaseAdmin.rpc("fast_speech_mint", {
     p_user_id: user.id,
-    p_ttl_ms: AZURE_TOKEN_TTL_MS,
+    // The RESERVATION's reaping deadline, which is one utterance and not one
+    // token: the JWT outlives this row by design now, and a reservation left
+    // open by a closed tab should stop encumbering the hourly budget a minute
+    // after the utterance it reserved could possibly have ended.
+    p_ttl_ms: FAST_SPEECH_HOLD_MS,
     p_grant_seconds: grantedSeconds,
     p_budget_seconds: fastSpeechBudgetSeconds(),
-    // Founders are logged, not ledgered — the same call lib/tutor/meter.ts
-    // makes. Their Azure minutes are a real bill and the rows still exist to
-    // be queried; they just do not run out.
-    p_unlimited: isFounder(user.email)
+    // Founders bypass the BUDGET only once /fast is public — see
+    // fastSpeechUnlimited() in lib/release.ts for why a meter that exempts
+    // the only people who can reach the screen is not a meter.
+    p_unlimited: fastSpeechUnlimited(user.email),
+    p_issue: issue,
+    p_token_ttl_ms: AZURE_TOKEN_TTL_MS,
+    // Deliberately NOT conditioned on p_unlimited. This one is not about the
+    // bill — it bounds how much recognition authority a stolen credential
+    // could carry, and a founder's stolen credential spends the same money.
+    p_live_token_limit: fastSpeechLiveTokenLimit()
   });
 
   if (error) {
@@ -134,20 +214,28 @@ export async function mintFastSpeechSession(user: FastUser): Promise<SpeechMintR
 
   const verdict = (data ?? {}) as {
     ok?: boolean;
+    reason?: SpeechMintRefusal;
     session_id?: string;
     granted_seconds?: number;
+    issued?: boolean;
     used_seconds?: number;
     budget?: number;
   };
 
   if (!verdict.ok) {
-    return { ok: false, reason: "budget", usedSeconds: verdict.used_seconds, budget: verdict.budget };
+    return {
+      ok: false,
+      reason: verdict.reason === "live_tokens" ? "live_tokens" : "budget",
+      usedSeconds: verdict.used_seconds,
+      budget: verdict.budget
+    };
   }
 
   return {
     ok: true,
     sessionId: verdict.session_id ?? null,
     grantedSeconds: verdict.granted_seconds ?? grantedSeconds,
+    issued: verdict.issued ?? issue,
     usedSeconds: verdict.used_seconds,
     budget: verdict.budget
   };

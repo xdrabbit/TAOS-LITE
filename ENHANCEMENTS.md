@@ -31,6 +31,30 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   which costs the latency the feature exists to buy, so it wants measuring
   before it is chosen. Decide this before `NEXT_PUBLIC_ENABLE_FAST=1`.
   (added 2026-08-31)
+  **Updated 2026-08-31, round 2.** The ten-minute TTL is still the fact, but
+  the exposure it implies got smaller: the client now HOLDS one token for its
+  lifetime and re-reserves against it per press, instead of minting a fresh
+  ten-minute JWT every time the mic is touched. Discarding a JWT in a browser
+  never revoked it, so the old shape left one live credential per press —
+  twenty an hour — where one would have done. On top of that,
+  `TAOS_FAST_SPEECH_LIVE_TOKENS` (default 6) caps how many of an account's
+  tokens may be unexpired at once. Residual, stated as a number: six live
+  tokens is up to sixty minutes of stealable recognition per ten-minute
+  window, roughly a dollar an hour, against one account visible in
+  `fast_speech_sessions`. **Set it to 2 as part of going public** — the 6 is
+  slack for a field test that involves a lot of reloading, not a considered
+  production number. The relay is still the only thing that would close it.
+
+- **Turn the /fast founder speech bypass back on when the screen goes public**
+  — `fastSpeechUnlimited()` in `lib/release.ts` deliberately ties the founder
+  bypass to the GATE rather than to the person: while /fast is founders-only,
+  founders spend against the ordinary speech budget, because a meter that
+  exempts the only people who can reach the screen is a meter that has never
+  been tested. It flips itself the day `NEXT_PUBLIC_ENABLE_FAST=1` — there is
+  nothing to remember here, only something to re-read if the hourly budget
+  ever feels tight during the field test. `TAOS_FAST_SPEECH_SECONDS_PER_HOUR`
+  is the dial (default 600s, about twenty spoken quickies an hour).
+  (added 2026-08-31)
 
 - **Resolve founder-ness on the server, not from the client bundle** — every
   founders gate in the app (`/fast`, `/call`, `/video`) ends at

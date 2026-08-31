@@ -50,7 +50,13 @@
 import { isFounder } from "@/lib/release";
 import type { Tier } from "@/lib/supabase";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
-import { FAST_REPEAT_MS, FAST_SETTLE_MS } from "./settle";
+import {
+  FAST_REPEAT_MIN_CHARS,
+  FAST_REPEAT_MIN_RATIO,
+  FAST_REPEAT_MS,
+  FAST_REPEAT_STRONG_CHARS,
+  FAST_SETTLE_MS
+} from "./settle";
 
 /** The one log prefix for this meter. Change it here, dashboards follow. */
 export const FAST_METER_LOG = "taos.fast.meter";
@@ -199,8 +205,17 @@ export async function beginFastQuickie(
     p_minute_limit: perMinute,
     p_hour_limit: perHour,
     // The visit-long billed set, restored durably (lib/fast/settle.ts). A
-    // phrase asked again inside this window adopts the row it already bought.
-    p_repeat_ms: FAST_REPEAT_MS,
+    // phrase asked again inside this window adopts the row it already bought
+    // — but only once enough of it has been typed to be that phrase and not
+    // an opener every row in the table starts with. One bag rather than four
+    // arguments, so the next knob to move does not change the SQL signature
+    // again; the function reads its own defaults from it.
+    p_repeat: {
+      ms: FAST_REPEAT_MS,
+      min_chars: FAST_REPEAT_MIN_CHARS,
+      min_ratio: FAST_REPEAT_MIN_RATIO,
+      strong_chars: FAST_REPEAT_STRONG_CHARS
+    },
     p_auto: Boolean(input.auto)
   });
 

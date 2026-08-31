@@ -62,9 +62,25 @@ const ISSUE_TIMEOUT_MS = 4000;
 // billed; only the recognition it unlocks is), which is exactly why the
 // reservation has to be about the AUDIO rather than about the request.
 //
-// The client mints on the first press and settles when the stream stops
-// (POST /api/fast/speech-settle). An unsettled session is reaped at its full
-// reservation on the owner's next press.
+// The client reserves on EVERY press and settles when the stream stops
+// (POST /api/fast/speech-settle). An unsettled reservation is reaped at its
+// full grant once its hold window passes.
+//
+// ── Reserving and issuing are two different things ─────────────────────────
+// A body of `{"reuse": true}` says the caller still holds a live JWT and wants
+// only the reservation. That is the common case after the first press of a
+// visit, and it exists because discarding a JWT client-side does not revoke
+// it: the first cut minted per press, so a ten-minute visit could leave twenty
+// live credentials behind it. Now one credential covers its own ten minutes
+// and every press re-authorises against the ledger underneath it.
+//
+// The claim is not verifiable and does not need to be. A caller that lies and
+// says it has a token gets a session id and nothing to stream with. A caller
+// that lies the other way — demanding a fresh token every time — meets
+// `fastSpeechLiveTokenLimit()`, which counts an account's UNEXPIRED tokens and
+// refuses past the ceiling. That is the only bound Azure's fixed, unrevokable
+// ten-minute TTL leaves room for, and speechMeter's header states the residual
+// exposure as a number rather than waving at it.
 
 function notFound(): NextResponse {
   return NextResponse.json(
@@ -105,11 +121,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // A body is optional here and an unreadable one is not an error: the only
+  // thing it can say is "I already hold a token", and the safe reading of
+  // silence is that the caller does not. That costs a credential, never a
+  // refusal.
+  let reuse = false;
+  try {
+    const payload = (await req.json()) as Record<string, unknown> | null;
+    reuse = payload?.reuse === true;
+  } catch {
+    reuse = false;
+  }
+
   // The reservation, before the credential. A refusal here has cost nothing:
   // no token minted is no socket opened.
   let minted;
   try {
-    minted = await mintFastSpeechSession({ id: guard.user?.id ?? "unknown", email });
+    minted = await mintFastSpeechSession({ id: guard.user?.id ?? "unknown", email }, { reuse });
   } catch (error) {
     if (error instanceof FastSpeechMeterUnavailableError) {
       // The same machine-readable shape as an unconfigured resource, and for
@@ -124,13 +152,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   if (!minted.ok) {
+    // Two different refusals, one machine-readable shape, because the caller
+    // does the same thing with both: stop asking and use the batch mic. They
+    // are named apart so a runtime log can tell "this account talked for ten
+    // minutes" from "this account asked for its seventh live credential",
+    // which are very different sentences.
     return NextResponse.json(
       {
-        error: "speech_budget_spent",
+        error: minted.reason === "live_tokens" ? "speech_tokens_live" : "speech_budget_spent",
         usedSeconds: minted.usedSeconds,
         budgetSeconds: minted.budget
       },
       { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "60" } }
+    );
+  }
+
+  // Reservation only: the caller says it still holds a credential, so there is
+  // nothing to issue and nothing to reach Azure for. The reservation is real
+  // either way — this is the press that just re-authorised.
+  if (!minted.issued) {
+    return NextResponse.json(
+      { sessionId: minted.sessionId, grantedSeconds: minted.grantedSeconds },
+      { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, private" } }
     );
   }
 

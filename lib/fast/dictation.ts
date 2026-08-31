@@ -65,6 +65,19 @@ export const AZURE_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const AZURE_TOKEN_REFRESH_MS = 60 * 1000;
 
 /**
+ * How long a streaming RESERVATION stays open before it is reaped.
+ *
+ * Not the same clock as the token above, and conflating the two was the first
+ * cut's mistake. A reservation covers ONE utterance, so once the utterance cap
+ * plus a minute of slack has passed there is nothing left it could be paying
+ * for — a tab that died mid-sentence is billed its full grant and stops
+ * encumbering the hourly budget. The JWT, meanwhile, lives its own ten minutes
+ * whatever we do, and is now held across utterances rather than re-minted per
+ * press (lib/fast/speechMeter.ts explains why that is less exposure, not more).
+ */
+export const FAST_SPEECH_HOLD_MS = FAST_MAX_DICTATION_MS + 60 * 1000;
+
+/**
  * The transcriber hint for a pair, or undefined.
  *
  * /fast dictates in AUTO-DETECT — the box does not know which of the two
@@ -115,3 +128,40 @@ export const STREAM_CONNECT_MS = 3000;
  * back, therefore nobody is listening.
  */
 export const STREAM_DEAF_MS = 4000;
+
+/**
+ * How long a RUNNING graph may carry nothing at all before it is not a mic.
+ *
+ * MIC_SILENT_MS above catches the graph that never started: zero chunks
+ * delivered. It cannot catch the shape Tom actually reported on 8/31 — button
+ * lit, timer counting, Azure genuinely connected, not one word — because in
+ * that failure the audio graph IS running and IS delivering chunks. They are
+ * just full of zeroes: a live MediaStreamTrack that produces digital silence.
+ * `frames` climbs, so the frames-based fence sees a healthy mic forever.
+ *
+ * The discriminator is not loudness, it is the difference between quiet and
+ * nothing. A real microphone in a real room delivers self-noise, mains hum,
+ * the sound of a hand on a phone — measurable within a chunk or two, and
+ * orders of magnitude above DIGITAL_SILENCE_RMS. Four seconds of literal
+ * zeroes is not a quiet room; it is a dead capture path.
+ */
+export const STREAM_MUTE_MS = 4000;
+
+/**
+ * The backstop: connected this long with no recognition event of any kind.
+ *
+ * The two fences above both need a signal to read — no chunks, or chunks that
+ * are exactly zero. Between them sits the awkward middle: a capture path
+ * delivering a DC offset or a trickle of dither, loud enough to clear
+ * DIGITAL_SILENCE_RMS and far too quiet to ever become a word. Azure answers
+ * that with nothing at all — no partial, no final, no cancellation — which is
+ * the same wait-forever the whole watchdog exists to end.
+ *
+ * Twelve seconds, and the number is a trade rather than a measurement: it is
+ * the longest somebody might plausibly hold the mic in silence, working out
+ * what to say, before being handed the slower mic for it. Shorter would catch
+ * the bug sooner and start bouncing people who were only thinking. The cost of
+ * being wrong here is a lumpy transcription, not a lost one — `recoverToBatch`
+ * carries the already-granted microphone across rather than asking again.
+ */
+export const STREAM_NO_RESULT_MS = 12000;
