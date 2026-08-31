@@ -6,17 +6,105 @@
 // of its four requirements are the obvious ones (it shows only when there is
 // something to clear, it resets the whole screen, it hands the caret back).
 //
-// The fourth is the reason this file exists. /fast meters into the normal
-// monthly allowance by writing one row per SETTLED input (lib/fast/settle.ts),
-// and the guard against billing the same words twice is a set held for the
-// life of the visit. A reset button is exactly the kind of change that
-// reaches for "and clear that too" — and it would be invisible when it broke,
-// because a double-billed phrase looks identical on screen. So the negative is
-// pinned here, in the same file as the feature that threatens it.
-import { describe, expect, it } from "vitest";
+// The fourth is the reason this file exists. Clearing the box must not become
+// a way to be charged twice for one lookup: /fast meters into the normal
+// monthly allowance, and a double-billed phrase looks identical on screen, so
+// it is invisible when it breaks.
+//
+// That guard used to be a `billedRef` set in FastShell, held for the life of
+// the visit. #51 moved billing to the server and keyed it on a BURST of
+// previews, which silently lost it — two bursts of the same words were two
+// rows, so clear-and-retype started costing money it never used to. The set is
+// back, durably, as the repeat window in `public.fast_begin`
+// (lib/fast/settle.ts, FAST_REPEAT_MS), and it is pinned below against the
+// real route rather than against a copy of the rule.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { NextRequest } from "next/server";
 import { hasSomethingToClear } from "@/lib/fast/clear";
-import { billingKey } from "@/lib/fast/settle";
+import { FAST_REPEAT_MS, FAST_SETTLE_MS } from "@/lib/fast/settle";
+import { FastMeterDb } from "./helpers/fastMeterDb";
+
+// ── The meter, driven for real ──────────────────────────────────────────────
+// Billing left the browser in #51, so the money test cannot be a pure function
+// any more — it has to go through POST /api/fast, which is where the decision
+// now lives.
+
+const USER = "u-clear";
+const db = new FastMeterDb();
+
+vi.mock("@/lib/supabaseAdmin", () => ({
+  hasServiceRoleKey: true,
+  supabaseAdmin: { rpc: (name: string, args: Record<string, unknown>) => db.rpc(name, args) }
+}));
+
+vi.mock("@/lib/authServer", () => ({
+  getUserFromRequest: async (req: Request) =>
+    req.headers.get("authorization")?.startsWith("Bearer ")
+      ? { id: USER, email: "someone@example.com" }
+      : null
+}));
+
+const fetchSpy = vi.fn(async (_url: string, init?: RequestInit) => {
+  const sent = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+  const json = (sent.response_format as { type?: string } | undefined)?.type === "json_object";
+  const content = json ? JSON.stringify({ sourceLang: "en", translation: "hola" }) : "hola";
+  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+});
+
+const ORIGINAL_FETCH = globalThis.fetch;
+
+beforeEach(async () => {
+  db.reset();
+  db.profiles.set(USER, { subscription_status: "active", tier: "basic" }); // no quota noise
+  fetchSpy.mockClear();
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  process.env.OPENAI_API_KEY = "sk-test";
+  process.env.NEXT_PUBLIC_ENABLE_FAST = "1";
+  delete process.env.VERCEL_ENV;
+  delete process.env.AZURE_TRANSLATOR_KEY;
+  const { resetFastRateLimits } = await import("@/lib/fast/rateLimit");
+  resetFastRateLimits();
+});
+
+afterEach(() => {
+  globalThis.fetch = ORIGINAL_FETCH;
+  delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+  vi.resetModules();
+});
+
+/** Type a phrase — a few previews — and let the burst end. */
+async function settleQuickie(text: string): Promise<void> {
+  const { POST } = await import("@/app/api/fast/route");
+  const previews = [text.slice(0, Math.max(1, Math.floor(text.length / 2))), text];
+  for (const body of previews) {
+    db.now += 320;
+    await POST(
+      new NextRequest("https://taoslite.com/api/fast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer t" },
+        body: JSON.stringify({
+          text: body,
+          sourceLanguage: "en",
+          targetLanguage: "es",
+          direction: "auto"
+        })
+      })
+    );
+  }
+  // The typing stops. Past this the burst is over and the next request is a
+  // new one — which is exactly what makes the repeat window load-bearing.
+  db.now += FAST_SETTLE_MS + 1;
+}
+
+/** Tapping Clear does nothing to the server; it just ends the sitting. */
+function clearTheBox(): void {
+  db.now += FAST_SETTLE_MS + 1;
+}
+
 
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -169,40 +257,38 @@ describe("clear is a screen gesture, not a payment", () => {
     expect(clearHandler()).not.toContain("setPinned");
   });
 
-  it("re-entering the same words after a clear bills nothing more", () => {
-    // The visit-long memory, walked: type, settle, clear, retype the same
-    // thing. `billedRef` survives the clear, so the second settle is a no-op.
-    const billed = new Set<string>();
-    const settle = (text: string, from: string, to: string): boolean => {
-      const key = billingKey(text, from, to);
-      if (billed.has(key)) return false;
-      billed.add(key);
-      return true;
-    };
+  it("re-entering the same words after a clear bills nothing more", async () => {
+    // The promise the Clear button was built on, walked through the real
+    // route: type a phrase, let it settle, tap Clear, type the same phrase
+    // again. The second time adopts the row the first one bought.
+    await settleQuickie("where is the pharmacy");
+    expect(db.monthRows(USER)).toHaveLength(1);
 
-    expect(settle("where is the pharmacy", "en", "es")).toBe(true);
-    // …tap Clear. Nothing above this line is forgotten.
-    expect(settle("where is the pharmacy", "en", "es")).toBe(false);
-    expect(billed.size).toBe(1);
+    clearTheBox();
+    await settleQuickie("where is the pharmacy");
+    expect(db.monthRows(USER)).toHaveLength(1);
   });
 
-  it("a genuinely new quickie after a clear bills exactly one fresh row", () => {
+  it("a genuinely new quickie after a clear bills exactly one fresh row", async () => {
     // The other half of the ask: clearing must not make the NEXT lookup free
-    // either. New words settle and count, once.
-    const billed = new Set<string>();
-    const settle = (text: string, from: string, to: string): boolean => {
-      const key = billingKey(text, from, to);
-      if (billed.has(key)) return false;
-      billed.add(key);
-      return true;
-    };
+    // either. New words settle and count, once — and the previews that got
+    // there still add up to the one row the phrase is worth.
+    await settleQuickie("where is the pharmacy");
+    clearTheBox();
+    await settleQuickie("how much is this");
+    expect(db.monthRows(USER)).toHaveLength(2);
 
-    expect(settle("where is the pharmacy", "en", "es")).toBe(true);
-    // …tap Clear, then look the next thing up.
-    expect(settle("how much is this", "en", "es")).toBe(true);
-    // Previews of that second phrase, arriving as it was typed, still add up
-    // to the one row it is worth.
-    expect(settle("how much is this", "en", "es")).toBe(false);
-    expect(billed.size).toBe(2);
+    clearTheBox();
+    await settleQuickie("how much is this");
+    expect(db.monthRows(USER)).toHaveLength(2);
+  });
+
+  it("bills a phrase again once it is no longer the same sitting", async () => {
+    // The window is not forever, and it should not be: six hours later this is
+    // somebody looking a word up again on a different day, and it is a lookup.
+    await settleQuickie("where is the pharmacy");
+    db.now += FAST_REPEAT_MS + 1000;
+    await settleQuickie("where is the pharmacy");
+    expect(db.monthRows(USER)).toHaveLength(2);
   });
 });

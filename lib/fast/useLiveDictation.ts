@@ -84,7 +84,7 @@
 // what that means — same division as the batch mic, and the reason a spoken
 // quickie still costs exactly one settled row (lib/fast/settle.ts).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authHeaders } from "@/lib/authClient";
+import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import {
   AZURE_TOKEN_REFRESH_MS,
   FAST_MAX_DICTATION_MS,
@@ -167,6 +167,14 @@ interface HeldToken {
   region: string;
   /** Wall-clock ms after which this token is no good. */
   expiresAt: number;
+  /**
+   * The ledger row this token reserved (lib/fast/speechMeter.ts).
+   *
+   * Held here rather than beside the session, because the thing that has to be
+   * settled is the RESERVATION, and the reservation belongs to the token: a
+   * press that never manages to open a socket still has to give it back.
+   */
+  sessionId: string | null;
 }
 
 type SpeechSdk = typeof import("microsoft-cognitiveservices-speech-sdk");
@@ -192,14 +200,24 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
   const [seconds, setSeconds] = useState(0);
   const [partial, setPartial] = useState("");
 
-  // Long-lived, deliberately: the SDK module and the token survive across
-  // dictations so the SECOND press opens a socket with no network in front of
-  // it. The first press pays one token mint (~a couple hundred ms), and the
-  // warm-up effect below usually pays even that before anybody presses.
+  // The SDK module is long-lived; the TOKEN is not, and that is the change
+  // #49's review asked for. A credential is minted per press and settled when
+  // the stream stops, so the reservation behind it (lib/fast/speechMeter.ts)
+  // matches one utterance instead of standing open for ten minutes.
   const sdkRef = useRef<SpeechSdk | null>(null);
   const tokenRef = useRef<HeldToken | null>(null);
   const warmRef = useRef<Promise<void> | null>(null);
 
+  // performance.now() at the press that opened the live session, or 0 when
+  // there is no reservation outstanding.
+  const streamedRef = useRef(0);
+  const endReasonRef = useRef<string>("user");
+  // The unmount effect has an empty dependency list on purpose (it must run
+  // once, at the end), so it reads the settler through a ref rather than
+  // capturing the first render's copy.
+  const settleRef = useRef<
+    (held: HeldToken | null, spokenMs: number, reason: string) => Promise<void>
+  >(async () => {});
   const sessionHandleRef = useRef<LiveSession | null>(null);
   const partialRef = useRef("");
   const pressedAtRef = useRef(0);
@@ -311,16 +329,69 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
     capture?.close();
   }, []);
 
-  /** Load the SDK and hold a valid token. Safe to call as often as you like. */
-  const warm = useCallback(async (): Promise<void> => {
-    if (!sdkRef.current) {
-      // Dynamically imported so the recogniser is not in the bundle every
-      // /fast visitor downloads to type a word. It arrives in the background
-      // after mount, or on the first press if that beats it.
-      sdkRef.current = await import("microsoft-cognitiveservices-speech-sdk");
+  /**
+   * Give a reservation back.
+   *
+   * `keepalive` because the commonest moment to call this is a stream ending
+   * as the tab goes away, and a fetch the browser cancels on unload is a
+   * reservation reaped at its full thirty seconds instead of billed for the
+   * four that were actually spoken. Failures are swallowed: the reaper is the
+   * backstop, and an error here must never become an error on screen.
+   */
+  const settleToken = useCallback(async (held: HeldToken | null, spokenMs: number, reason: string) => {
+    if (!held?.sessionId) return;
+    try {
+      await fetch("/api/fast/speech-settle", {
+        method: "POST",
+        headers: await jsonAuthHeaders(),
+        keepalive: true,
+        body: JSON.stringify({
+          sessionId: held.sessionId,
+          seconds: Math.max(0, Math.round(spokenMs / 1000)),
+          reason
+        })
+      });
+    } catch {
+      /* the reaper collects what never settles */
     }
+  }, []);
+
+  /**
+   * Load the SDK. No credential, no reservation, nothing spent.
+   *
+   * Safe on mount, which is the point: the recogniser is ~500KB and fetching
+   * it while somebody reads the pills makes the first press feel like the
+   * fifth. What must NOT happen on mount is the mint — see below.
+   */
+  const preload = useCallback(async (): Promise<void> => {
+    if (sdkRef.current) return;
+    // Dynamically imported so the recogniser is not in the bundle every
+    // /fast visitor downloads to type a word.
+    sdkRef.current = await import("microsoft-cognitiveservices-speech-sdk");
+  }, []);
+
+  /**
+   * Load the SDK and hold a valid token.
+   *
+   * Called from the PRESS, never from mount. #49 called this on mount and it
+   * was the review's finding: opening /fast bought a ten-minute Azure Speech
+   * JWT, so roughly nine minutes of recognition authority were issued to
+   * anybody who came to type a word and never touched the mic.
+   *
+   * A token that is still comfortably alive is reused — a second quickie
+   * thirty seconds after the first should not pay for a round trip — but it
+   * carries its own reservation, and `settleToken` closes that one before this
+   * mints the next. So the ledger holds one utterance at a time whichever way
+   * the token goes.
+   */
+  const warm = useCallback(async (): Promise<void> => {
+    await preload();
     const held = tokenRef.current;
     if (held && Date.now() < held.expiresAt - AZURE_TOKEN_REFRESH_MS) return;
+    if (held) {
+      tokenRef.current = null;
+      void settleToken(held, 0, "unknown");
+    }
     const res = await fetch("/api/fast/speech-token", {
       method: "POST",
       headers: await authHeaders()
@@ -330,14 +401,20 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       token?: string;
       region?: string;
       expiresInMs?: number;
+      sessionId?: string | null;
     };
     if (!payload.token || !payload.region) throw new Error("speech-token incomplete");
     tokenRef.current = {
       token: payload.token,
       region: payload.region,
-      expiresAt: Date.now() + (payload.expiresInMs ?? 0)
+      expiresAt: Date.now() + (payload.expiresInMs ?? 0),
+      sessionId: payload.sessionId ?? null
     };
-  }, []);
+  }, [preload, settleToken]);
+
+  useEffect(() => {
+    settleRef.current = settleToken;
+  }, [settleToken]);
 
   /** One warm-up at a time, and a failed one does not poison the next press. */
   const ensureWarm = useCallback((): Promise<void> => {
@@ -350,15 +427,17 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
     return warmRef.current;
   }, [warm]);
 
-  // Warm on mount, in the background, failures ignored. /fast is a
-  // founders-only screen and the mic is its headline; paying for the SDK and
-  // the token while somebody is still reading the pills makes the first press
-  // as fast as the fifth. Nothing here surfaces an error — if it fails, the
-  // press falls back to batch, which is what it would have done anyway.
+  // Preload the SDK on mount — and ONLY the SDK.
+  //
+  // #49 warmed the token here too, and that was the hole: a page view is not a
+  // press, and it was buying ten minutes of Azure recognition authority from
+  // anybody who opened /fast to type a word. Fetching the module costs
+  // bandwidth and nothing else, so it stays; the credential moved to the press
+  // (lib/fast/speechMeter.ts has the whole note).
   useEffect(() => {
-    if (!candidatesRef.current) return; // an unstreamable pair: spend nothing
-    void ensureWarm().catch(() => {});
-  }, [ensureWarm]);
+    if (!candidatesRef.current) return; // an unstreamable pair: load nothing
+    void preload().catch(() => {});
+  }, [preload]);
 
   /** Fold one recogniser event in: move the tail, hand finals to the caller. */
   const apply = useCallback((event: TranscriptEvent) => {
@@ -377,13 +456,25 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
     sessionHandleRef.current = null;
     activeRef.current = null;
     handle?.close();
+    // The reservation closes with the socket. Measured from the PRESS rather
+    // than from the socket opening, which over-reports by the handshake — the
+    // honest direction, since the SQL caps what a client claims but has no way
+    // to catch one that claims too little.
+    if (streamedRef.current) {
+      const held = tokenRef.current;
+      const spokenMs = performance.now() - streamedRef.current;
+      streamedRef.current = 0;
+      tokenRef.current = null; // one reservation per utterance; the next press mints
+      void settleToken(held, spokenMs, endReasonRef.current);
+      endReasonRef.current = "user";
+    }
     heardRef.current = false;
     partialRef.current = "";
     setPartial("");
     setSeconds(0);
     setLatched(false);
     setStreamState("idle");
-  }, [clearTimers, clearWatchdogs, closeCapture]);
+  }, [clearTimers, clearWatchdogs, closeCapture, settleToken]);
 
   /** Hand this press to the batch mic, carrying over a release it missed. */
   const fallBackToBatch = useCallback(() => {
@@ -679,6 +770,9 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
           })
       };
       activeRef.current = "stream";
+      // The reservation is now outstanding; teardown() closes it.
+      streamedRef.current = pressedAtRef.current || performance.now();
+      endReasonRef.current = "user";
 
       partialRef.current = "";
       setPartial("");
@@ -697,7 +791,10 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       // talking too long by throwing away what they said. setTimeout and not
       // the tick, because a throttled background tab stretches an interval
       // and this is a spend bound (streaming STT bills per audio-second).
-      capRef.current = window.setTimeout(() => stopStream(false), FAST_MAX_DICTATION_MS);
+      capRef.current = window.setTimeout(() => {
+        endReasonRef.current = "cap";
+        stopStream(false);
+      }, FAST_MAX_DICTATION_MS);
     },
     [apply, armWatchdog, clearWatchdogs, ensureWarm, stopStream, teardown]
   );
@@ -830,6 +927,16 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       // A microphone parked for a fallback that never happened.
       handOffRef.current?.getTracks().forEach((t) => t.stop());
       handOffRef.current = null;
+      // And the reservation. `keepalive` inside settleToken is what makes this
+      // survive the navigation that is unmounting us — without it the row is
+      // reaped later at its full thirty seconds for a sentence that was four.
+      if (streamedRef.current) {
+        const held = tokenRef.current;
+        const spokenMs = performance.now() - streamedRef.current;
+        streamedRef.current = 0;
+        tokenRef.current = null;
+        void settleRef.current(held, spokenMs, "lost");
+      }
       const handle = sessionHandleRef.current;
       sessionHandleRef.current = null;
       if (handle) {

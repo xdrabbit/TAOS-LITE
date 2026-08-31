@@ -23,7 +23,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { readFileSync } from "node:fs";
-import { billingKey } from "@/lib/fast/settle";
 import { appendDictated, stepTranscript } from "@/lib/fast/liveTranscript";
 import {
   MAX_SPEECH_CANDIDATES,
@@ -35,6 +34,7 @@ import {
 import {
   AZURE_TOKEN_REFRESH_MS,
   AZURE_TOKEN_TTL_MS,
+  FAST_MAX_DICTATION_MS,
   STREAM_CONNECT_MS
 } from "@/lib/fast/dictation";
 import { assessmentLocale } from "@/lib/tutor/pronunciation";
@@ -325,10 +325,16 @@ describe("POST /api/fast/speech-token — who may open a socket to Azure", () =>
     caller = { id: "u2", email: "xdrabbit@gmail.com" };
     const res = await mint("token");
     expect(res.status).toBe(200);
+    // sessionId is the ledger row this mint reserved (lib/fast/speechMeter.ts).
+    // Null here because these tests run without a service-role key, which is
+    // the unmetered-off-production path; what it must never be is absent from
+    // the contract, since the browser hands it back to settle.
     expect(await res.json()).toEqual({
       token: AZURE_JWT,
       region: "eastus",
-      expiresInMs: AZURE_TOKEN_TTL_MS
+      expiresInMs: AZURE_TOKEN_TTL_MS,
+      sessionId: null,
+      grantedSeconds: Math.ceil(FAST_MAX_DICTATION_MS / 1000)
     });
   });
 
@@ -523,7 +529,11 @@ describe("the batch mic is still there, and nothing announces it", () => {
     // and it ends the session the same way letting go does — punishing
     // somebody for talking too long by discarding what they said would be a
     // worse feature than no cap.
-    expect(hook).toContain("stopStream(false), FAST_MAX_DICTATION_MS");
+    expect(hook).toContain("stopStream(false);");
+    expect(hook).toContain("}, FAST_MAX_DICTATION_MS);");
+    // And the cap now says so in the ledger, so a session that ran to the
+    // ceiling is distinguishable from one somebody let go of.
+    expect(hook).toContain('endReasonRef.current = "cap"');
   });
 });
 
@@ -624,26 +634,28 @@ describe("the microphone belongs to the hook, not to the SDK", () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("one settled quickie still bills one row", () => {
-  it("bills by the settled text, which knows nothing about how it arrived", () => {
-    // The billing key is the text and the direction. Three streamed segments
-    // that end up as the same sentence as one typed one are the same key, and
-    // therefore the same single row against the free monthly allowance.
+  it("arrives at the box as the same text a keyboard would have produced", () => {
+    // What the meter sees is the input, and the input does not record how the
+    // words got there. Two streamed segments that add up to the same sentence
+    // as one typed phrase ARE that phrase by the time POST /api/fast is
+    // called — which is the whole reason dictating costs the same as typing.
     const spoken = ["where is", "the pharmacy"].reduce(
       (box, segment) => appendDictated(box, segment, 500),
       ""
     );
     expect(spoken).toBe("where is the pharmacy");
-    expect(billingKey(spoken, "en", "es")).toBe(billingKey("where is the pharmacy", "en", "es"));
   });
 
-  it("counts the settle, not the segments", () => {
-    // The SETTLE clock is what writes the row (lib/fast/settle.ts), and it
-    // waits on the input being quiet for 1500ms. Streaming makes `input`
-    // change more often on the way there; it does not add a clock, and the
-    // shell must not have grown one.
+  it("counts the burst, not the segments — and the shell counts nothing", () => {
+    // Billing moved to the server in #51. Streaming makes `input` change more
+    // often on the way to a settled phrase; it does not add a clock, and the
+    // shell must not have grown one — nor may it write a row of its own, which
+    // is the shape the old bug had.
     const shell = source("components/FastShell.tsx");
-    expect(shell).toContain("FAST_SETTLE_MS");
-    expect(shell.match(/saveTranslation\(/g)).toHaveLength(1);
+    expect(shell).not.toContain("saveTranslation");
+    expect(shell).not.toContain("FAST_SETTLE_MS");
+    // The one clock left here is the debounce, and it is about feel.
+    expect(shell).toContain("FAST_DEBOUNCE_MS");
   });
 
   it("keeps hypotheses out of the input entirely", () => {

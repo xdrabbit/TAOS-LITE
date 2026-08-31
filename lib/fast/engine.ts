@@ -1,13 +1,24 @@
 // Which engine translates one /fast quickie, and what it costs.
 //
-// ── The bake-off, in one paragraph ─────────────────────────────────────────
+// ── What is actually running ───────────────────────────────────────────────
+// gpt-4.1-nano, on every /fast translation in production. The Azure Translator
+// resource does not exist yet (AZURE_SPEECH_KEY is a different resource kind
+// and cannot open that API), so the Azure branch below has never executed
+// outside a test.
+//
+// ── The bake-off, and what it did and did not settle ───────────────────────
 // Measured 2026-08-30 on the same ten fixtures in EN→ES and EN→PL
 // (tests/live-fire/fast-engine.measure.ts; the full table is in
-// docs/fast-engine.md). Azure Translator is PRIMARY: a neural MT model gives
-// the plain, literal register for free, where an LLM has to be argued into it
-// by prompt — and the first version of that argument produced Polish with an
-// English "the" left standing in it. It is also roughly five times faster,
-// which is what an as-you-type box is actually buying.
+// docs/fast-engine.md). This file PREFERS Azure Translator on the theory that
+// a neural MT model gives the plain, literal register for free where an LLM
+// has to be argued into it by prompt — and the first version of that argument
+// produced Polish with an English "the" left standing in it.
+//
+// That preference is an intent, not a result. Azure's register was compared on
+// fixtures rather than through this route, and its LATENCY WAS NEVER MEASURED
+// on this account — the "five times faster" claim that used to sit here came
+// from Microsoft's documentation. Promoting Azure is pending the resource and
+// a re-run of the rigs.
 //
 // gpt-4.1-nano is the fallback, and a real one rather than a courtesy: with
 // the corrected fence it was the most literal of the three LLMs measured

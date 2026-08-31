@@ -128,7 +128,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       user: caller,
       sourceLanguage: pair[0],
       targetLanguage: pair[1],
-      text
+      text,
+      // `source === null` is auto: the caller named both languages but not
+      // which one they typed. It changes what counts as the same question
+      // being asked twice — see p_auto in the migration.
+      auto: source === null
     });
   } catch (error) {
     if (error instanceof FastMeterUnavailableError) {

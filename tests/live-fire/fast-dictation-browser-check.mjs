@@ -14,15 +14,24 @@
 // is actually FOR:
 //
 //   speak → the words appear IN THE INPUT → they are still editable →
-//   fixing one runs the ordinary settled-input flow → ONE billed row.
+//   fixing one runs the ordinary settled-input flow, exactly as typing does.
 //
-// Every step of that is a MediaRecorder, a React state update and two timers,
-// and a source-reading test can see none of it.
+// Every step of that is a MediaRecorder, a React state update and a timer, and
+// a source-reading test can see none of it.
+//
+// What this rig no longer measures is what a dictation COSTS. It used to count
+// the Supabase inserts leaving the page, because until #51 the page was what
+// billed; the meter is the server's now (lib/fast/meter.ts), so the browser
+// cannot see a billing decision and a rig reporting one would be reporting its
+// own driver. The negative is still worth having on the real bundle, and it is
+// the regression that matters — the page must write NO rows, ever — so that is
+// what is asserted. What the resulting requests cost is pinned against the
+// route in tests/fast-metering.test.ts.
 //
 // ── The two traps in writing this ──────────────────────────────────────────
 // 1. Count POSTs, not requests. supabase-js sends a CORS preflight OPTIONS to
-//    the same URL as the insert, so counting by URL reports one billed row as
-//    two — the trap the typing rig fell into first (see its header).
+//    the same URL, so counting by URL double-reports — the trap the typing rig
+//    fell into first (see its header). Still true of the /api/fast counts.
 // 2. Chrome's fake capture device is a tone generator, not silence, and the
 //    recording is real webm. That is the point: the audio path is genuinely
 //    exercised up to the moment the upload is intercepted, so a broken mime
@@ -222,7 +231,8 @@ const afterDictation = {
   box: await evaluate(`${box}.value`),
   listen: posts("/api/fast/listen"),
   translate: posts("/api/fast") - posts("/api/fast/listen"),
-  rows: posts("taos_lite_translations"),
+  rows: posts("taos_lite_translations"), // must stay 0: the page never bills
+  calls: posts("/api/fast"),
   shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`),
   // The browser shows a recording indicator until every track is stopped, so
   // a mic left open after a two-second quickie is a phone that looks bugged
@@ -248,7 +258,8 @@ await sleep(4000);
 const afterEdit = {
   box: await evaluate(`${box}.value`),
   translate: posts("/api/fast") - posts("/api/fast/listen"),
-  rows: posts("taos_lite_translations")
+  rows: posts("taos_lite_translations"),
+  calls: posts("/api/fast")
 };
 
 // ── The other half of the interaction: a TAP latches ──────────────────────
@@ -292,14 +303,16 @@ console.log(`  upload(s) to /api/fast/listen  ${afterDictation.listen}`);
 console.log(`  transcript landed in the box   ${JSON.stringify(afterDictation.box)}`);
 console.log(`  translation on screen ........  ${JSON.stringify(afterDictation.shown)}`);
 console.log(`  POST /api/fast ..............   ${afterDictation.translate}`);
-console.log(`  billed rows .................   ${afterDictation.rows}`);
+console.log(`  rows written by the page ....   ${afterDictation.rows}   (want 0)`);
+console.log(`  POST /api/fast ..............   ${afterDictation.calls}`);
 console.log(`  mic streams opened ..........   ${afterDictation.micStreams}`);
 console.log(`  every track ended afterwards .  ${afterDictation.micReleased}`);
 console.log(`  mic button back to idle ......  ${afterDictation.micButtonIdle}`);
 console.log(`\n  then " open" typed onto the transcript:`);
 console.log(`  box .........................   ${JSON.stringify(afterEdit.box)}`);
 console.log(`  POST /api/fast (cumulative) .   ${afterEdit.translate}`);
-console.log(`  billed rows (cumulative) ....   ${afterEdit.rows}`);
+console.log(`  rows written by the page ....   ${afterEdit.rows}   (want 0)`);
+console.log(`  POST /api/fast (cumulative) .   ${afterEdit.calls}`);
 console.log(`\n  then a TAP instead of a hold:`);
 console.log(`  still listening after release   ${latched.stillListening}`);
 console.log(`  what it says ................   ${JSON.stringify(latched.copy)}`);
@@ -313,12 +326,13 @@ const ok =
   afterDictation.box === HEARD &&
   afterDictation.shown.includes(TRANSLATED) &&
   afterDictation.translate >= 1 &&
-  afterDictation.rows === 1 &&
+  afterDictation.rows === 0 &&
   afterDictation.micStreams === 1 &&
   afterDictation.micReleased === true &&
   afterDictation.micButtonIdle === "false" &&
   afterEdit.box === `${HEARD} open` &&
-  afterEdit.rows === 2 && // the edited phrase is a second, honest lookup
+  afterEdit.rows === 0 && // the page bills nothing, however the words arrived
+  afterEdit.calls > afterDictation.calls && // the edit really does reach the route
   latched.stillListening === true && // a tap does not end the recording
   latched.copy === "tap to stop" && // and the screen says which mode it is in
   afterTap.listen === 2 &&

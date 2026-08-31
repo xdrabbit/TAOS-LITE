@@ -16,6 +16,22 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Proxy /fast's streamed audio if the mic ever ships past founders** — the
+  live mic talks straight from the phone to Azure, which is what puts partial
+  transcripts on screen while somebody is still speaking, and it is also why
+  the server can never count that audio directly. PR #49 bounds it properly (a
+  token per press, a reservation per utterance, a rolling hourly budget, a
+  reaper for sessions that vanish) but one fact survives all of it: Azure's
+  `issueToken` TTL is **ten minutes and not configurable**, and there is no
+  narrower scope to request. So somebody who lifts a live JWT out of their own
+  browser has ten minutes of recognition, and the server hears only the seconds
+  the client chooses to report. That is an acceptable trade for two founders
+  and a bounded budget; it is not obviously acceptable for a public screen.
+  The fix is to relay the websocket through a function and meter the bytes —
+  which costs the latency the feature exists to buy, so it wants measuring
+  before it is chosen. Decide this before `NEXT_PUBLIC_ENABLE_FAST=1`.
+  (added 2026-08-31)
+
 - **Resolve founder-ness on the server, not from the client bundle** — every
   founders gate in the app (`/fast`, `/call`, `/video`) ends at
   `isFounder(email)` in `lib/release.ts`, and that function reads
@@ -597,6 +613,12 @@ is not a prerequisite for using it.
   box but held *outside* `input` on purpose, so it cannot start a translation —
   to the thumb that is still "what is on the screen right now"
   (`lib/fast/clear.ts`).
+  → **And #51 quietly started charging for it, which this PR undoes.** Moving
+  billing server-side keyed it on a burst of previews, and two bursts of the
+  same words are two rows — so clear-and-retype began costing money it never
+  used to. The visit-long memory is back as a durable repeat window in
+  `public.fast_begin` (`FAST_REPEAT_MS`, six hours), and it is now pinned
+  against the real route rather than against a copy of the rule.
   → **It resets the machine, not the wallet.** The tap clears the input, the
   translation, the direction caption's detected/target pair, the engine line
   and any error; it orphans the in-flight request so a late reply cannot paint
@@ -667,17 +689,29 @@ is not a prerequisite for using it.
   There, speaking *is* the turn and a mis-heard word is a mis-heard turn. Here
   it is a draft, and fixing it costs a keystroke.
   → **No third clock.** The transcript is written into the input exactly as if
-  it had been typed, and the two clocks that were already there take it from
-  the top: 300 ms later it is translated, 1500 ms after that it counts. One
-  spoken quickie bills one row, the same as one typed one; fixing a mis-heard
-  word bills a second, which is honest — it is a different phrase, and the one
-  the person actually meant.
+  it had been typed, and the screen's own debounce takes it from there. What it
+  then COSTS is the server's answer, not this component's (#51) — so a spoken
+  quickie and a typed one are the same burst of previews and bill the same one
+  row, and fixing a mis-heard word bills a second, which is honest: it is a
+  different phrase, and the one the person actually meant.
   → **The mic spends against the same meter as the keyboard.** `POST
   /api/fast/listen` shares `/api/fast`'s founder gate *and* its
   `checkFastRate` buckets, so 60/min is 60 of anything rather than 60 of each.
   A mic with its own counter would have been a second way to spend on /fast
   that the /fast ceiling could not see — and it is the pricier of the two
   calls.
+  → **The STREAMING mic got its own ledger, after review found it had none.**
+  The live path opens a websocket from the phone straight to Azure, so no
+  server sees the audio; the first cut minted the ten-minute credential for
+  that **on mount** (a page view bought nine minutes of recognition authority)
+  and counted the audio nowhere, with the 30-second cap living in a browser
+  `setTimeout`. Now the token is minted on the first PRESS, reserves one
+  utterance against a rolling hourly budget, settles for what was actually
+  streamed, and is reaped at its full reservation if it never settles.
+  `lib/fast/speechMeter.ts` also writes down what that does **not** close:
+  Azure's token TTL is ten minutes and is not configurable, so a lifted JWT is
+  still worth ten minutes to whoever lifts it. Bounded and audited now; not
+  sealed.
   → **It transcribes and stops.** Reaching for `/api/translate` instead would
   have bought a `gpt-4.1` paraphrase per dictation, in the house register
   /fast deliberately does not use, only to throw it away. Instead that route's

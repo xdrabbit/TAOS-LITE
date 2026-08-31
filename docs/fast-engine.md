@@ -17,13 +17,30 @@ node tests/live-fire/fast-typing-browser-check.mjs                              
 
 ## The decision
 
-**Azure Translator is primary. `gpt-4.1-nano` with a literal prompt is the
-fallback, and a real one** — it runs whenever the Translator resource is not
-configured, and for the ten catalog languages Azure cannot translate at all.
+> **What is running today: `gpt-4.1-nano` with a literal prompt.** Every
+> `/fast` translation in production comes from it. The Azure Translator
+> resource **has not been created** — `AZURE_SPEECH_KEY` is a different
+> resource kind and cannot open that API — so the code path that prefers Azure
+> has never once executed outside a test. The badge on screen says which engine
+> answered, so nobody reads an LLM translation believing otherwise.
 
-Azure wins on **register and latency**. It loses on **cost**, by a lot, which
-was the surprise: for a short quickie an LLM is roughly an order of magnitude
-cheaper than a per-character MT service. Both numbers are below.
+`lib/fast/engine.ts` is *written* to prefer Azure Translator, and the reasoning
+for that preference is below. It is a **design intent, not a measurement**, and
+the honest state of it is worth stating plainly because the first version of
+this page did not:
+
+- Azure's register was compared on **fixtures**, not through the shipped route.
+- Azure's **latency was never measured at all** — the table below says
+  "not measured" in its own row, and the "roughly five times faster" figure
+  quoted elsewhere came from Microsoft's documentation, not from this account.
+- Azure's **cost is the one number that was measured**, and it came out
+  backwards from the assumption: for a short quickie an LLM is roughly an
+  order of magnitude *cheaper* than a per-character MT service.
+
+So the decision to promote Azure is **pending Tom creating the resource** and
+a re-run of the rigs above. Until then `gpt-4.1-nano` is not a fallback that
+happens to be running — it is the engine, and the measured one. The ten catalog
+languages Azure cannot translate at all stay on it permanently either way.
 
 ---
 

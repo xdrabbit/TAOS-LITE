@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { readFileSync } from "node:fs";
-import { billingKey, FAST_MAX_CHARS } from "@/lib/fast/settle";
+import { FAST_MAX_CHARS } from "@/lib/fast/settle";
 import { appendDictated } from "@/lib/fast/liveTranscript";
 import {
   dictationHintFor,
@@ -315,45 +315,42 @@ describe("transcript → input → translation, and what it bills", () => {
     expect(shell).toMatch(/const commitDictated[\s\S]*?setInput\(/);
   });
 
-  it("bills through the same settle clock as typing — the handler cannot bill", () => {
-    // saveTranslation is the row that IS the free monthly allowance
-    // (lib/supabase.ts, getMonthlyUsage). It is written by the SETTLE effect,
-    // over the settled text, and dictation must reach it only by putting words
-    // in the box — never by writing a row of its own, which would bill a
-    // transcript nobody had finished editing yet.
+  it("cannot bill at all — the mic only puts words in the box", () => {
+    // The allowance is a count of taos_lite_translations rows, and since #51
+    // the SERVER writes them, from POST /api/fast, off the gaps between
+    // requests (lib/fast/meter.ts). So the strong form of this test is
+    // available now and it is a flat negative: nothing on this path writes a
+    // row. Not the dictation handler, not the shell, not the listen route.
+    //
+    // That matters more here than it looks. A mic that billed on its own would
+    // charge for a transcript nobody had finished editing — and editing a
+    // mis-heard word is the entire reason the words land in a box instead of
+    // on screen.
     const shell = routeSource("components/FastShell.tsx");
-    const start = shell.indexOf("const receiveDictation");
-    const end = shell.indexOf("const candidates = useMemo");
-    expect(shell.slice(start, end)).not.toContain("saveTranslation");
-    expect(shell).toContain("saveTranslation"); // still billed, by the settle effect
-    // And the route itself has no idea the allowance exists.
+    expect(shell).not.toContain("saveTranslation");
     expect(routeSource("app/api/fast/listen/route.ts")).not.toContain("saveTranslation");
+    // The transcript reaches the meter the only way it can: as text in the
+    // input, which the debounce then sends to the route like any keystroke.
+    expect(shell).toContain("commitDictated");
   });
 
   it("bills a spoken quickie exactly as it bills a typed one — once", () => {
-    // The billing key is the settled text and the direction. It knows nothing
-    // about how the text arrived, which is the whole reason dictation needed
-    // no third clock: speak it, or type it, or speak it and then fix a word —
-    // the same phrase in the same direction is one row.
-    const spoken = billingKey("where is the pharmacy", "en", "es");
-    const typed = billingKey("where is the pharmacy", "en", "es");
-    expect(spoken).toBe(typed);
-
-    const billed = new Set<string>();
-    const bill = (text: string) => {
-      const key = billingKey(text, "en", "es");
-      if (billed.has(key)) return false;
-      billed.add(key);
-      return true;
-    };
-    expect(bill("where is the pharmacy")).toBe(true); // the transcript settles
-    expect(bill("where is the pharmacy")).toBe(false); // a re-render does not
-    expect(billed.size).toBe(1);
-
-    // Fixing a mis-heard word IS a second lookup, and honestly so: it is a
-    // different phrase, and it is the one the person actually meant.
-    expect(bill("where is the pharmacy open")).toBe(true);
-    expect(billed.size).toBe(2);
+    // The unit is a BURST of previews over the input (lib/fast/meter.ts), and
+    // the input knows nothing about how its text arrived. That is the whole
+    // reason dictation needed no third clock: speak it, or type it, or speak
+    // it and then fix a word — it is the same box, and the same server rule
+    // decides what it costs.
+    //
+    // What is pinned HERE is only the negative that makes that true: nothing
+    // on the dictation path counts anything. The arithmetic itself belongs to
+    // the route and is walked there (tests/fast-metering.test.ts), because a
+    // second copy of the billing rule in a mic test is a second rule.
+    const shell = routeSource("components/FastShell.tsx");
+    expect(shell).not.toContain("saveTranslation");
+    // `billedRef` survives only as prose explaining why it is gone, so the
+    // assertion is on the code shape rather than on the word.
+    expect(shell).not.toContain("billedRef.current");
+    expect(routeSource("app/api/fast/listen/route.ts")).not.toContain("saveTranslation");
   });
 
   it("appends to the box rather than replacing what is in it", () => {

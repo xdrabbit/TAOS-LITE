@@ -38,6 +38,23 @@ export const FAST_DEBOUNCE_MS = 300;
 export const FAST_SETTLE_MS = 1500;
 
 /**
+ * How long a question stays already-asked.
+ *
+ * Before the meter moved server-side, FastShell held a set of everything it
+ * had billed for the life of the visit, so deleting a word and putting it back
+ * — or clearing the box and retyping the same phrase — cost nothing more.
+ * That is a real promise about a screen people use standing up, a word at a
+ * time, and #49's Clear button was built on it.
+ *
+ * The burst rule alone loses it: two bursts of the same words are two bills.
+ * So `public.fast_begin` looks for a settled row with these exact words
+ * between these exact two languages inside this window, and ADOPTS it instead
+ * of buying another. Six hours is many times any visit and still bounds the
+ * lookup to something a month of rows cannot make slow.
+ */
+export const FAST_REPEAT_MS = 6 * 60 * 60 * 1000;
+
+/**
  * The longest quickie /fast will translate.
  *
  * A cap on both engines, and it is not the same kind of cap on each: Azure

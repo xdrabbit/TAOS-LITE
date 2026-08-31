@@ -306,12 +306,15 @@ export function FastShell(): JSX.Element {
 
   // ── Clear ───────────────────────────────────────────────────────────────
   // One tap back to the state the screen opens in. lib/fast/clear.ts carries
-  // the whole rule; the two lines here that are easy to add by accident:
+  // the whole rule; two things this handler must NOT do:
   //
-  //   `billedRef` is NOT touched. It is the memory of what has already counted
-  //   against the allowance this visit, and clearing the box is not a payment.
-  //   Resetting it would make clear-and-retype a second charge for the same
-  //   phrase — see lib/fast/settle.ts.
+  //   It must not reach for the meter. There is nothing here to reset — since
+  //   #51 the allowance is the server's, and clear-and-retype costs nothing
+  //   extra because `fast_begin` recognises a phrase it has already answered
+  //   (lib/fast/settle.ts, FAST_REPEAT_MS). This used to be a `billedRef` set
+  //   in this file, and the risk was a reset button that helpfully emptied it.
+  //   The risk is gone; the requirement is the same, and it is pinned against
+  //   the real route in tests/fast-clear.test.ts.
   //
   //   `pinned` is NOT touched either. The direction is a decision about the
   //   conversation, not about the phrase that was just cleared.

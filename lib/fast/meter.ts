@@ -50,7 +50,7 @@
 import { isFounder } from "@/lib/release";
 import type { Tier } from "@/lib/supabase";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
-import { FAST_SETTLE_MS } from "./settle";
+import { FAST_REPEAT_MS, FAST_SETTLE_MS } from "./settle";
 
 /** The one log prefix for this meter. Change it here, dashboards follow. */
 export const FAST_METER_LOG = "taos.fast.meter";
@@ -148,6 +148,8 @@ export interface BeginFastQuickieInput {
   sourceLanguage: string;
   targetLanguage: string;
   text: string;
+  /** True when the caller did not say which side the text is written in. */
+  auto?: boolean;
 }
 
 /**
@@ -183,7 +185,11 @@ export async function beginFastQuickie(
     p_unlimited: isFounder(input.user.email),
     p_window_ms: FAST_SETTLE_MS,
     p_minute_limit: perMinute,
-    p_hour_limit: perHour
+    p_hour_limit: perHour,
+    // The visit-long billed set, restored durably (lib/fast/settle.ts). A
+    // phrase asked again inside this window adopts the row it already bought.
+    p_repeat_ms: FAST_REPEAT_MS,
+    p_auto: Boolean(input.auto)
   });
 
   if (error) {

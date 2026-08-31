@@ -8,10 +8,10 @@
 // nothing and is safe to re-run.
 //
 // ── What only a browser can answer ─────────────────────────────────────────
-// tests/fast-clear.test.ts pins the shape: the predicate, the setters in the
-// handler, and the negative that matters (the handler never touches
-// `billedRef`). Three of the four requirements are out of its reach entirely,
-// because each is a claim about pixels or about time:
+// tests/fast-clear.test.ts pins the behaviour, including the money one — it
+// drives POST /api/fast, which is where billing actually lives since #51.
+// Three of the four requirements are out of ANY unit test's reach, because
+// each is a claim about pixels or about time:
 //
 //   1. NO LAYOUT SHIFT. The whole reason the slot is reserved rather than
 //      faded. A source-reading test can see the wrapper div; only a browser
@@ -20,11 +20,21 @@
 //   2. FOCUS RETURNS. Pressing a button focuses that button. Whether the caret
 //      comes back to the box afterwards is a real event ordering, and calling
 //      .click() from JS would fake a pass — so this drives real mouse events.
-//   3. THE METER, END TO END. The unit test walks a Set that stands in for
-//      `billedRef`. This walks the actual component: type, settle, clear,
-//      retype the SAME words — and counts the inserts that really left the
-//      page. That is the assertion that costs money when it is wrong, and it
-//      is the one that a stand-in cannot honestly make.
+//   3. THE BROWSER DOES NOT BILL. This one changed shape in #51 and the rig
+//      changed with it, rather than pretending to measure what it no longer
+//      can. The row used to be written HERE, by FastShell, so counting inserts
+//      that left the page was the money assertion. It is written by the server
+//      now — off the gaps between requests — so the browser cannot see a
+//      billing decision at all, and a rig that reported one would be reporting
+//      its own driver.
+//
+//      What the browser can still answer is the negative, and it is the one
+//      worth having on the real bundle: NOTHING on this page writes to
+//      taos_lite_translations, ever. Not on settle, not on clear, not on the
+//      mic. That is the regression the old shape would reintroduce, and it is
+//      checked below against a live page rather than against source text.
+//      What the requests then COST is pinned in tests/fast-clear.test.ts,
+//      against the route that decides it.
 //
 // Like the mic rig beside it, this renders FastShell from a temporary page so
 // the founder gate is out of the way — the gate is proved against the route in
@@ -155,7 +165,7 @@ await send("Browser.grantPermissions", {
   permissions: ["audioCapture"]
 });
 
-/** Billed rows: POSTs, because supabase-js sends a preflight to the same URL. */
+/** POSTs only, because supabase-js sends a preflight to the same URL. */
 const posts = (fragment) =>
   events.filter(
     (e) =>
@@ -163,7 +173,15 @@ const posts = (fragment) =>
       e.params.request.method === "POST" &&
       e.params.request.url.includes(fragment)
   ).length;
+/**
+ * Writes to the billing table from the PAGE. Must stay 0 forever: the meter is
+ * the server's (lib/fast/meter.ts), and a browser that writes a row is a
+ * browser that can decline to.
+ */
 const rows = () => posts("taos_lite_translations");
+
+/** Requests the server's burst rule actually consumes. */
+const fastCalls = () => posts("/api/fast");
 
 const evaluate = async (expression) => {
   const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
@@ -243,7 +261,8 @@ const typed = {
   micRect: await rectOf(MIC),
   shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`),
   engineLine: await evaluate(`document.body.innerText.includes('Azure Translator')`),
-  rows: rows()
+  rows: rows(),
+  calls: fastCalls()
 };
 
 // ── 3. Tap it ────────────────────────────────────────────────────────────
@@ -262,19 +281,20 @@ const cleared = {
   engineLineGone: await evaluate(`!document.body.innerText.includes('Azure Translator')`),
   // The claim that .click() would have faked.
   focused: await evaluate(`document.activeElement === ${BOX}`),
-  rows: rows()
+  rows: rows(),
+  calls: fastCalls()
 };
 
 // ── 4. Retype the SAME words — this must NOT bill again ──────────────────
 await type(FIRST);
 await sleep(SETTLED);
-const retyped = { rows: rows(), shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`) };
+const retyped = { rows: rows(), calls: fastCalls(), shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`) };
 
 // ── 5. Clear, then a genuinely NEW quickie — this MUST bill once ─────────
 await tapClear();
 await type(SECOND);
 await sleep(SETTLED);
-const fresh = { rows: rows(), shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`) };
+const fresh = { rows: rows(), calls: fastCalls(), shown: await evaluate(`document.querySelector('section p')?.textContent ?? ''`) };
 
 // ── 6. Clear, then speak — the flow Tom described ────────────────────────
 await tapClear();
@@ -314,11 +334,17 @@ console.log(`  empty-state prompt back ........... ${cleared.placeholderBack}`);
 console.log(`  engine caption gone ............... ${cleared.engineLineGone}`);
 console.log(`  clear button gone ................. ${!cleared.clear}`);
 console.log(`  focus returned to the box ......... ${cleared.focused}`);
-console.log(`\n  BILLED ROWS`);
-console.log(`  after one settled quickie ......... ${typed.rows}   (want 1)`);
-console.log(`  after the clear ................... ${cleared.rows}   (want 1 — a clear is not a purchase)`);
-console.log(`  after retyping the SAME words ..... ${retyped.rows}   (want 1 — not billed twice)`);
-console.log(`  after clear + a NEW quickie ....... ${fresh.rows}   (want 2 — a fresh settled translation)`);
+console.log(`\n  THE PAGE NEVER BILLS  (rows written from the browser)`);
+console.log(`  after one settled quickie ......... ${typed.rows}   (want 0)`);
+console.log(`  after the clear ................... ${cleared.rows}   (want 0)`);
+console.log(`  after retyping the SAME words ..... ${retyped.rows}   (want 0)`);
+console.log(`  after clear + a NEW quickie ....... ${fresh.rows}   (want 0)`);
+console.log(`\n  what the server DOES see  (POST /api/fast)`);
+console.log(`  after one settled quickie ......... ${typed.calls}`);
+console.log(`  after retyping the SAME words ..... ${retyped.calls}`);
+console.log(`  after clear + a NEW quickie ....... ${fresh.calls}`);
+console.log(`  (what those cost is pinned in tests/fast-clear.test.ts,`);
+console.log(`   against the route that decides it)`);
 console.log(`\n  then the mic, held 1.5s:`);
 console.log(`  transcript in the box ............. ${JSON.stringify(spoke.box)}`);
 console.log(`  clear offered on it ............... ${spoke.clear}`);
@@ -340,11 +366,15 @@ const ok =
   cleared.placeholderBack === true &&
   cleared.engineLineGone === true &&
   cleared.focused === true &&
-  typed.rows === 1 &&
-  cleared.rows === 1 &&
-  retyped.rows === 1 && // ── the money claim: no double-count ──
-  retyped.shown.includes(FIRST_ES) && // and it still SHOWS, it just does not re-bill
-  fresh.rows === 2 && // ── and a new entry still meters as one ──
+  // ── the money claim, in the only form a browser can still make it ──
+  typed.rows === 0 &&
+  cleared.rows === 0 &&
+  retyped.rows === 0 &&
+  fresh.rows === 0 &&
+  // and the screen still WORKS: a retyped phrase shows its answer again, it
+  // simply is not the page's business whether that costs anything.
+  retyped.shown.includes(FIRST_ES) &&
+  fresh.calls > retyped.calls && // a new phrase really does reach the route
   fresh.shown.includes(SECOND_ES) &&
   spoke.box === HEARD &&
   spoke.clear === true &&
