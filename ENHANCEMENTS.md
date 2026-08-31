@@ -49,17 +49,13 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   real route and in headless Chrome, which is the same gap the Crawl scoring
   had. Answer that before `NEXT_PUBLIC_ENABLE_FAST=1`. (added 2026-08-30)
 
-- The header slides sideways on every phone — measured 2026-08-30 while
-  swapping the menu icon (PR #TBD): the signed-in header's content is 406 px
-  wide at 390, 360 and 320 px viewports, so `document.scrollWidth` exceeds the
-  viewport and the whole page can be dragged horizontally. Pre-existing, not
-  new. `Live` + `Together ▾` + `Translate` + share + the More button no longer
-  fit, which is the same overflow the Together menu was created to fix on
-  8/19 — it has simply grown back. Options, cheapest first: fold `Translate`
-  into the More menu (it is a screen, and the menu already holds screens);
-  drop the header to icons-only below ~380 px; or let the row wrap. Worth
-  doing before the wave, since it is a worse first impression than the X was.
-  (added 2026-08-30)
+- **Put Call back under Together ▾ when /call goes public** — it is a
+  top-level pill as of 8/31 (PR #53) because Tom and Liz use it daily and it
+  was two touches deep. That reasoning is founder-shaped: it spends a phone
+  width on a screen most customers will not open daily, and Together ▾ is
+  where a public Call belongs, beside Chat and Table. Do it in the same change
+  that sets `NEXT_PUBLIC_ENABLE_CALL=1` — the pill and the menu entry are both
+  guarded by `callVisible`, so it is a move, not a rewrite. (added 2026-08-31)
 
 - Chat delete, one real tap — the hygiene pass (PR #37) shipped
   "either partner can burn the chat" and proved the semantics against the
@@ -453,6 +449,72 @@ translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
 ## Shipped
+
+- **The header that ate touches, 2026-08-31** — PR #53. Tom, on the Droid:
+  reaching Call through Together ▾ took two or three touches, reliably. The
+  natural suspect was an event race — an outside-click handler closing the
+  menu before the item's `onClick` landed — and it was not that. Both menus
+  already closed on an outside `pointerdown` with a proper containment check,
+  no `stopPropagation` anywhere, and a browser driving real touch events
+  walked both of them open-then-select in exactly two touches whenever the
+  controls were reachable. They were not reachable. The bug was a width:
+
+  | viewport | nav content ends at | "More · Más" off-screen by | `elementFromPoint` at its centre |
+  |---|---|---|---|
+  | 390 px | 405.9 px | 15.9 px | nothing |
+  | 360 px | 405.9 px | 45.9 px | nothing |
+  | 320 px | 405.9 px | 85.9 px | nothing |
+
+  This is the overflow measured on 8/30 and listed here as "the header slides
+  sideways on every phone", and it turned out to be the whole field report.
+  Two tap-eaters fall out of that one number:
+
+  1. **The grid trigger was laid out past the right edge of the glass** — not
+     clipped, off-screen. Only a sliver of it was ever touchable, so aiming at
+     the middle of the button hit nothing at all.
+  2. **`document.scrollWidth` (406) exceeded the viewport**, which makes the
+     page horizontally pannable — the meta viewport sets `initial-scale=1`
+     with no `maximum-scale`, so nothing pins it. On a pannable page a touch
+     that drifts sideways is a **pan**, and the browser dispatches no click
+     whatsoever. Measured on the Together pill: 12 px of drift still clicks,
+     20 px scrolls the page 7 px and fires nothing, 40 px scrolls it 31 px.
+     A thumb reaching across a phone drifts further than 20 px.
+
+  So the row ate the first touch, slid out from under the second, and landed
+  the third. It read as a race and was geometry — which is why every
+  source-reading test passed while the screen was unusable.
+
+  The fix is structural rather than a tuned width, because this row has
+  already grown back once: the Together menu was created on 8/19 to fix this
+  same overflow, and by 8/30 it measured 406 px again. The header is now two
+  deliberate rows — wordmark plus Share and More on top, the screen pills
+  below, right-aligned and `flex-wrap`. A wrapping row can put a pill on a
+  second line; it cannot put one past the edge, and it cannot make the
+  document wider than the viewport. Measured after: 375/345/305 px of content
+  at 390/360/320, every control on-screen and hit-testable at its centre.
+
+  Splitting the header into two rows introduced a *new* tap-eater on the way,
+  and the rig caught it: a dropdown anchored to its own trigger drops onto
+  whatever is beneath that trigger, and beneath the More button is now the
+  pill row — so an open grid menu covered Live / Call / Together ▾, and a
+  touch aimed at a pill landed on a menu item instead. Not a dead tap, a
+  **wrong** one. Both menus are anchored to the header now, so where a menu
+  opens no longer depends on where its trigger happened to wrap to.
+
+  Also here: the two icon triggers went from 32×32 to 44×44 (they are the
+  only controls with no label to aim at), every menu item to a 44 px minimum
+  height, and **Call is a top-level pill for founders** — one touch instead of
+  two, still behind the same `callVisibleTo()` the page gate and
+  `POST /api/call/realtime` ask, and removed from the Together menu so there
+  is exactly one Call entry. A stranger's header is unchanged apart from the
+  layout.
+
+  `tests/live-fire/menu-tap-browser-check.mjs` is the rig that measured all of
+  it — real touch events, three phone widths, both menus, founder and
+  customer — and is the thing to re-run when this header changes; it needs
+  Chrome, so CI cannot. `tests/nav-tap-targets.test.ts` pins in CI what CI can
+  read: the wrapping, the anchoring, the 44 px floors, the containment checks,
+  and Call's single guarded entry.
 
 - **The /call relay, and two silences around it, 2026-08-31** — PR #52.
   Tom and Liz, both founders, both seeing /call, the call initiating and
