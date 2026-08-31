@@ -8,11 +8,10 @@ import {
   buildAutoDetectInstructions,
   buildInstructions,
   CANTONESE_STT_HINT,
-  isUnusableAudioError,
   parseTone,
-  STT_NO_GUESS_RULE,
   type Tone
 } from "@/lib/translate/prompts";
+import { transcribeAudio } from "@/lib/translate/transcribe";
 import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
@@ -25,8 +24,8 @@ export const maxDuration = 300;
 // full 300s until Vercel killed it — the phone's fetch died with Safari's
 // opaque "Load failed". Cap each upstream call well under maxDuration so a
 // stall becomes a fast, retryable JSON error instead of a dead socket.
-// Transcription gets longer: it re-uploads up to 5 minutes of audio.
-const TRANSCRIBE_TIMEOUT_MS = 120000;
+// Transcription gets longer (it re-uploads up to 5 minutes of audio) and its
+// cap now lives with the transcriber, in lib/translate/transcribe.ts.
 const PARAPHRASE_TIMEOUT_MS = 60000;
 
 function isTimeout(e: unknown): boolean {
@@ -34,55 +33,10 @@ function isTimeout(e: unknown): boolean {
 }
 
 // parseTone / buildInstructions / isUnusableAudioError live in
-// lib/translate/prompts.ts so their behavior is unit-tested.
-
-async function transcribe(
-  apiKey: string,
-  file: File,
-  sourceLabel?: string,
-  extraHint?: string
-): Promise<string> {
-  const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
-  const form = new FormData();
-  form.append("file", file, file.name || "audio.webm");
-  form.append("model", model);
-  // A language hint sharpens accuracy; omit it in auto-detect mode so the model
-  // is free to recognize whichever language was spoken. Cantonese always gets
-  // the colloquial-written-form hint or the transcript comes back as Standard
-  // Written Chinese and reads as Mandarin. STT_NO_GUESS_RULE applies to every
-  // turn: audio dropouts must become gaps, never invented words (Liz, 7/27:
-  // "montar bicicleta" with a signal dip came back "montar un caballo").
-  const base = sourceLabel
-    ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
-    : `Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`;
-  const hint = extraHint ?? (sourceLabel === "Cantonese" ? CANTONESE_STT_HINT : "");
-  form.append("prompt", hint ? `${base} ${hint}` : base);
-
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-    cache: "no-store",
-    signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS)
-  });
-
-  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!res.ok) {
-    // A micro-clip (rapid double-tap) or a mangled upload means "no usable
-    // speech", not a server failure — return "" so the caller responds with
-    // its gentle bilingual retry message instead of raw provider JSON.
-    const err = payload?.error as Record<string, unknown> | undefined;
-    const msg = typeof err?.message === "string" ? err.message : "";
-    if (isUnusableAudioError(msg)) {
-      return "";
-    }
-    const detail =
-      payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
-    throw new Error(`Transcription failed: ${detail}`);
-  }
-  const text = typeof payload?.text === "string" ? payload.text.trim() : "";
-  return text;
-}
+// lib/translate/prompts.ts so their behavior is unit-tested, and the
+// transcriber itself now lives in lib/translate/transcribe.ts — unchanged,
+// but shared, so /fast's mic gets this route's STT fences rather than a
+// fourth hand-rolled copy of the same fetch without them.
 
 async function paraphrase(
   apiKey: string,
@@ -264,7 +218,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // back as Standard Written Chinese and detection can't tell them apart.
       const autoHint =
         pairA === "yue" || pairB === "yue" ? CANTONESE_STT_HINT : undefined;
-      const original = await transcribe(apiKey, audio, undefined, autoHint);
+      const original = await transcribeAudio(apiKey, audio, { extraHint: autoHint });
       if (!original) {
         return NextResponse.json(
           { error: "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo." },
@@ -301,7 +255,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const sourceLabel = getLanguageLabel(sourceLanguage);
     const targetLabel = getLanguageLabel(targetLanguage);
 
-    const original = await transcribe(apiKey, audio, sourceLabel);
+    const original = await transcribeAudio(apiKey, audio, { sourceLabel });
     if (!original) {
       return NextResponse.json(
         { error: "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo." },

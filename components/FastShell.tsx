@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { languageFlag, languageNative, type LanguageCode } from "@/lib/languages/catalog";
-import { jsonAuthHeaders } from "@/lib/authClient";
+import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
+import { FAST_MAX_DICTATION_MS } from "@/lib/fast/dictation";
+import { useDictation } from "@/lib/fast/useDictation";
 
 // ── /fast: the quickie ─────────────────────────────────────────────────────
 // One box. You type, and the translation is already there. No record button,
@@ -35,8 +37,23 @@ import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
 // What is left of the money on this screen is DISPLAY. The route may answer
 // 402 when the month is spent, and that message is rendered like any other.
 //
+// ── The mic ────────────────────────────────────────────────────────────────
+// The keyboard is still the primary way in. The mic is the sausage-finger
+// lane onto the same box: hold it or tap it, and the words land IN the input
+// as editable text rather than as an answer. That is the whole difference
+// between this and the home screen — there, speaking IS the turn, and a
+// mis-heard word is a mis-heard turn. Here it is a draft you can fix before it
+// costs anything, which is what /fast is for.
+//
+// So dictation adds no third clock. The transcript is written into `input`
+// exactly as if it had been typed, and the two clocks above take it from
+// there: 300ms later it is translated, 1500ms after that it counts. One
+// spoken quickie bills one row, the same as one typed quickie.
+//
 // The screen is minimal on purpose. Its whole virtue is speed, and every
 // control added here is a thing between somebody and the word they wanted.
+// The mic earns its place by being the one control that makes the screen
+// usable while walking.
 
 /** Which way round a turn runs, when the writer has pinned it. */
 type Pinned = "auto" | "mine" | "theirs";
@@ -145,6 +162,72 @@ export function FastShell(): JSX.Element {
     const id = window.setTimeout(() => void translate(text, explicitSource, seq), FAST_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [input, explicitSource, translate]);
+
+  // ── The mic ─────────────────────────────────────────────────────────────
+  // Audio in, transcript into the box. Nothing here translates: setting
+  // `input` is exactly what a keystroke does, and the debounce above does the
+  // rest — which is why a spoken quickie and a typed one cost the same one
+  // row, and why the words are sitting in an editable box when they arrive.
+  // (The billing itself is the server's now — lib/fast/meter.ts. A spoken
+  // quickie is the same burst of previews a typed one is, so it needs no
+  // special case there either.)
+  const receiveDictation = useCallback(
+    async (blob: Blob, mimeType: string) => {
+      const form = new FormData();
+      // A filename with an extension the container matches: the transcriber
+      // sniffs it, and a webm blob called .bin comes back "unsupported".
+      const ext = mimeType.includes("mp4") || mimeType.includes("aac") ? "mp4" : "webm";
+      form.append("audio", new File([blob], `quickie.${ext}`, { type: mimeType }));
+      // Only so the transcriber knows whether Cantonese is possible
+      // (lib/fast/dictation.ts). It is NOT a source hint — the box does not
+      // know which of the two somebody is about to speak, which is the same
+      // reason the direction row says Auto.
+      form.append("pairA", mine);
+      form.append("pairB", theirs);
+      try {
+        // authHeaders, not jsonAuthHeaders: the browser must set its own
+        // multipart boundary, and a Content-Type here corrupts the body.
+        const res = await fetch("/api/fast/listen", {
+          method: "POST",
+          headers: await authHeaders(),
+          body: form
+        });
+        const payload = (await res.json().catch(() => ({}))) as {
+          text?: string;
+          error?: string;
+        };
+        if (!res.ok) throw new Error(payload.error || "Could not hear that.");
+        const heard = (payload.text ?? "").trim();
+        if (!heard) throw new Error("Nothing was heard — try again.");
+        // APPENDED, never replacing. Somebody who typed half a phrase and then
+        // said the rest of it has not asked for the typed half to be thrown
+        // away, and there is no undo on this screen.
+        setInput((current) => {
+          const joined = current.trim() ? `${current.trim()} ${heard}` : heard;
+          return joined.slice(0, FAST_MAX_CHARS);
+        });
+        setError(null);
+        // Put the caret back in the box. The point of dictating into a text
+        // field rather than at a translator is that the next thing you might
+        // do is fix a word.
+        window.requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.focus();
+          el.setSelectionRange(el.value.length, el.value.length);
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not hear that.");
+      }
+    },
+    [mine, theirs]
+  );
+
+  const dictation = useDictation({
+    onAudio: receiveDictation,
+    onError: setError,
+    onStart: useCallback(() => setError(null), [])
+  });
 
   const copy = useCallback(async () => {
     if (!translation) return;
@@ -289,19 +372,98 @@ export function FastShell(): JSX.Element {
           </div>
         </div>
 
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value.slice(0, FAST_MAX_CHARS))}
-          maxLength={FAST_MAX_CHARS}
-          autoFocus
-          rows={3}
-          placeholder="Type a word or a phrase…"
-          autoCapitalize="sentences"
-          autoCorrect="on"
-          spellCheck
-          className="w-full resize-none rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4 text-lg leading-relaxed text-amber-50 caret-amber-300 outline-none placeholder:text-amber-100/25"
-        />
+        {/* The box, and the mic beside it. Beside and not below: they are two
+            ways into the SAME field, and a control that sits under the answer
+            reads as a control over the answer. The keyboard is still primary —
+            the textarea takes the width and the autofocus, and the mic is a
+            thumb-sized target next to it. */}
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value.slice(0, FAST_MAX_CHARS))}
+            maxLength={FAST_MAX_CHARS}
+            autoFocus
+            rows={3}
+            placeholder="Type a word or a phrase…"
+            autoCapitalize="sentences"
+            autoCorrect="on"
+            spellCheck
+            className="min-w-0 flex-1 resize-none rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4 text-lg leading-relaxed text-amber-50 caret-amber-300 outline-none placeholder:text-amber-100/25"
+          />
+          {/* Pointer events, not onClick: the button has to know the
+              DIFFERENCE between a hold and a tap, and a click only ever
+              reports that both happened. `touch-none` keeps a held finger
+              from scrolling the page out from under itself, and the pointer
+              capture keeps the release on this button even if the finger
+              drifts off it mid-sentence — a walking thumb always drifts. */}
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              dictation.press();
+            }}
+            onPointerUp={() => dictation.release()}
+            onPointerCancel={() => dictation.release()}
+            disabled={dictation.state === "working"}
+            aria-label="Dictar · Dictate"
+            title="Dictar · Dictate"
+            aria-pressed={dictation.state === "recording"}
+            className={`flex h-14 w-14 shrink-0 touch-none select-none items-center justify-center rounded-full border transition active:scale-95 disabled:opacity-60 ${
+              dictation.state === "recording"
+                ? "animate-pulse border-amber-300 bg-amber-400 text-stone-950 shadow-[0_0_28px_rgba(251,191,36,0.55)]"
+                : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+            }`}
+          >
+            {dictation.state === "working" ? (
+              <span className="text-[11px] font-semibold tracking-tight">···</span>
+            ) : (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-6 w-6"
+              >
+                <path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z" />
+                <path d="M5 10v1a7 7 0 0014 0v-1M12 19v3M8.5 22h7" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        {/* Only while it is listening. A permanent hint under the box would be
+            one more thing between somebody and the word they wanted. */}
+        {dictation.state === "recording" ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center justify-between gap-2 rounded-2xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-sm text-amber-100/80"
+          >
+            <span className="truncate">
+              {dictation.latched ? "Listening — tap to stop" : "Listening — let go when done"}
+              <span className="ml-2 tabular-nums text-amber-100/50">
+                {Math.max(0, Math.round(FAST_MAX_DICTATION_MS / 1000) - dictation.seconds)}s
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={dictation.cancel}
+              className="shrink-0 rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-amber-100/60"
+            >
+              Cancel · Cancelar
+            </button>
+          </div>
+        ) : null}
+
+        {dictation.state === "working" ? (
+          <p role="status" aria-live="polite" className="text-center text-sm text-amber-100/60">
+            Writing it down… · Escribiéndolo…
+          </p>
+        ) : null}
 
         {/* The answer. It REPLACES in place rather than clearing first: the
             box going blank between keystrokes is what makes an as-you-type
