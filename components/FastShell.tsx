@@ -3,16 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { languageFlag, languageNative, type LanguageCode } from "@/lib/languages/catalog";
 import { jsonAuthHeaders } from "@/lib/authClient";
-import { saveTranslation } from "@/lib/supabase";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
-import {
-  billingKey,
-  FAST_DEBOUNCE_MS,
-  FAST_MAX_CHARS,
-  FAST_SETTLE_MS
-} from "@/lib/fast/settle";
+import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
 
 // ── /fast: the quickie ─────────────────────────────────────────────────────
 // One box. You type, and the translation is already there. No record button,
@@ -24,15 +18,22 @@ import {
 // trying to remember how to say "receipt". lib/fast/prompt.ts carries that
 // register and says why it is deliberately the opposite of the house voice.
 //
-// ── The two clocks ─────────────────────────────────────────────────────────
-// Typing drives two timers, and they are different lengths on purpose
-// (lib/fast/settle.ts has the full note):
+// ── One clock here, one on the server ──────────────────────────────────────
+// This component keeps the 300ms debounce, which is about FEEL: short enough
+// that the translation appears to keep up, long enough not to fire a request
+// per letter.
 //
-//   300ms  — a pause this long sends a request. This is FEEL.
-//   1500ms — a pause this long means the sentence is finished, and THAT is
-//            what counts against the monthly allowance. Everything rendered
-//            in between is a preview of a sentence still being written, and
-//            billing previews would spend a free month on one paragraph.
+// It no longer keeps the other one. Until 8/31 a second timer here decided
+// what a translation COST — 1500ms of stillness, then a row written straight
+// to Supabase from the browser. That was the meter, and a meter in the
+// browser is not a meter: a curl with a valid session never ran it, a tab
+// closed a fraction early never ran it, and the write was wrapped in a
+// `.catch(() => {})` besides. It now happens inside POST /api/fast, before
+// the engine is called, off the gaps between requests — which is the same
+// pause, measured where it cannot be skipped. lib/fast/meter.ts has the note.
+//
+// What is left of the money on this screen is DISPLAY. The route may answer
+// 402 when the month is spent, and that message is rendered like any other.
 //
 // The screen is minimal on purpose. Its whole virtue is speed, and every
 // control added here is a thing between somebody and the word they wanted.
@@ -74,9 +75,6 @@ export function FastShell(): JSX.Element {
   // early request lands last and the box shows the translation of a sentence
   // three words ago.
   const seqRef = useRef(0);
-  // What has already been counted against the allowance, so a settle that
-  // fires twice over the same words does not bill twice (lib/fast/settle.ts).
-  const billedRef = useRef<Set<string>>(new Set());
 
   const explicitSource: LanguageCode | null =
     pinned === "auto" ? null : pinned === "mine" ? mine : theirs;
@@ -147,37 +145,6 @@ export function FastShell(): JSX.Element {
     const id = window.setTimeout(() => void translate(text, explicitSource, seq), FAST_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [input, explicitSource, translate]);
-
-  // ── Clock two: the 1500ms settle that BILLS ─────────────────────────────
-  // Deliberately not folded into the effect above. It waits on the typing AND
-  // on a translation for those exact words having arrived, which is why it
-  // depends on `translation` as well as `input`: a settle that fired while the
-  // box still held the previous answer would bill for a preview.
-  useEffect(() => {
-    const text = input.trim();
-    if (!text || !translation || !detected || !target) return;
-    const id = window.setTimeout(() => {
-      const key = billingKey(text, detected, target);
-      if (billedRef.current.has(key)) return;
-      billedRef.current.add(key);
-      // The row IS the meter: the free monthly allowance is a count of rows in
-      // this table (lib/supabase.ts, getMonthlyUsage), which is the same thing
-      // the home screen writes when a spoken turn finishes. Writing it here is
-      // what wires /fast into the normal allowance rather than giving it a
-      // private counter that would have to be reconciled later. It doubles as
-      // the History entry, which is the other half of "a settled quickie is a
-      // thing you meant to look up".
-      void saveTranslation({
-        source_lang: detected,
-        target_lang: target,
-        tone: "literal",
-        original_text: text,
-        translation_text: translation,
-        engine: engine ?? "fast"
-      }).catch(() => {});
-    }, FAST_SETTLE_MS);
-    return () => window.clearTimeout(id);
-  }, [input, translation, detected, target, engine]);
 
   const copy = useCallback(async () => {
     if (!translation) return;

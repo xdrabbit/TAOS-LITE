@@ -4,6 +4,13 @@ import { guardSpend } from "@/lib/spendGuard";
 import { resolveTextLanguages, SAME_LANGUAGE } from "@/lib/translate/textRequest";
 import { FastEngineError, fastTranslate } from "@/lib/fast/engine";
 import { checkFastRate } from "@/lib/fast/rateLimit";
+import {
+  abandonFastQuickie,
+  beginFastQuickie,
+  fastRefusal,
+  FastMeterUnavailableError,
+  recordFastQuickie
+} from "@/lib/fast/meter";
 import { FAST_MAX_CHARS } from "@/lib/fast/settle";
 
 export const runtime = "nodejs";
@@ -28,15 +35,25 @@ export const maxDuration = 15;
 // somebody is still typing, so "many calls a minute from one account" is the
 // NORMAL shape here and there is no burst that looks wrong from the outside.
 // The client debounces at 300ms, but a debounce is a courtesy the browser
-// extends. lib/fast/rateLimit.ts is the ceiling that does not depend on it.
+// extends. Two ceilings do not depend on it: lib/fast/rateLimit.ts, an
+// in-process window that refuses a storm for free before the body is even
+// read, and the DURABLE counter inside beginFastQuickie, which is shared
+// across Vercel instances and survives a cold start. The first is an
+// optimisation; the second is the actual bound.
 //
-// ── What this route does NOT do ────────────────────────────────────────────
-// It does not meter the free monthly allowance. That allowance is counted in
-// rows of taos_lite_translations (lib/supabase.ts, getMonthlyUsage), and the
-// row is written by the client when the input SETTLES — one finished thought,
-// not one keystroke. lib/fast/settle.ts holds that rule and says why it
-// cannot live here: this route sees each preview individually and has no way
-// to know which one was the last.
+// ── What this route DOES meter, as of 8/31 ─────────────────────────────────
+// The free monthly allowance, server-side, before the engine is called.
+//
+// #46 shipped this route not metering it at all, and said why: it "sees each
+// preview individually and has no way to know which one was the last", so the
+// bill was written by the browser 1500ms after the typing stopped. That
+// premise was wrong, and the hole under it was real — a curl with a valid
+// session, or a tab closed a fraction early, translated for free forever.
+// lib/fast/meter.ts has the whole note. In one line: the client's settle
+// measures a PAUSE IN TYPING, and the gap between two requests from one
+// account is that same pause on a clock nobody can edit. So a BURST of
+// previews is one billable quickie, the reservation is taken here before any
+// money is spent, and FastShell no longer writes a row at all.
 
 function notFound(): NextResponse {
   return NextResponse.json(
@@ -98,8 +115,62 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const { pair, source } = resolved;
 
+  // The money moves HERE, before the engine is touched. `begun.billed` says
+  // whether this preview opened a new quickie or continued the one already
+  // being typed; either way nothing below can be reached without a
+  // reservation. The direction passed is the one the caller ASKED for — in
+  // auto mode the detected side is not known until the engine answers, and a
+  // burst key that changed mid-word would bill a phrase twice.
+  const caller = { id: userId, email };
+  let begun;
+  try {
+    begun = await beginFastQuickie({
+      user: caller,
+      sourceLanguage: pair[0],
+      targetLanguage: pair[1],
+      text
+    });
+  } catch (error) {
+    if (error instanceof FastMeterUnavailableError) {
+      // A meter that cannot answer must not be read as a green light. This is
+      // the one refusal on this route that is about US, so it says so.
+      return bad("Translation is temporarily unavailable.", 503);
+    }
+    throw error;
+  }
+
+  if (!begun.ok) {
+    const { status, message } = fastRefusal(begun.reason);
+    return NextResponse.json(
+      {
+        error: message,
+        reason: begun.reason,
+        ...(begun.cap !== undefined ? { used: begun.used, cap: begun.cap } : {})
+      },
+      {
+        status,
+        headers: {
+          "Cache-Control": "no-store",
+          ...(status === 429 ? { "Retry-After": "5" } : {})
+        }
+      }
+    );
+  }
+
   try {
     const result = await fastTranslate(text, pair, source);
+    // Fill in the row the reservation bought. Auto mode only learns which
+    // side was typed from this reply, which is why the languages are written
+    // now rather than at reservation time.
+    await recordFastQuickie({
+      user: caller,
+      rowId: begun.rowId,
+      sourceLanguage: result.detectedSource,
+      targetLanguage: result.targetLanguage,
+      text,
+      translation: result.translation,
+      engine: result.engine
+    });
     return NextResponse.json(
       {
         translation: result.translation,
@@ -108,11 +179,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         detectedSource: result.detectedSource,
         sourceLanguage: result.detectedSource,
         targetLanguage: result.targetLanguage,
-        direction: `${result.detectedSource}-${result.targetLanguage}`
+        direction: `${result.detectedSource}-${result.targetLanguage}`,
+        // Cosmetic. The client shows it and never decides anything with it —
+        // the number that binds is the one the reservation above was taken
+        // against.
+        ...(begun.cap !== undefined && begun.cap >= 0
+          ? { used: begun.used, cap: begun.cap }
+          : {})
       },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
+    // The engine did not answer, so the reservation bought nothing. Give it
+    // back — charging for a translation that never arrived would be the
+    // mirror image of the bug this metering exists to fix.
+    if (begun.billed) await abandonFastQuickie(caller, begun.rowId);
     if (error instanceof FastEngineError) {
       return NextResponse.json(
         { error: "Fast translation failed.", details: error.message },
