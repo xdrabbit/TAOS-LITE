@@ -416,7 +416,7 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **/fast — the Google-quickie box, 2026-08-30** — PR #TBD. Tom's ask: a
+- **/fast — the Google-quickie box, 2026-08-30** — PR #46. Tom's ask: a
   single input where the translation "renders as you type", plain and
   word-for-word — the thing everybody already knows how to do. It is the ONLY
   literal surface in TAOS, deliberately: every other screen asks for the
