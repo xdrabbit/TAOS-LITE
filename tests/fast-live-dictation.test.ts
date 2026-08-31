@@ -27,6 +27,7 @@ import { billingKey } from "@/lib/fast/settle";
 import { appendDictated, stepTranscript } from "@/lib/fast/liveTranscript";
 import {
   MAX_SPEECH_CANDIDATES,
+  SPEECH_LANGUAGE_ID_MODE,
   speechCandidates,
   speechLocale,
   STREAMABLE_LANGUAGES
@@ -134,53 +135,58 @@ describe("appendDictated — dictation never eats what was typed", () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("speechCandidates — who Azure is told to listen for", () => {
-  it("puts both sides of the pair first", () => {
-    expect(speechCandidates(["en", "es"], [])).toEqual(["en-US", "es-MX"]);
+  it("asks Azure to choose between the two pills, and nothing else", () => {
+    expect(speechCandidates(["en", "es"], null)).toEqual(["en-US", "es-MX"]);
   });
 
-  it("fills the remaining slots from the pill row, in order", () => {
-    expect(speechCandidates(["en", "es"], ["en", "es", "it", "fr", "de"])).toEqual([
-      "en-US",
-      "es-MX",
-      "it-IT",
-      "fr-FR"
-    ]);
+  it("never asks it to choose between more than two", () => {
+    // The cap is TWO, and it came from a stopwatch rather than from Azure's
+    // ceiling (which is 4 for at-start and 10 for continuous). Measured on one
+    // 4.15s clip: 4 candidates put the first word on screen at ~4.5s, 2 at
+    // ~2.4s, and 1 at ~0.8s — with an identical transcript every time. Extra
+    // candidates bought nothing and cost the whole feature.
+    expect(MAX_SPEECH_CANDIDATES).toBe(2);
+    for (const pair of [["en", "es"], ["fr", "de"], ["ja", "ko"]] as const) {
+      expect(speechCandidates(pair, null)!.length).toBeLessThanOrEqual(MAX_SPEECH_CANDIDATES);
+    }
   });
 
-  it("never exceeds the at-start language-identification cap", () => {
-    // FOUR, and it is a consequence of asking for at-start LID rather than
-    // continuous — a quickie is one phrase in one language, and continuous
-    // would buy mid-sentence language changes at a per-segment latency cost
-    // on the screen that cannot afford any.
-    expect(MAX_SPEECH_CANDIDATES).toBe(4);
-    const many = speechCandidates(["en", "es"], LANGUAGES.map((l) => l.code));
-    expect(many).toHaveLength(4);
+  it("drops to ONE language when the direction is pinned", () => {
+    // The fast path, and the reason it is worth having a swap button: with one
+    // language there is no identification to do, and the words start landing
+    // in ~800ms instead of ~2400ms.
+    expect(speechCandidates(["en", "es"], "es")).toEqual(["es-MX"]);
+    expect(speechCandidates(["en", "es"], "en")).toEqual(["en-US"]);
   });
 
-  it("skips pill-row languages Azure cannot hear, rather than wasting a slot", () => {
-    // la (Latin) and haw (Hawaiian) are Whisper-only. A null slot would be a
-    // candidate Azure would reject the whole request over.
-    expect(speechCandidates(["en", "es"], ["la", "haw", "it"])).toEqual([
-      "en-US",
-      "es-MX",
-      "it-IT"
-    ]);
-  });
-
-  it("de-duplicates, since two catalog rows can share one locale", () => {
-    const picked = speechCandidates(["en", "es"], ["es", "en", "fr"]);
-    expect(picked).toEqual(["en-US", "es-MX", "fr-FR"]);
-    expect(new Set(picked).size).toBe(picked!.length);
+  it("uses continuous identification, not at-start", () => {
+    // Also a stopwatch decision: 2.4s against 3.8s for the same two candidates
+    // and the same transcript. At-start buffers ~3s to decide once, which is
+    // precisely what this screen cannot spend.
+    expect(SPEECH_LANGUAGE_ID_MODE).toBe("Continuous");
   });
 
   it("answers null when EITHER side of the pair is unhearable", () => {
-    // The load-bearing rule. /fast dictates in auto-detect because the box
-    // does not know which pill is about to be spoken, so a recogniser that
-    // can hear only one side is not a cheaper version of this feature — it is
-    // one that silently mis-transcribes every sentence in the other language.
-    // Whisper hears all 100, so the honest answer is to hand it the whole job.
-    expect(speechCandidates(["en", "la"], ["en", "es"])).toBeNull();
-    expect(speechCandidates(["haw", "es"], ["en", "es"])).toBeNull();
+    // The load-bearing rule for Auto. /fast does not know which pill is about
+    // to be spoken, so a recogniser that can hear only one side is not a
+    // cheaper version of this feature — it is one that silently
+    // mis-transcribes every sentence in the other language. Whisper hears all
+    // 100, so the honest answer is to hand it the whole job.
+    expect(speechCandidates(["en", "la"], null)).toBeNull();
+    expect(speechCandidates(["haw", "es"], null)).toBeNull();
+  });
+
+  it("still streams a half-unhearable pair when the direction is pinned", () => {
+    // Pinning only needs the ONE language, so an English speaker with Latin on
+    // the other pill gets the live mic by saying which way round they are
+    // talking — where Auto has to give the whole job to Whisper.
+    expect(speechCandidates(["en", "la"], "en")).toEqual(["en-US"]);
+    expect(speechCandidates(["en", "la"], "la")).toBeNull();
+  });
+
+  it("de-duplicates, since two catalog rows could share one locale", () => {
+    const picked = speechCandidates(["en", "en"], null);
+    expect(picked).toEqual(["en-US"]);
   });
 });
 
@@ -454,12 +460,15 @@ describe("the batch mic is still there, and nothing announces it", () => {
     expect(hook).toContain("if (!candidatesRef.current) {");
   });
 
-  it("asks for at-start language identification explicitly", () => {
-    // The SDK already defaults to it. Set anyway, so a future default cannot
-    // quietly move the candidate cap from four to ten underneath the comment
-    // in speechLocale.ts that explains the four.
+  it("asks for continuous identification, and for none at all when it can", () => {
+    // Both halves are stopwatch decisions (lib/fast/speechLocale.ts). The SDK
+    // DEFAULTS to at-start, which measured a second and a half slower, so the
+    // mode is set explicitly rather than inherited.
     expect(hook).toContain("SpeechServiceConnection_LanguageIdMode");
-    expect(hook).toContain('"AtStart"');
+    expect(hook).toContain("SPEECH_LANGUAGE_ID_MODE");
+    expect(hook).not.toContain('"AtStart"');
+    // One language: no LID machinery at all, which is the ~800ms path.
+    expect(hook).toContain("speechConfig.speechRecognitionLanguage = locales[0]");
   });
 
   it("keeps the audio off Vercel", () => {
@@ -537,6 +546,13 @@ describe("the live view is the same box", () => {
   it("draws the tail dimmed, and only while streaming", () => {
     expect(shell).toContain("text-amber-100/40");
     expect(shell).toContain('dictation.mode === "stream" && dictation.state === "recording"');
+  });
+
+  it("aims the recogniser with the same pin that aims the translation", () => {
+    // One direction decision, used twice. Pinning does not just choose which
+    // way the translation runs; it removes the language identification step
+    // and is most of the difference between ~800ms and ~2400ms to first word.
+    expect(shell).toContain("speechCandidates([mine, theirs], explicitSource)");
   });
 
   it("labels the stop button for what it actually does in each mode", () => {

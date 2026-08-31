@@ -271,17 +271,48 @@ be replaced anyway. `lib/fast/liveTranscript.ts` holds the rule.
 The **settle clock is untouched**: one settled input still bills one row, however
 many segments it arrived in.
 
-**Auto-detect: the pair, then the pill row, capped at four.** Azure offers
-*at-start* language identification (decide once from the opening audio, up to 4
-candidates) and *continuous* (re-decide throughout, up to 10). A quickie is one
-phrase said by one person, so `/fast` asks for at-start — and that is where the
-4 comes from. Both sides of the pair are required; if Azure cannot hear one of
-them the whole job goes to Whisper, because a recogniser that hears only one
-pill would silently mangle every sentence said in the other. Remaining slots are
-filled from the pill row (pair + recents), which is the phone's own answer to
-"what languages am I in the middle of", and left *empty* rather than padded from
-the catalog — Azure returns one of the candidates even when the audio was none
-of them, so a wider list is a wider chance of a confident wrong answer.
+### Auto-detect: what it costs, measured
+
+The obvious design was "fill the candidate list" — Azure allows 4 languages for
+at-start identification and 10 for continuous, so why not send the pair plus
+whatever else this phone has been reaching for? Because it is the difference
+between the feature working and not.
+
+Same 4.15 s clip, pushed at wall-clock speed to a real Azure endpoint, two runs
+each. **Time until the first word appears on screen:**
+
+| candidates | LID mode | first word |
+| --- | --- | --- |
+| 1 (pinned direction) | none | **795 / 821 ms** |
+| 2 (the pair) | Continuous | **2422 / 2416 ms** |
+| 2 (the pair) | AtStart | 3826 / 3845 ms |
+| 4 | AtStart | 3806 / 3807 ms |
+| 4 | Continuous | 4493 / 4494 ms |
+
+**All five produced an identical transcript.** So the extra candidates bought
+nothing at all and cost up to two seconds of the one thing this feature exists
+to deliver. A quickie is often shorter than four seconds — with a four-candidate
+list the words would land *after* you stopped talking, which is the batch mic
+with extra steps.
+
+Hence: **never more than the two pills, and Continuous rather than AtStart.**
+AtStart buffers ~3 s of audio to decide once; Continuous keeps deciding, which
+is worth 1.4 s here. The mode name is misleading for this use — nobody changes
+language mid-quickie; it is bought purely for the latency.
+
+A third language could not have helped anyway. `/fast` translates *between* the
+two pills, so a sentence confidently recognised in a language on neither of them
+is one this screen cannot do anything with — and Azure returns one of the
+candidates even when the audio was none of them.
+
+**Pinning the direction is the fast path**, and it is a real reason to touch the
+swap button: one language means no identification step at all, ~800 ms instead
+of ~2400 ms. It also rescues pairs Auto has to refuse — pinning needs only the
+*one* language to be streamable, so English-with-Latin still streams if you pin
+to English, where Auto hands the whole job to Whisper.
+
+In Auto both sides are required, for the reason above: a recogniser that hears
+only one pill would silently mangle every sentence said in the other.
 
 The 24 catalog languages Azure Speech cannot hear are permanently batch-mic
 languages, listed in `lib/fast/speechLocale.ts` and pinned in
@@ -306,6 +337,52 @@ the worse lie. It ends the moment you stop talking, and the textarea returns
 with the caret at the end. For the same reason the stop button is labelled
 **Done** while streaming (the words are already in the box; there is nothing to
 take back) and **Cancel** in batch (stopping really does discard).
+
+### Walked against real Azure, 2026-08-30
+
+`AZURE_SPEECH_KEY` is a write-only Vercel secret, so the token was minted by a
+temporary secret-guarded probe route deployed with `vercel deploy --env`
+(deployment-scoped), then the audio was pushed to Azure at wall-clock speed —
+100 ms of PCM every 100 ms, because a rig that shoves the whole wav in at once
+reports latencies no microphone can produce. Both the probe route and the
+deployments carrying it were removed afterwards.
+
+Auto (`["en-US","es-MX"]`, Continuous), 4.15 s of English:
+
+```
+  2374ms  partial  "where is the pharmacy"
+  2471ms  partial  "where is the pharmacy i have"
+  2573ms  partial  "where is the pharmacy i have a headache"
+  ...
+   FINAL  "Where is the pharmacy? I have a headache and I need
+           something for it please."            [en-US]
+  -> first words on screen 1777ms BEFORE the speech ended
+```
+
+The same pair, unchanged, given 6.25 s of Spanish — nobody told it which:
+
+```
+  2478ms  partial  "dónde está"
+  2579ms  partial  "dónde está la farmacia"
+  2603ms  FINAL    "¿Dónde está la farmacia?"   [es-MX]
+  3218ms  partial  "me"
+  ...
+  -> first words 3773ms BEFORE the speech ended
+```
+
+That second run is also the partial→final→commit→new-partial cycle happening
+for real: a finished clause commits and the tail empties, then the next clause
+starts guessing again. It is what `stepTranscript` is written against.
+
+Pinned to English (one language, no LID): first words at **803 ms**.
+
+**The fallback was walked separately**, in a real browser with a real
+`MediaRecorder` and a fake microphone
+(`tests/live-fire/fast-dictation-browser-check.mjs`, run with no
+`AZURE_SPEECH_KEY` present). `/api/fast/speech-token` answered 404, the mic
+degraded to the batch path without a word about it, and the whole batch flow
+passed unchanged: 1 upload → transcript in the box → 1 billed row → every audio
+track ended → tap-to-latch still works.
 
 ### The batch path
 

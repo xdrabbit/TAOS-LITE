@@ -283,14 +283,16 @@ export function FastShell(): JSX.Element {
     [commitDictated, mine, theirs]
   );
 
-  // Which languages to tell Azure to listen for. The pair is required — both
-  // sides, or this answers null and the batch mic takes the job, because a
-  // recogniser that can hear only one of the two pills would silently mangle
-  // every sentence said in the other. The rest of the slots come from the pill
-  // row, which is this phone's own answer to "what languages am I in the
-  // middle of" (lib/fast/speechLocale.ts has the full note, and the reason the
-  // cap is four).
-  const candidates = useMemo(() => speechCandidates([mine, theirs], pills), [mine, theirs, pills]);
+  // Which languages to tell Azure to listen for — and it is the SAME direction
+  // decision the translate call above makes, deliberately. Pinning the
+  // direction does not just aim the translation; it tells the recogniser there
+  // is nothing to identify, which measured ~800ms to first word against
+  // ~2400ms for auto-detect (lib/fast/speechLocale.ts carries the table and
+  // the reason the auto list is only ever the two pills).
+  const candidates = useMemo(
+    () => speechCandidates([mine, theirs], explicitSource),
+    [mine, theirs, explicitSource]
+  );
 
   const dictation = useLiveDictation({
     candidates,

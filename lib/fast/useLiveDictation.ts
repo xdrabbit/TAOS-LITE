@@ -21,9 +21,9 @@
 // This hook OWNS the batch mic rather than replacing it, and decides per
 // PRESS — not once per page:
 //
-//   stream   Azure heard both sides of the pair, the SDK loaded, the token
-//            minted, the socket opened. Partials render live, finals become
-//            editable text.
+//   stream   Azure can hear what is about to be said (both pills in Auto, or
+//            just the pinned one), the SDK loaded, the token minted, the
+//            socket opened. Partials render live, finals become editable text.
 //   batch    anything above was false. The old path, unchanged, silently.
 //
 // Per press and not once per page, because the reasons streaming fails are
@@ -47,6 +47,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { authHeaders } from "@/lib/authClient";
 import { AZURE_TOKEN_REFRESH_MS, FAST_MAX_DICTATION_MS } from "@/lib/fast/dictation";
 import { stepTranscript, type TranscriptEvent } from "@/lib/fast/liveTranscript";
+import { SPEECH_LANGUAGE_ID_MODE } from "@/lib/fast/speechLocale";
 import { TAP_MS, useDictation, type DictationState } from "@/lib/fast/useDictation";
 
 /** Which recogniser served the current (or most recent) dictation. */
@@ -294,25 +295,26 @@ export function useLiveDictation(options: LiveDictationOptions): LiveDictation {
       if (session !== sessionRef.current) throw new Error("superseded");
 
       const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(held.token, held.region);
-      // AT-START language identification, said out loud because it is the
-      // choice that sets the candidate cap at four rather than ten
-      // (lib/fast/speechLocale.ts). A quickie is one phrase in one language;
-      // continuous LID would buy the ability to change language mid-sentence
-      // and pay for it in per-segment latency on the screen that cannot
-      // afford any. The SDK already defaults to this — set anyway, so a
-      // future default cannot quietly move the cap.
-      speechConfig.setProperty(sdk.PropertyId.SpeechServiceConnection_LanguageIdMode, "AtStart");
-
       const audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
       let recognizer: InstanceType<SpeechSdk["SpeechRecognizer"]>;
       if (locales.length === 1) {
-        // Both pills resolved to the same Azure locale, so there is nothing to
-        // identify BETWEEN. Ask for that language flat rather than handing a
-        // one-item list to the LID machinery and paying its latency for a
-        // decision with one possible answer.
+        // ONE language: no language identification at all, and this is the
+        // fast path rather than an edge case. Measured against the same clip,
+        // first words land in ~800ms here and ~2400ms with LID on
+        // (lib/fast/speechLocale.ts carries the table). It is what a pinned
+        // direction buys, and it is most of the difference between a mic that
+        // feels live and one that feels merely quick.
         speechConfig.speechRecognitionLanguage = locales[0];
         recognizer = new sdk.SpeechRecognizer(speechConfig, audioConfig);
       } else {
+        // CONTINUOUS identification, chosen on measurement and not on the name
+        // — 2.4s to first word against at-start's 3.8s, for the same two
+        // candidates and an identical transcript. At-start buffers ~3 seconds
+        // to decide once, which is exactly the thing this screen cannot spend.
+        speechConfig.setProperty(
+          sdk.PropertyId.SpeechServiceConnection_LanguageIdMode,
+          SPEECH_LANGUAGE_ID_MODE
+        );
         recognizer = sdk.SpeechRecognizer.FromConfig(
           speechConfig,
           sdk.AutoDetectSourceLanguageConfig.fromLanguages([...locales]),

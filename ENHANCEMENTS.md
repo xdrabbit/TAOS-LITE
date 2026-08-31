@@ -466,6 +466,17 @@ is not a prerequisite for using it.
   both now call it — which is how the mic inherited the 7/27 no-guess fence
   and the Cantonese hint rather than shipping a fourth copy of the fetch
   without them.
+  → Walked against REAL Azure on 2026-08-30 (the key is write-only, so the
+  token came from a temporary secret-guarded probe route deployed with
+  `vercel deploy --env`, removed afterwards along with its deployments). Auto,
+  4.15 s of English: first words on screen at 2374 ms — 1777 ms *before* the
+  speech ended — then the full sentence as `[en-US]`. The same unchanged pair
+  given 6.25 s of Spanish, with nobody telling it which: first words at
+  2478 ms, `¿Dónde está la farmacia?` finalized at 2603 ms as `[es-MX]`, and
+  the next clause already guessing again. Pinned to English: 803 ms. The
+  fallback was walked separately with no Azure key present — the token route
+  404s, the mic drops to batch without a word, and the batch flow passes
+  unchanged.
   → Walked in a real browser with a real `MediaRecorder` and a fake microphone
   (`tests/live-fire/fast-dictation-browser-check.mjs`): held 1.5 s → 1 upload →
   transcript in the box → 1 billed row → every audio track ended afterwards;
@@ -494,14 +505,22 @@ is not a prerequisite for using it.
   phrase to render text that was about to be replaced anyway. The settle clock
   never moved: one settled quickie still bills one row, however many segments
   it arrived in.
-  → **Four candidate languages, and the number is a consequence.** Azure does
-  at-start language identification (up to 4) or continuous (up to 10). A
-  quickie is one phrase in one language, so at-start it is. Both pills are
-  required — if Azure cannot hear one of them the whole job goes to Whisper,
-  because a recogniser that hears one side would silently mangle every
-  sentence said in the other. The spare slots come from the pill row and are
-  left empty rather than padded, since Azure returns one of the candidates
-  even when the audio was none of them.
+  → **The candidate list is two, and a stopwatch chose it.** Azure allows 4
+  languages for at-start identification and 10 for continuous, so the obvious
+  design was to fill the list with the pair plus recents. Measured on one
+  4.15 s clip, time to the first word appearing: 1 language 0.80 s, 2
+  continuous 2.42 s, 2 at-start 3.83 s, 4 at-start 3.81 s, 4 continuous
+  4.49 s — **and all five transcribed it identically.** The extra candidates
+  bought nothing and cost up to two seconds of the only thing this feature
+  sells. A quickie is often shorter than four seconds, so the fat list would
+  have shown the words *after* you stopped talking. Hence: never more than the
+  two pills, and continuous rather than at-start.
+  → **Pinning the direction is the fast path** — one language, no
+  identification step, first words at 0.8 s instead of 2.4 s. It also rescues
+  pairs Auto has to refuse: pinning needs only the one language to be
+  hearable, so English-with-Latin still streams if you pin to English. In Auto
+  both pills are required, because a recogniser that hears one side would
+  silently mangle every sentence said in the other.
   → **The fallback says nothing, and is re-decided every press.** A mic that
   explains why it is in its slower mode interrupts somebody mid-errand to
   discuss infrastructure; a mic that fell back once and stayed there for the

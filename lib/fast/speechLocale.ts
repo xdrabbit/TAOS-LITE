@@ -139,77 +139,89 @@ export function speechLocale(code: string): string | null {
 export const STREAMABLE_LANGUAGES: readonly string[] = Object.keys(SPEECH_LOCALES).sort();
 
 /**
- * The most candidate languages Azure will identify between.
+ * The most languages Azure is ever asked to identify between here: TWO.
  *
- * FOUR, and the number is a consequence of picking the right MODE rather than
- * an arbitrary ceiling. Azure has two kinds of language identification:
+ * This number was chosen by MEASUREMENT, not by the API's ceiling, and the
+ * measurement said something different from what the ceiling implied. Azure
+ * allows 4 candidates for at-start language identification and 10 for
+ * continuous, so the obvious design was "fill the list" — the pair plus
+ * whatever else this phone has been reaching for. That is exactly wrong.
  *
- *   at-start    decides once, from the opening audio, then recognises the
- *               rest in that language.       ── up to 4 candidates
- *   continuous  re-decides throughout, so one recording can change language
- *               halfway.                     ── up to 10 candidates
+ * Time to the FIRST word appearing, same 4.15s clip, pushed at wall-clock
+ * speed, two runs each (docs/fast-engine.md has the rig):
  *
- * A quickie is ONE phrase said by ONE person: "where is the pharmacy", said
- * in one language, into a box with a swap button under it. Nobody changes
- * language mid-phrase here — and continuous LID pays for the ability with
- * latency on every segment, on the one screen whose entire promise is that
- * the words are already there. So /fast asks for at-start, and at-start is
- * where the 4 comes from.
+ *   1 language, no LID       795 / 821 ms     <- genuinely live
+ *   2 candidates, Continuous 2422 / 2416 ms
+ *   2 candidates, AtStart    3826 / 3845 ms
+ *   4 candidates, AtStart    3806 / 3807 ms
+ *   4 candidates, Continuous 4493 / 4494 ms   <- worse than saying nothing
  *
- * (Azure also warns that LID returns one of the candidates even when the
- * audio was none of them, which is the other reason to keep the list short
- * and near the conversation: a wide list is a wider chance of a confident
- * wrong answer.)
+ * Every one of those transcribed the sentence identically. So the extra
+ * candidates bought NOTHING and cost up to two seconds of the exact thing
+ * this feature exists to provide. On a quickie — which is often shorter than
+ * four seconds — a four-candidate list means the words appear after you have
+ * already stopped talking, which is the batch mic with extra steps.
+ *
+ * Hence two, and only ever the two on the pills. A third language could not
+ * help anyway: /fast translates BETWEEN the two pills, so a sentence
+ * confidently recognised in a language that is on neither of them is a
+ * sentence this screen cannot do anything with.
  */
-export const MAX_SPEECH_CANDIDATES = 4;
+export const MAX_SPEECH_CANDIDATES = 2;
+
+/**
+ * Whether to make Azure identify the language at all, and how.
+ *
+ * "Continuous" over "AtStart" purely on the numbers above — 2.4s against
+ * 3.8s for the same two candidates and the same transcript. The name is
+ * misleading for this use: it does not mean /fast expects somebody to change
+ * language mid-phrase, only that Azure keeps deciding rather than buffering
+ * ~3 seconds up front to decide once. Buffering is precisely what this screen
+ * cannot afford.
+ */
+export const SPEECH_LANGUAGE_ID_MODE = "Continuous";
 
 /**
  * The languages to tell Azure to listen for, or null to use the batch mic.
  *
- * ── Why the pair is required and the rest is filler ────────────────────────
- * Both sides of the pair come first and BOTH must be streamable, or this
- * answers null. That is the load-bearing rule: /fast dictates in auto-detect
- * because the box does not know which of the two pills is about to be spoken,
- * so a recognizer that can hear only one side of the pair is not a cheaper
- * version of this feature — it is one that silently mis-transcribes every
- * sentence said in the other language. Whisper hears all 100, so the honest
- * answer there is to fall back to it.
+ * ── Pinned is the fast path, and it is a real one ──────────────────────────
+ * When the writer has pinned the direction (the swap button, or tapping off
+ * the Auto chip), there is nothing to identify: one language, no LID, first
+ * words in ~800ms instead of ~2400ms. That is the difference between a mic
+ * that feels live and one that feels merely quick, and it is available to
+ * anybody who tells the screen which way round they are talking.
  *
- * The remaining slots are filled from the pill row (the pair plus recently
- * used languages, lib/translate/pinned.ts) because that row IS this phone's
- * answer to "what languages is this person actually in the middle of?" — a
- * phone that has been reaching for Italian all week is more likely to hear
- * Italian than any list a stranger could have guessed. Slots left over are
- * left empty rather than padded from the catalog: a candidate that nobody on
- * this phone has ever used cannot help detection and can only add a language
- * for a confident wrong answer to land in.
+ * It also RESCUES pairs the auto path has to refuse. Pinned only needs the
+ * one language to be streamable, so an English speaker with Latin on the
+ * other pill still gets the live mic when they pin to English — where Auto
+ * would have to hand the whole job to Whisper.
  *
- * Returns Azure locales, de-duplicated (two catalog rows can map to one
- * locale) and capped at MAX_SPEECH_CANDIDATES.
+ * ── Auto needs both sides, or nothing ──────────────────────────────────────
+ * In Auto the box does not know which of the two pills is about to be spoken,
+ * which is the whole point of a screen with a swap button on it. So both must
+ * be streamable, or this answers null: a recogniser that can hear only one
+ * side of the pair is not a cheaper version of this feature, it is one that
+ * silently mis-transcribes every sentence said in the other language. Whisper
+ * hears all 100, so the honest answer there is to hand it the whole job.
+ *
+ * Returns Azure locales, de-duplicated — two catalog rows can share a locale,
+ * and asking Azure to choose between a language and itself is the slow path
+ * for a decision with one answer.
  */
 export function speechCandidates(
   pair: readonly [LanguageCode, LanguageCode],
-  recents: readonly string[] = []
+  pinned: LanguageCode | null
 ): string[] | null {
-  const locales: string[] = [];
-  const seen = new Set<string>();
+  if (pinned) {
+    const locale = speechLocale(pinned);
+    return locale ? [locale] : null;
+  }
 
+  const locales: string[] = [];
   for (const code of pair) {
     const locale = speechLocale(code);
     if (!locale) return null; // one side unhearable — Whisper takes the whole job
-    if (!seen.has(locale)) {
-      seen.add(locale);
-      locales.push(locale);
-    }
+    if (!locales.includes(locale)) locales.push(locale);
   }
-
-  for (const code of recents) {
-    if (locales.length >= MAX_SPEECH_CANDIDATES) break;
-    const locale = speechLocale(code);
-    if (!locale || seen.has(locale)) continue;
-    seen.add(locale);
-    locales.push(locale);
-  }
-
   return locales;
 }
