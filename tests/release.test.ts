@@ -61,8 +61,12 @@ function read(path: string): string {
 }
 
 describe("v1 held-back set", () => {
-  it("holds back exactly call and video", () => {
-    expect([...HELD_BACK_V1].sort()).toEqual(["call", "video"]);
+  it("holds back exactly call, fast and video", () => {
+    // /fast joined on 8/30. Not for cost or readiness — it is a literal
+    // word-for-word screen in an app whose whole voice is the opposite, and
+    // two translation screens that disagree on purpose get a founders' wave
+    // before a stranger's. See fastVisibleTo() in lib/release.ts.
+    expect([...HELD_BACK_V1].sort()).toEqual(["call", "fast", "video"]);
   });
 
   it("never holds back the customer-facing screens", () => {
