@@ -867,34 +867,326 @@ export function TranslatorShell({
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
-          {/* Five taps on the title open the personal-voice sheet. Looks and
-              behaves like plain text to everyone who isn't looking for it. */}
-          <h1
-            onClick={personalVoiceTap}
-            className="cursor-default select-none text-lg font-semibold tracking-tight text-amber-200"
-          >
-            TAOS·LITE
-          </h1>
-          <div className="flex items-center gap-2">
+        {/* THE HEADER WRAPS. It has to, and this is the fence.
+
+            Tom, 8/31, on the Droid: reaching Call through Together ▾ took two
+            or three touches, every time. Not a flaky handler — the row was
+            405.9 px of content inside a 343 px container, so the nav ran off
+            the right edge of the phone and took the page's scroll width with
+            it. Measured at three widths (tests/live-fire/menu-tap-browser-check.mjs):
+
+              viewport  nav ends at   "More ·  Más" off-screen by
+                390 px    405.9 px      15.9 px
+                360 px    405.9 px      45.9 px
+                320 px    405.9 px      85.9 px
+
+            Two separate tap-eaters came out of that one number:
+
+            1. The grid menu's trigger was PAST THE EDGE. Not clipped —
+               laid out off-screen. document.elementFromPoint() at its centre
+               returned nothing at all three widths, so the only way in was to
+               catch the sliver of it still on the glass.
+            2. document.scrollWidth (406) exceeded the viewport, which makes
+               the whole page horizontally pannable — the meta viewport sets
+               initial-scale=1 with no maximum-scale, so nothing pins it. Once
+               a page can pan, a touch that drifts sideways is a PAN, not a
+               tap, and the browser never dispatches the click. Measured on
+               the Together pill: a 12 px drift still clicks, a 20 px drift
+               scrolls the page 7 px and fires no click event whatsoever. A
+               thumb reaching across a phone drifts further than 20 px.
+
+            So the row was eating the first touch, sliding out from under the
+            second, and landing the third. It read as a race and was geometry.
+
+            The fix is `flex-wrap` here and on the nav row below, plus
+            `min-w-0` so the nav is allowed to shrink rather than push. A row
+            that wraps cannot put anything off-screen and cannot make the
+            document wider than the viewport, so BOTH eaters die at once — and
+            they stay dead for whatever the next PR adds to this header, which
+            a hand-tuned width would not survive. This one already grew back
+            once: the Together menu was created on 8/19 to fix exactly this
+            overflow, and by 8/30 the row measured 406 px again.
+
+            tests/nav-tap-targets.test.ts pins the wrapping and the 44 px
+            targets. Do not take flex-wrap off. */}
+        {/* `relative` here, and NOT on either trigger's wrapper, is what makes
+            both dropdowns hang off the BOTTOM OF THE HEADER instead of off the
+            control that opened them.
+
+            It has to be the header. A dropdown anchored to its own trigger
+            drops onto whatever is directly beneath that trigger — and once the
+            nav is two rows, what is beneath the More button is the row of
+            pills. The menu then covers Live / Call / Together ▾ / Translate,
+            and a touch aimed at a pill lands on a menu item instead: not a
+            dead tap, a WRONG one. The browser check caught exactly that
+            ("one touch swaps from the grid menu to Together ▾") the first time
+            this header was split into two rows.
+
+            Anchored to the header, where a menu opens no longer depends on
+            where its trigger happened to wrap to. Do not put `relative` back
+            on the wrappers. */}
+        <header className="relative flex flex-col gap-2">
+          {/* ROW ONE: the brand, and the two controls that are not
+              screens — Share and the More grid. They sit here rather
+              than at the end of the pill row because the pill row is
+              the part that grows: every screen TAOS has added since
+              8/19 arrived as a pill, and the More trigger riding on
+              the end of that row is what carried it off the edge of
+              the phone. Anchored to the header instead, it cannot be
+              pushed anywhere by anything the next PR adds. */}
+          <div className="flex items-center justify-between gap-2">
+            {/* Five taps on the title open the personal-voice sheet. Looks and
+                behaves like plain text to everyone who isn't looking for it. */}
+            <h1
+              onClick={personalVoiceTap}
+              className="cursor-default select-none text-lg font-semibold tracking-tight text-amber-200"
+            >
+              TAOS·LITE
+            </h1>
+            <div className="flex shrink-0 items-center gap-2">
+              {/* Share: one icon-only button, no label — the point is to hand
+                  the app to someone you just met without the translator screen
+                  growing another pill. */}
+              <button
+                type="button"
+                onClick={() => setShareOpen(true)}
+                aria-label="Share TAOS / Compartir TAOS"
+                title="Share TAOS · Compartir"
+                className="flex h-11 w-11 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
+              >
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                >
+                  <circle cx="18" cy="5" r="3" />
+                  <circle cx="6" cy="12" r="3" />
+                  <circle cx="18" cy="19" r="3" />
+                  <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
+                </svg>
+              </button>
+              {/* Tutor lives in this menu (with History) — Tom, 7/27: one fewer
+                  pill keeps the header from crowding phone widths. Hidden
+                  entirely for RC1 (lib/release.ts).
+
+                  The trigger used to be the signed-in email's first letter, and
+                  on Tom's account (xdrabbit@) that letter is X — so the button
+                  that OPENS the menu was drawn as the universal symbol for
+                  close/delete. Liz, launching the wave on 8/30: strangers read
+                  it as "remove" and would not tap it. Any account whose email
+                  starts with x, or with no letter at all, had the same problem.
+
+                  So the closed state is the nine-dot apps grid every phone
+                  already teaches — "there is more in here" — and the open state
+                  is an X, which now genuinely means close. Both glyphs are
+                  stacked in the same 16px box and cross-faded, so the header
+                  never reflows on the swap. */}
+              <div ref={accountMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setAccountMenuOpen((o) => !o)}
+                  aria-label={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
+                  aria-haspopup="menu"
+                  aria-expanded={accountMenuOpen}
+                  title={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
+                >
+                  <span className="relative block h-4 w-4">
+                    {/* Nine dots, filled rather than stroked: at 16px a 2px
+                        stroke on a 3px circle fills it in anyway, and dots read
+                        as "apps" where nine tiny rings read as noise. */}
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
+                        accountMenuOpen ? "opacity-0" : "opacity-100"
+                      }`}
+                    >
+                      <circle cx="5" cy="5" r="2" />
+                      <circle cx="12" cy="5" r="2" />
+                      <circle cx="19" cy="5" r="2" />
+                      <circle cx="5" cy="12" r="2" />
+                      <circle cx="12" cy="12" r="2" />
+                      <circle cx="19" cy="12" r="2" />
+                      <circle cx="5" cy="19" r="2" />
+                      <circle cx="12" cy="19" r="2" />
+                      <circle cx="19" cy="19" r="2" />
+                    </svg>
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
+                        accountMenuOpen ? "opacity-100" : "opacity-0"
+                      }`}
+                    >
+                      <path d="M6 6l12 12M18 6L6 18" />
+                    </svg>
+                  </span>
+                </button>
+                {accountMenuOpen ? (
+                  <div
+                    role="menu"
+                    aria-label="More · Más"
+                    className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
+                  >
+                    {/* Who you are signed in as. This used to be the trigger's
+                        `title`, which no phone has ever rendered — a tooltip
+                        needs a mouse. Sign out sits at the bottom of this same
+                        menu, so the account it signs out of belongs at the top
+                        of it. */}
+                    <p className="truncate px-4 py-2 text-[11px] text-amber-100/50">
+                      {email}
+                    </p>
+                    {tutorEnabled() ? (
+                      <a
+                        href="/tutor"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Tutor
+                      </a>
+                    ) : null}
+                    {/* The word-for-word quickie box. In the menu rather than
+                        as a header pill for the reason the header is already
+                        overflowing at 390px (ENHANCEMENTS.md, 8/30) — and
+                        because it belongs NEXT TO the screens, not among the
+                        four ways to talk. Founders-only until the register
+                        contrast has been watched on a wave (lib/release.ts);
+                        NEXT_PUBLIC_ENABLE_FAST=1 opens it to everyone. */}
+                    {fastVisible ? (
+                      <a
+                        href="/fast"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Quick translate · Rápida
+                      </a>
+                    ) : null}
+                    {/* Video joins Tutor here rather than as a header pill —
+                        same phone-width rationale (Tom, 7/27). Founders-only
+                        in v1 (lib/release.ts). */}
+                    {founder ? (
+                      <a
+                        href="/video"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Video captions · Subtítulos
+                      </a>
+                    ) : null}
+                    <a
+                      href="/vision"
+                      role="menuitem"
+                      className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      Photo translator · Fotos
+                    </a>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        setHistoryOpen(true);
+                      }}
+                      className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      History · Historial
+                    </button>
+                    {/* The quick start, for the person who installed TAOS at a
+                        table and now wants to know what the other pills do. The
+                        share sheet offers it to the person being handed the
+                        app; this offers it to the person doing the handing. */}
+                    <a
+                      href="/guide"
+                      role="menuitem"
+                      className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      How to use TAOS · Cómo usar
+                    </a>
+                    {/* /about is the product page a stranger reads after
+                        scanning the QR — Landing.tsx links it, but Landing is
+                        only ever shown to logged-OUT visitors, so signing in
+                        used to be a one-way door away from it. */}
+                    <a
+                      href="/about"
+                      role="menuitem"
+                      className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    >
+                      About TAOS · Acerca de TAOS
+                    </a>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        onSignOut();
+                      }}
+                      className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100/70 transition hover:bg-amber-400/10"
+                    >
+                      Sign out · Salir
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          {/* ROW TWO: the screens. Right-aligned, and Together ▾ keeps
+              a pill to its right, which is what guarantees its dropdown
+              (absolute right-0, 11rem wide) has room to open inside the
+              container instead of hanging off an edge. Wraps rather
+              than overflows if it ever outgrows a width again. */}
+          <nav className="flex flex-wrap items-center justify-end gap-2">
             <a
               href="/live"
               className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
               Live
             </a>
-            {/* Call / Chat / Table stacked under one pill — six pills overflowed
-                a phone width and made the whole page slide sideways, and four
-                would too: Live · Chat · Table · Translate, plus the title and
-                two icons, does not fit a 360px Droid.
+            {/* Call is a PILL for founders, not a menu entry — Tom and Liz use
+                it daily and it was costing them two touches to reach through
+                Together ▾ even when the geometry above behaved. It was
+                top-level once; this puts it back, still behind the same
+                callVisibleTo() the page gate and POST /api/call/realtime ask,
+                so a stranger sees nothing here and the three surfaces cannot
+                drift apart (lib/release.ts).
+
+                It lives OUTSIDE the Together menu rather than in both places:
+                one entry per screen is what keeps nav-completeness.test.ts a
+                fence instead of a headcount. Revisit this the day /call is
+                promoted to customers — a public Call belongs back under
+                Together with Chat and Table, because at that point the pill
+                is spending a phone-width on a screen most people will not use
+                daily. Noted in ENHANCEMENTS.md. */}
+            {callVisible ? (
+              <a
+                href="/call"
+                className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              >
+                Call
+              </a>
+            ) : null}
+            {/* Chat / Table under one pill — six pills overflowed a phone
+                width and made the whole page slide sideways, and four would
+                too: Live · Chat · Table · Translate, plus the title and two
+                icons, does not fit a 360px Droid.
 
                 This menu used to be founders-only, with customers getting a
                 plain Chat pill beside it — which is how /tabletop ended up
                 with no nav entry at all for anyone who isn't Tom or Liz.
                 Table is customer-facing now (lib/release.ts), so there is one
-                menu for everyone. Call came back on 8/27 as founders-only, so
-                Tom and Liz see three entries here and customers see two. */}
-            <div ref={togetherMenuRef} className="relative">
+                menu for everyone, and it holds the same two entries whoever
+                is signed in — Call moved up to the pill above on 8/31. */}
+            <div ref={togetherMenuRef}>
               <button
                 type="button"
                 onClick={() => setTogetherMenuOpen((o) => !o)}
@@ -910,31 +1202,21 @@ export function TranslatorShell({
                   aria-label="Together"
                   className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                 >
-                  {/* Call is founders-only (lib/release.ts). Chat leads the
-                      menu when it's gone, so it drops the top border the way
-                      a first item should. */}
-                  {callVisible ? (
-                    <a
-                      href="/call"
-                      role="menuitem"
-                      className="block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Call · Llamada
-                    </a>
-                  ) : null}
+                  {/* Chat leads the menu, so it carries no top border. Call
+                      used to sit above it behind {callVisible}; it is a
+                      top-level pill now, which is also why this list no
+                      longer changes shape depending on who is signed in. */}
                   <a
                     href="/chat"
                     role="menuitem"
-                    className={`block w-full px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10 ${
-                      callVisible ? "border-t border-white/10" : ""
-                    }`}
+                    className="flex min-h-[44px] w-full items-center px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                   >
                     Chat · Chat
                   </a>
                   <a
                     href="/tabletop"
                     role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                    className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                   >
                     Table · Mesa
                   </a>
@@ -947,201 +1229,7 @@ export function TranslatorShell({
             >
               Translate
             </a>
-            {/* Share: one icon-only button, no label — the point is to hand
-                the app to someone you just met without the translator screen
-                growing another pill. */}
-            <button
-              type="button"
-              onClick={() => setShareOpen(true)}
-              aria-label="Share TAOS / Compartir TAOS"
-              title="Share TAOS · Compartir"
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
-            >
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-4 w-4"
-              >
-                <circle cx="18" cy="5" r="3" />
-                <circle cx="6" cy="12" r="3" />
-                <circle cx="18" cy="19" r="3" />
-                <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
-              </svg>
-            </button>
-            {/* Tutor lives in this menu (with History) — Tom, 7/27: one fewer
-                pill keeps the header from crowding phone widths. Hidden
-                entirely for RC1 (lib/release.ts).
-
-                The trigger used to be the signed-in email's first letter, and
-                on Tom's account (xdrabbit@) that letter is X — so the button
-                that OPENS the menu was drawn as the universal symbol for
-                close/delete. Liz, launching the wave on 8/30: strangers read
-                it as "remove" and would not tap it. Any account whose email
-                starts with x, or with no letter at all, had the same problem.
-
-                So the closed state is the nine-dot apps grid every phone
-                already teaches — "there is more in here" — and the open state
-                is an X, which now genuinely means close. Both glyphs are
-                stacked in the same 16px box and cross-faded, so the header
-                never reflows on the swap. */}
-            <div ref={accountMenuRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setAccountMenuOpen((o) => !o)}
-                aria-label={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
-                aria-haspopup="menu"
-                aria-expanded={accountMenuOpen}
-                title={accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
-              >
-                <span className="relative block h-4 w-4">
-                  {/* Nine dots, filled rather than stroked: at 16px a 2px
-                      stroke on a 3px circle fills it in anyway, and dots read
-                      as "apps" where nine tiny rings read as noise. */}
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
-                      accountMenuOpen ? "opacity-0" : "opacity-100"
-                    }`}
-                  >
-                    <circle cx="5" cy="5" r="2" />
-                    <circle cx="12" cy="5" r="2" />
-                    <circle cx="19" cy="5" r="2" />
-                    <circle cx="5" cy="12" r="2" />
-                    <circle cx="12" cy="12" r="2" />
-                    <circle cx="19" cy="12" r="2" />
-                    <circle cx="5" cy="19" r="2" />
-                    <circle cx="12" cy="19" r="2" />
-                    <circle cx="19" cy="19" r="2" />
-                  </svg>
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    className={`absolute inset-0 h-4 w-4 transition-opacity duration-150 ${
-                      accountMenuOpen ? "opacity-100" : "opacity-0"
-                    }`}
-                  >
-                    <path d="M6 6l12 12M18 6L6 18" />
-                  </svg>
-                </span>
-              </button>
-              {accountMenuOpen ? (
-                <div
-                  role="menu"
-                  aria-label="More · Más"
-                  className="absolute right-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
-                >
-                  {/* Who you are signed in as. This used to be the trigger's
-                      `title`, which no phone has ever rendered — a tooltip
-                      needs a mouse. Sign out sits at the bottom of this same
-                      menu, so the account it signs out of belongs at the top
-                      of it. */}
-                  <p className="truncate px-4 py-2 text-[11px] text-amber-100/50">
-                    {email}
-                  </p>
-                  {tutorEnabled() ? (
-                    <a
-                      href="/tutor"
-                      role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Tutor
-                    </a>
-                  ) : null}
-                  {/* The word-for-word quickie box. In the menu rather than
-                      as a header pill for the reason the header is already
-                      overflowing at 390px (ENHANCEMENTS.md, 8/30) — and
-                      because it belongs NEXT TO the screens, not among the
-                      four ways to talk. Founders-only until the register
-                      contrast has been watched on a wave (lib/release.ts);
-                      NEXT_PUBLIC_ENABLE_FAST=1 opens it to everyone. */}
-                  {fastVisible ? (
-                    <a
-                      href="/fast"
-                      role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Quick translate · Rápida
-                    </a>
-                  ) : null}
-                  {/* Video joins Tutor here rather than as a header pill —
-                      same phone-width rationale (Tom, 7/27). Founders-only
-                      in v1 (lib/release.ts). */}
-                  {founder ? (
-                    <a
-                      href="/video"
-                      role="menuitem"
-                      className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                    >
-                      Video captions · Subtítulos
-                    </a>
-                  ) : null}
-                  <a
-                    href="/vision"
-                    role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Photo translator · Fotos
-                  </a>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setAccountMenuOpen(false);
-                      setHistoryOpen(true);
-                    }}
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    History · Historial
-                  </button>
-                  {/* The quick start, for the person who installed TAOS at a
-                      table and now wants to know what the other pills do. The
-                      share sheet offers it to the person being handed the
-                      app; this offers it to the person doing the handing. */}
-                  <a
-                    href="/guide"
-                    role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    How to use TAOS · Cómo usar
-                  </a>
-                  {/* /about is the product page a stranger reads after
-                      scanning the QR — Landing.tsx links it, but Landing is
-                      only ever shown to logged-OUT visitors, so signing in
-                      used to be a one-way door away from it. */}
-                  <a
-                    href="/about"
-                    role="menuitem"
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    About TAOS · Acerca de TAOS
-                  </a>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setAccountMenuOpen(false);
-                      onSignOut();
-                    }}
-                    className="block w-full border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100/70 transition hover:bg-amber-400/10"
-                  >
-                    Sign out · Salir
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
+          </nav>
         </header>
 
         {/* One-time "add to home screen" nudge (hides itself once installed
