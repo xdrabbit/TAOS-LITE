@@ -26,7 +26,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   token, so knowing the list does not let anybody use it, and the addresses are
   on the About page anyway. It is still the kind of thing that reads badly in a
   security review and gets worse the moment a non-founder address is added to
-  the list. Pre-existing, not introduced by the /fast work (PR #50 flagged it
+  the list. Pre-existing, not introduced by the /fast work (PR #51 flagged it
   rather than fixing it, because changing how founder-ness resolves touches the
   nav, three page gates and four routes at once). Wants: a server-only
   `FOUNDER_EMAILS`, a small `/api/me` capability answer for the nav to render
@@ -449,7 +449,7 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **/fast metering moved to the server, 2026-08-31** — PR #50. Found
+- **/fast metering moved to the server, 2026-08-31** — PR #51. Found
   reviewing #46-#49 rather than in the field, and it was the revenue hole:
   `POST /api/fast` gated who could call it and how fast, then translated
   **without ever asking what the month's allowance had left**. The bill was a
@@ -522,7 +522,7 @@ is not a prerequisite for using it.
   characters typed → **2 provider calls, 1 billed row**. Server ceiling of
   60/min per account on top, because a debounce is a courtesy the browser
   extends; a driver ignoring it entirely got 60 served and then 429s.
-  → **Both halves of that paragraph were wrong, and #50 fixes them** (8/31).
+  → **Both halves of that paragraph were wrong, and #51 fixes them** (8/31).
   The 1500ms clock ran in the BROWSER and wrote the billing row itself, so a
   caller who declined to run it — a curl with a valid session, a tab closed at
   1400ms — was never billed at all; and the 60/min ceiling was a counter in
