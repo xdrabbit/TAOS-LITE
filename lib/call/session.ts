@@ -2,6 +2,7 @@
 
 import { supabase } from "@/lib/supabase";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import { fetchIceServers, readTransport, type CallTransport } from "./ice";
 
 // 1:1 WebRTC call between Tom and Liz, signaled over a Supabase Realtime
 // broadcast channel (no extra infra: the app's existing Supabase project
@@ -9,9 +10,35 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 // MDN "perfect negotiation" pattern so glare (both sides offering at once)
 // and mid-call renegotiation (camera on/off) just work.
 //
-// Connectivity: STUN by default, which covers most wifi/cellular pairings.
-// For carrier NATs where P2P fails, set NEXT_PUBLIC_TURN_URL /
-// NEXT_PUBLIC_TURN_USERNAME / NEXT_PUBLIC_TURN_CREDENTIAL to add a TURN relay.
+// ── Connectivity, after the 2026-08-31 field report ────────────────────────
+// Tom and Liz, both founders, both seeing the screen, the call initiating —
+// and no connection between two real phones. Three things were wrong, and the
+// first was the one that mattered:
+//
+//   1. There was no relay. This file asked for one public STUN server, and
+//      STUN cannot carry a packet — it only tells a phone its own public
+//      address. Two phones behind carrier-grade NAT (both on cellular) have
+//      no direct path to discover, so ICE exhausts its candidate pairs and
+//      the call sits in "connecting" forever. ICE servers now come from
+//      /api/call/ice, which mints short-lived Cloudflare TURN credentials.
+//
+//   2. A failed connection retried forever, silently. `restartIce()` does not
+//      throw when the restart is doomed — it succeeds, ICE fails again, and
+//      the handler restarted it again. The catch block holding the only error
+//      message was unreachable, so the screen said "reconnecting…" until
+//      somebody gave up. There is now one restart and then an honest failure.
+//
+//   3. Trickled candidates arriving before the remote description were
+//      DROPPED. `addIceCandidate` throws if there is no remote description
+//      yet and the throw was swallowed as "stale candidate". The answerer's
+//      candidates race its answer over the broadcast channel, so this quietly
+//      threw away real candidates — including, once there is one, the relay
+//      candidate that would have connected the call. They are queued now.
+//
+// The diagnostics below (states, candidate types, the selected pair) are not
+// temporary. They are how the next connection failure gets read instead of
+// guessed at, and they are what the on-screen "connected · relay" indicator
+// is telling the truth from.
 
 export type CallState =
   | "idle"
@@ -67,6 +94,25 @@ export interface CallEvents {
    * re-pointed without dropping the session.
    */
   onPeerLanguage?: (code: string) => void;
+  /**
+   * How the media is actually flowing, once it is: peer-to-peer or through
+   * the relay. Fires on connect and again after a reconnect, because a call
+   * that starts direct and hands over to a new cell tower can end up relayed.
+   */
+  onTransport?: (transport: CallTransport) => void;
+  /**
+   * Whether this call has a relay to fall back on at all. Fires once, before
+   * the connection is attempted. False means /api/call/ice had no Cloudflare
+   * credentials to mint from — the call will still work anywhere STUN works,
+   * and the screen says so rather than implying a safety net it lacks.
+   */
+  onRelayAvailable?: (available: boolean) => void;
+  /**
+   * One line of connection trail — gathering states, candidate types, the
+   * selected pair. Also written to the console. Founders' debugging tool and
+   * the beginning of a support surface; not swept up after this fix.
+   */
+  onDiagnostic?: (line: string) => void;
 }
 
 export interface ActiveCall {
@@ -114,18 +160,40 @@ function randomPeerId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function getIceServers(): RTCIceServer[] {
-  const servers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
-  const turnUrl = process.env.NEXT_PUBLIC_TURN_URL?.trim();
-  if (turnUrl) {
-    servers.push({
-      urls: turnUrl,
-      username: process.env.NEXT_PUBLIC_TURN_USERNAME?.trim() || undefined,
-      credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL?.trim() || undefined
-    });
-  }
-  return servers;
-}
+/**
+ * How long a connection attempt may sit unconnected before it is called a
+ * failure, in milliseconds.
+ *
+ * ICE on two healthy phones settles in about two seconds; a relay allocation
+ * adds a round trip to Cloudflare. Fifteen seconds is long enough that a slow
+ * cellular handshake is not cut off, and short enough that nobody stares at
+ * "connecting…" wondering whether to hang up — which is precisely what Tom
+ * and Liz were left doing, because before this there was no timeout at all.
+ */
+const CONNECT_TIMEOUT_MS = 15_000;
+
+/**
+ * How many ICE restarts to spend before admitting defeat.
+ *
+ * One. A flaky cellular handoff recovers on the first restart; a NAT with no
+ * path through it fails identically every time, and the old code retried that
+ * case forever because `restartIce()` reports success for a restart that is
+ * about to fail.
+ */
+const MAX_ICE_RESTARTS = 1;
+
+/**
+ * What a founder sees when the call genuinely cannot be made.
+ *
+ * Bilingual because the two people on this call read different languages and
+ * neither should have to be handed the other's — Liz reads the Spanish, Tom
+ * reads the English, on the same screen at the same time. Concrete, because
+ * "connection failed" tells nobody what to do next: the useful instruction is
+ * that switching a phone to wifi usually fixes it.
+ */
+const CONNECT_FAILED_MESSAGE =
+  "Could not connect the call. One of you is on a network that blocks a direct link — try wifi on both phones. · " +
+  "No se pudo conectar la llamada. Uno de los dos está en una red que bloquea la conexión directa — prueben wifi en ambos teléfonos.";
 
 export async function startCall(config: CallConfig, events: CallEvents): Promise<ActiveCall> {
   const peerId = randomPeerId();
@@ -161,8 +229,69 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   let ignoreOffer = false;
   let settingRemoteAnswer = false;
 
+  // The ICE servers this call was minted with, and whether a relay is among
+  // them. Fetched once at join: the credential outlives the call, and asking
+  // again per peer rebuild would spend a round trip on every reconnect.
+  let iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+  let relayAvailable = false;
+
+  // Candidates that arrived before there was a remote description to hang
+  // them on. See handleCandidate() — dropping these is how a relay candidate
+  // goes missing and a connectable call fails to connect.
+  let pendingCandidates: RTCIceCandidateInit[] = [];
+
+  // Failure bookkeeping. `connectTimer` is the 15-second watchdog; without it
+  // a doomed connection has no terminal state at all and the UI waits forever.
+  let iceRestarts = 0;
+  let connectTimer: number | null = null;
+
   const setState = (s: CallState) => {
     if (!ended || s === "ended") events.onState?.(s);
+  };
+
+  /** One line of connection trail, to the console and to the screen. */
+  const diagnose = (line: string) => {
+    if (ended) return;
+    // Greppable, and the same prefix the server route logs under, so a
+    // browser console and a Vercel log read as one story.
+    console.info(`[taos-call-ice] ${line}`);
+    events.onDiagnostic?.(line);
+  };
+
+  const clearConnectTimer = () => {
+    if (connectTimer !== null) {
+      window.clearTimeout(connectTimer);
+      connectTimer = null;
+    }
+  };
+
+  /**
+   * Give up, out loud.
+   *
+   * The whole point of the 8/31 fix: there is now a path that ends in a
+   * message. Before, every failure route either retried forever or was
+   * unreachable, so the call had exactly two outcomes — connected, or a
+   * spinner nobody could interpret.
+   */
+  const failConnection = (why: string) => {
+    if (ended) return;
+    clearConnectTimer();
+    diagnose(
+      `connect_failed why=${why} restarts=${iceRestarts} relay_available=${relayAvailable}`
+    );
+    events.onError?.(CONNECT_FAILED_MESSAGE);
+    setState("error");
+  };
+
+  /** Start (or restart) the watchdog on an attempt that is not yet connected. */
+  const armConnectTimer = () => {
+    clearConnectTimer();
+    connectTimer = window.setTimeout(() => {
+      connectTimer = null;
+      if (ended || !pc) return;
+      if (pc.connectionState === "connected") return;
+      failConnection(`timeout_${pc.connectionState}_ice_${pc.iceConnectionState}`);
+    }, CONNECT_TIMEOUT_MS);
   };
 
   const sendSignal = (msg: Omit<SignalMessage, "from">) => {
@@ -178,12 +307,17 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   };
 
   const teardownPeer = () => {
+    clearConnectTimer();
+    pendingCandidates = [];
     if (pc) {
       try {
         pc.onnegotiationneeded = null;
         pc.onicecandidate = null;
         pc.ontrack = null;
         pc.onconnectionstatechange = null;
+        pc.oniceconnectionstatechange = null;
+        pc.onicegatheringstatechange = null;
+        pc.onicecandidateerror = null;
         pc.close();
       } catch {
         /* ignore */
@@ -322,7 +456,9 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     teardownPeer();
     if (ended || !localStream) return;
 
-    pc = new RTCPeerConnection({ iceServers: getIceServers() });
+    iceRestarts = 0;
+    pc = new RTCPeerConnection({ iceServers });
+    const self = pc;
 
     for (const track of localStream.getTracks()) {
       pc.addTrack(track, localStream);
@@ -369,27 +505,99 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     };
 
     pc.onicecandidate = (ev) => {
-      if (ev.candidate) sendSignal({ kind: "candidate", data: ev.candidate.toJSON() });
+      if (ev.candidate) {
+        // `type` is host / srflx (found via STUN) / relay (allocated on the
+        // TURN server). A gathering run with no `relay` line in it while
+        // relay_available=true is the signature of a credential Cloudflare
+        // refused — which is otherwise completely invisible.
+        diagnose(`local_candidate type=${ev.candidate.type ?? "?"}`);
+        sendSignal({ kind: "candidate", data: ev.candidate.toJSON() });
+      } else {
+        diagnose("local_candidate end-of-candidates");
+      }
+    };
+
+    // A TURN server that rejects the credential reports it HERE and nowhere
+    // else; ICE just quietly proceeds without a relay candidate. A 401 in
+    // this line is the difference between "the relay is broken" and "this
+    // network has no path", which are the two failures that look identical
+    // from the outside.
+    pc.onicecandidateerror = (ev) => {
+      const e = ev as RTCPeerConnectionIceErrorEvent;
+      diagnose(`candidate_error code=${e.errorCode} url=${e.url ?? "?"} text=${e.errorText ?? ""}`);
+    };
+
+    pc.onicegatheringstatechange = () => {
+      if (self.iceGatheringState) diagnose(`gathering=${self.iceGatheringState}`);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      diagnose(`ice=${self.iceConnectionState}`);
     };
 
     pc.onconnectionstatechange = () => {
-      if (!pc || ended) return;
-      if (pc.connectionState === "connected") setState("connected");
-      if (pc.connectionState === "disconnected") setState("reconnecting");
-      if (pc.connectionState === "failed") {
-        // One ICE restart attempt before giving up — flaky cellular handoffs
-        // often recover; a hard NAT block will fail again immediately.
+      if (!pc || ended || pc !== self) return;
+      diagnose(`connection=${pc.connectionState}`);
+
+      if (pc.connectionState === "connected") {
+        clearConnectTimer();
+        setState("connected");
+        // Which path won, read off the live connection rather than assumed.
+        // This is what puts "direct" or "relay" on the screen, and it is the
+        // one number Tom's three-row network matrix is actually collecting.
+        void readTransport(pc).then((transport) => {
+          if (ended) return;
+          diagnose(`transport=${transport}`);
+          events.onTransport?.(transport);
+        });
+        return;
+      }
+
+      if (pc.connectionState === "disconnected") {
+        // Not yet a failure — WebRTC reports this for a stall that usually
+        // heals itself. But arm the watchdog, because if it does not heal
+        // there is otherwise nothing to end the wait.
         setState("reconnecting");
+        armConnectTimer();
+        return;
+      }
+
+      if (pc.connectionState === "failed") {
+        if (iceRestarts >= MAX_ICE_RESTARTS) {
+          // The bug this replaces: restartIce() does NOT throw on a restart
+          // that is about to fail, so the old catch block never ran and this
+          // branch retried forever with the UI stuck on "reconnecting…".
+          failConnection("ice_failed");
+          return;
+        }
+        iceRestarts += 1;
+        diagnose(`ice_restart attempt=${iceRestarts}`);
+        setState("reconnecting");
+        armConnectTimer();
         try {
           pc.restartIce();
         } catch {
-          events.onError?.("Connection failed. If this keeps happening, both switch to wifi.");
-          setState("error");
+          failConnection("restart_threw");
         }
       }
     };
 
     setState("connecting");
+    armConnectTimer();
+  };
+
+  const drainCandidates = async () => {
+    if (!pc?.remoteDescription || pendingCandidates.length === 0) return;
+    const queued = pendingCandidates;
+    pendingCandidates = [];
+    diagnose(`candidates_drained count=${queued.length}`);
+    for (const candidate of queued) {
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch {
+        /* genuinely stale, e.g. after a rollback — safe to drop now */
+      }
+    }
   };
 
   const handleDescription = async (data: unknown) => {
@@ -405,6 +613,10 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       settingRemoteAnswer = description.type === "answer";
       await pc.setRemoteDescription(description);
       settingRemoteAnswer = false;
+      // There is a remote description now, so anything that arrived early is
+      // finally addable. Drain before answering: these are the partner's
+      // candidates, and on a hard network one of them is the relay.
+      await drainCandidates();
       if (description.type === "offer") {
         await pc.setLocalDescription();
         sendSignal({ kind: "description", data: pc.localDescription });
@@ -415,10 +627,25 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     }
   };
 
+  /**
+   * Take a candidate from the partner — or hold it until it can be taken.
+   *
+   * `addIceCandidate` throws if the peer connection has no remote description
+   * yet, and this used to swallow that as "stale candidate after a rollback".
+   * It usually was not stale. The answerer applies the offer and immediately
+   * starts trickling, so its candidates race its answer down the same
+   * broadcast channel, and any that won the race were thrown away for good.
+   * On an easy network nobody noticed; on a hard one the discarded candidate
+   * is the relay, and the call fails with every part of it working.
+   */
   const handleCandidate = async (data: unknown) => {
-    if (!pc) return;
+    const candidate = data as RTCIceCandidateInit;
+    if (!pc || !pc.remoteDescription) {
+      pendingCandidates.push(candidate);
+      return;
+    }
     try {
-      await pc.addIceCandidate(data as RTCIceCandidateInit);
+      await pc.addIceCandidate(candidate);
     } catch {
       if (!ignoreOffer) {
         /* stale candidate after a rollback — safe to drop */
@@ -468,6 +695,23 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
 
     const room = normalizeRoomCode(config.room);
     if (!room) throw new Error("Enter a room code first.");
+
+    // Mint the relay BEFORE joining the room, because the peer connection is
+    // built the moment a partner appears — a presence sync is synchronous and
+    // has nowhere to await this. One mint per join: the credential outlives
+    // the call, so a reconnect reuses it rather than paying a round trip.
+    //
+    // fetchIceServers() never throws and never returns empty; a failure here
+    // degrades to the STUN-only call /call was already making, which is why
+    // this is not guarded. What must not happen is a founder being unable to
+    // place a call at all because Cloudflare had a bad minute.
+    const ice = await fetchIceServers();
+    iceServers = ice.iceServers;
+    relayAvailable = ice.relay;
+    diagnose(
+      `ice_servers count=${iceServers.length} relay_available=${relayAvailable}`
+    );
+    events.onRelayAvailable?.(relayAvailable);
 
     // A channel per room, and never two.
     //

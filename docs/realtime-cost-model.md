@@ -334,11 +334,79 @@ never touches a server, so pixels cost nothing however long the call runs or
 however good the camera is. Supabase Realtime carries only the SDP/ICE handshake
 and a few JSON blobs, on the project the app already pays for.
 
-Connectivity is Google's public STUN. `NEXT_PUBLIC_TURN_URL` / `_USERNAME` /
-`_CREDENTIAL` are wired but **unset**, so there is no relay today and no relay
-bill. If a carrier NAT ever defeats P2P, a TURN provider becomes the first
-per-gigabyte line item this app has ever had — worth pricing before it is
-switched on, not after.
+Media is still free when the call is direct. What changed on 2026-08-31 is that
+a call is no longer *only* able to be direct — see the next section.
+
+## The relay, and the first per-gigabyte line item
+
+The 8/31 field report closed the question this document used to leave open.
+Tom and Liz could not connect /call phone to phone, and the reason was that
+there was no relay to fall back to: `lib/call/session.ts` asked for one public
+Google STUN server, and STUN cannot carry a packet. Two phones behind
+carrier-grade NAT have no direct path for it to find.
+
+So there is a relay now, and with it the first per-gigabyte line item this app
+has ever had. **It is only ever billed when peer-to-peer fails.** A direct call
+still costs nothing to carry; the relay is the fallback, and STUN is still tried
+first precisely because the free path is the preferred one.
+
+### What it costs
+
+Read 2026-08-31, both providers priced for the same job:
+
+| | relay bandwidth | free allowance |
+|---|---|---|
+| **Cloudflare Realtime TURN** ← chosen | **$0.05 / GB** egress | first **1,000 GB/month** |
+| Twilio Network Traversal Service | $0.40 / GB relayed | none |
+
+Cloudflare is eight times cheaper, and it needs no SDK — one POST with a bearer
+token, so `package.json` did not grow. Twilio would have won if the account were
+already carrying TURN traffic. It is not.
+
+### What a relayed call actually moves
+
+The app asks for a 640-wide camera and one mono audio channel
+(`lib/call/session.ts`), which WebRTC runs at roughly **1.1 Mbit/s** of video
+plus **40 kbit/s** of audio — about 0.5 GB per hour **in one direction**.
+
+A call has two directions, and Cloudflare bills egress: it sends Tom's stream
+out to Liz and Liz's stream out to Tom. So the number that matters is doubled:
+
+```
+video call, one hour, relayed:   ~1.0 GB  →  $0.05    (and $0 inside the free tier)
+audio call, one hour, relayed:  ~0.04 GB  →  $0.002
+```
+
+That ~1 GB/hour is the real figure for *this* app, and it sits at the bottom of
+the 1–2 GB/hour a video call is usually quoted at, because of the 640-wide
+constraint the code already asks for. Turning the camera off drops it by a
+factor of twenty-five.
+
+Against a /call hour that already costs ~$3.48 of model time (~$0.058/min),
+relay bandwidth is **noise** — about 1.4 % of the bill, and that only in the
+worst case where every call is relayed. The free tier covers roughly 1,000
+hours of relayed video a month, which two founders will not reach.
+
+This is worth re-pricing at public promotion, and for one specific reason: the
+cost is per relayed call, so it scales with *how many strangers are on hard
+networks*, not with how many founders there are. The free tier is 1,000 GB
+whether the account has two users or two thousand.
+
+### Turning it on
+
+Two variables in Vercel, server-side only — never `NEXT_PUBLIC_`, because a TURN
+credential in the browser bundle is a free relay for anyone who reads
+view-source:
+
+```
+CLOUDFLARE_TURN_KEY_ID=…        # Cloudflare dashboard → Realtime → TURN keys
+CLOUDFLARE_TURN_API_TOKEN=…
+```
+
+`POST /api/call/ice` mints a one-hour credential per join. With the variables
+absent — production's state as of 2026-08-31 — that route still answers 200 with
+STUN only and the screen reports "no relay", so /call keeps making exactly the
+calls it can make today.
 
 ## Turning a cap off, or moving it
 

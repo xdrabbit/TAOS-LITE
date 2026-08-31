@@ -8,6 +8,7 @@ import {
   type ActiveCall,
   type CallState
 } from "@/lib/call/session";
+import type { CallTransport } from "@/lib/call/ice";
 import {
   startCallInterpreter,
   type ActiveInterpreter,
@@ -89,20 +90,50 @@ function formatElapsed(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// The connection labels are BILINGUAL, on one line, for the same reason the
+// failure message in lib/call/session.ts is: the two people on a call read
+// different languages, they are looking at their own phones, and a status
+// only one of them can read is a status that gets described out loud over a
+// call that is not working yet.
 function stateLabel(s: CallState): string {
   switch (s) {
     case "media":
-      return "camera/mic…";
+      return "camera/mic… · cámara/micro…";
     case "waiting":
-      return "waiting for partner…";
+      return "waiting… · esperando…";
     case "connecting":
-      return "connecting…";
+      return "connecting… · conectando…";
     case "connected":
-      return "connected";
+      return "connected · conectado";
     case "reconnecting":
-      return "reconnecting…";
+      return "reconnecting… · reconectando…";
+    case "error":
+      // Reachable for the first time as of 8/31. The old code had no path to
+      // it for a connection failure — a doomed call retried until somebody
+      // gave up — so the pill sat blank on the one state that most needed a
+      // word on it.
+      return "not connected · sin conexión";
     default:
       return "";
+  }
+}
+
+/**
+ * How the media is actually flowing — the honest half of "Connected".
+ *
+ * Worth showing rather than hiding: `relay` means the call is going through
+ * Cloudflare and spending relay bandwidth, and `direct` means it is free. It
+ * is also the single value Tom and Liz's three-row network matrix is there to
+ * collect, so it has to be readable on the phone that is on the call.
+ */
+function transportLabel(t: CallTransport): string {
+  switch (t) {
+    case "direct":
+      return "direct · directo";
+    case "relay":
+      return "relay · retransmitido";
+    default:
+      return "linked · enlazado";
   }
 }
 
@@ -123,6 +154,11 @@ export function CallShell(): JSX.Element {
   const [volumeStep, setVolumeStep] = useState(1);
   const [elapsed, setElapsed] = useState(0);
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
+  // Connection diagnostics. These stay after the 8/31 fix — they are the
+  // founders' debugging tool, and the first version of a support surface.
+  const [transport, setTransport] = useState<CallTransport | null>(null);
+  const [relayAvailable, setRelayAvailable] = useState<boolean | null>(null);
+  const [trail, setTrail] = useState<string[]>([]);
   const [idleSecondsLeft, setIdleSecondsLeft] = useState<number | null>(null);
   const [spend, setSpend] = useState<CallSpend>(() => emptySpend("elevenlabs"));
 
@@ -424,6 +460,9 @@ export function CallShell(): JSX.Element {
     setElapsed(0);
     setSpend(emptySpend("elevenlabs"));
     setPeerLanguage(null);
+    setTransport(null);
+    setRelayAvailable(null);
+    setTrail([]);
     inCallRef.current = true;
     setPhase("call");
     setCameraOn(withVideo);
@@ -468,6 +507,16 @@ export function CallShell(): JSX.Element {
             startInterpreterFor(track);
           },
           onPeerLanguage: (code) => setPeerLanguage(code),
+          onTransport: (t) => setTransport(t),
+          onRelayAvailable: (available) => setRelayAvailable(available),
+          // Bounded: a call that reconnects repeatedly must not grow this
+          // array until the phone slows down. The last 40 lines are the
+          // ones that explain a failure anyway.
+          onDiagnostic: (line) =>
+            setTrail((lines) => [
+              ...lines.slice(-39),
+              `${new Date().toLocaleTimeString()} ${line}`
+            ]),
           onPeerInterpreterSpeaking: (speaking) => setPeerSpeaking(speaking),
           onPeerLeft: () => {
             stopInterpreter();
@@ -745,6 +794,31 @@ export function CallShell(): JSX.Element {
                 />
                 {callState === "connected" ? formatElapsed(elapsed) : stateLabel(callState)}
                 <span className="text-amber-100/50">· {room}</span>
+                {/* The honest half of "connected": which path the media took.
+                    `relay` is the one that spends Cloudflare bandwidth, and
+                    it is the value Tom and Liz's network matrix collects. */}
+                {callState === "connected" && transport ? (
+                  <span
+                    className={transport === "relay" ? "text-sky-300/80" : "text-emerald-300/80"}
+                    title={
+                      transport === "relay"
+                        ? "Relayed through Cloudflare — one of you is on a network with no direct path."
+                        : "Peer-to-peer. No relay bandwidth is being spent."
+                    }
+                  >
+                    · {transportLabel(transport)}
+                  </span>
+                ) : null}
+                {/* Only while it still matters: before a connection exists,
+                    knowing there is no fallback is what explains a failure. */}
+                {callState !== "connected" && relayAvailable === false ? (
+                  <span
+                    className="text-amber-300/70"
+                    title="No TURN relay is configured, so this call can only connect if a direct path exists."
+                  >
+                    · no relay
+                  </span>
+                ) : null}
               </div>
               {/* The meter. /call was pulled partly because nobody could say
                   what a minute of it cost; now it says so while it spends. */}
@@ -871,6 +945,34 @@ export function CallShell(): JSX.Element {
             >
               Hang up
             </button>
+
+            {/* The connection trail, collapsed.
+                Kept rather than removed once the 8/31 fix landed: "the call
+                initiates and never connects" was un-diagnosable from a phone
+                in another room, and the whole reason it took a code-reading
+                session to find three separate causes. Closed by default so it
+                costs a customer nothing if /call is ever promoted; open, it is
+                the first thing to screenshot when a call misbehaves. Same
+                lines go to the browser console under [taos-call-ice]. */}
+            {trail.length > 0 ? (
+              <details className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                <summary className="cursor-pointer text-xs text-amber-100/50">
+                  Connection details · Detalles de conexión
+                  {relayAvailable === false ? " — no relay" : ""}
+                </summary>
+                <div className="mt-2 space-y-1 text-[11px] text-amber-100/40">
+                  <div>
+                    relay available: {relayAvailable === null ? "…" : relayAvailable ? "yes" : "no"}
+                    {transport ? ` · path: ${transport}` : ""}
+                  </div>
+                  <div className="max-h-40 overflow-y-auto font-mono">
+                    {trail.map((line, i) => (
+                      <div key={`${i}-${line}`}>{line}</div>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            ) : null}
           </>
         )}
 
