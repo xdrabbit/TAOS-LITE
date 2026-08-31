@@ -20,16 +20,27 @@ export function generateMetadata(): Metadata {
 }
 
 export default function FastPage(): JSX.Element {
-  // Founders only (lib/release.ts). "coming-soon" rather than /call's bounce:
-  // you only reach /fast by opening the grid menu, so a card is an answer to a
-  // question somebody asked, not a dead end they were forwarded into.
+  // Founders only (lib/release.ts), bounced home rather than shown a card —
+  // the same `deny` /call uses. A quickie box is the sort of screen whose URL
+  // gets pasted into a message ("try this"), and a stranger who taps a
+  // forwarded one should land on TAOS proper, not on an advert for a screen
+  // they cannot open.
   //
-  // The gate that MATTERS is in app/api/fast/route.ts: this one runs in the
-  // browser off a client-held session, so it hides the screen without
-  // defending it. Rendering FastShell without a founder's access token buys
-  // you a 404 from the only route that spends money.
+  // ── Why this is not a 307 ──────────────────────────────────────────────
+  // /tutor bounces with a real server-side `redirect()`, and it can, because
+  // `tutorEnabled()` is an environment flag the server can read on its own.
+  // This gate is `fastVisibleTo(EMAIL)`, and the email lives in a Supabase
+  // session that is persisted CLIENT-side (lib/supabase.ts) — a server
+  // component here has no cookie to read and cannot tell a founder from
+  // anybody else. So the bounce is FounderGate's `router.replace("/")`: same
+  // destination, no Location header, one frame of "Loading…" on the way.
+  //
+  // Which is fine, because this gate was never the fence. The fence is in
+  // app/api/fast/route.ts, which re-asks the same question against a
+  // server-validated access token and answers a stranger with a 404.
+  // Rendering FastShell by hand gets you a screen that cannot translate.
   return (
-    <FounderGate publicRelease={fastEnabled()}>
+    <FounderGate publicRelease={fastEnabled()} deny="home">
       <FastShell />
     </FounderGate>
   );
