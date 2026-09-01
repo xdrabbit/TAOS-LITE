@@ -96,6 +96,20 @@ export interface InterpreterEvents {
   onIdleWarning?: (secondsLeft: number | null) => void;
   /** The session closed itself rather than being hung up. */
   onAutoEnd?: (reason: InterpreterEndReason) => void;
+  /**
+   * Whether the partner's audio is actually REACHING the session.
+   *
+   * "Connected" is not the same question. The interpreter is fed the remote
+   * call partner's WebRTC track, forwarded out of the call's own peer
+   * connection into this one, and a forwarded track that carries silence
+   * looks identical to a healthy one from every angle the client can see:
+   * the peer connection is connected, the data channel is open, no error is
+   * ever raised, and nothing happens for the rest of the call. This flips
+   * true the first time server VAD reports speech, which is the only proof
+   * available that the far end's voice arrived — and it stays false, visibly,
+   * when it does not.
+   */
+  onHearing?: (hearing: boolean) => void;
 }
 
 export interface ActiveInterpreter {
@@ -129,6 +143,21 @@ const DEFAULT_MAX_MS = 60 * 60 * 1000;
 const DEFAULT_IDLE_MS = 2 * 60 * 1000;
 const IDLE_WARNING_MS = 30 * 1000;
 
+/**
+ * How long the session gets to finish connecting before the screen is told it
+ * failed.
+ *
+ * `onconnectionstatechange` reports "connected" and "failed" and nothing in
+ * between, and a peer connection that never negotiates a working candidate
+ * pair can sit in "connecting" for the better part of a minute before the
+ * browser gives up — or, if the data channel is the half that never opens,
+ * for the whole call. Both look the same to the person holding the phone:
+ * nothing. 15s, the same watchdog the call itself got in PR #52, for the same
+ * reason — a failure nobody is told about is indistinguishable from a feature
+ * that does not work.
+ */
+const CONNECT_TIMEOUT_MS = 15_000;
+
 interface MintResponse {
   clientSecret: string;
   callUrl: string;
@@ -151,8 +180,19 @@ export async function startCallInterpreter(
   let dc: RTCDataChannel | null = null;
   let audioEl: HTMLAudioElement | null = null;
   let capTimer: number | null = null;
+  let connectTimer: number | null = null;
   let idleTimer: number | null = null;
   let idleWarnTimer: number | null = null;
+  // Flipped by the first speech VAD commits. See `onHearing` above: it is the
+  // difference between a session that is connected and a session that is
+  // being fed anything at all.
+  let hearing = false;
+  // Set by `fail` below. `stop()` runs on the way out of every failure, and
+  // it used to finish by announcing "idle" — so the screen was told the
+  // interpreter had failed and then, three lines later, told it was simply
+  // not running. An error that is overwritten by its own cleanup is an error
+  // nobody sees.
+  let failedReason: string | null = null;
   let stopped = false;
   let muted = Boolean(config.muted);
   let direction = config.direction;
@@ -205,11 +245,17 @@ export async function startCallInterpreter(
     idleWarnTimer = null;
   };
 
+  const clearConnectTimer = () => {
+    if (connectTimer !== null) window.clearTimeout(connectTimer);
+    connectTimer = null;
+  };
+
   const clearTimers = () => {
     if (capTimer !== null) window.clearTimeout(capTimer);
     if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
     capTimer = null;
     audioStuckTimer = null;
+    clearConnectTimer();
     clearIdleTimers();
   };
 
@@ -242,7 +288,23 @@ export async function startCallInterpreter(
       audioEl.remove();
     }
     setAudioPlaying(false);
-    setState("idle");
+    setState(failedReason ? "error" : "idle");
+  };
+
+  /**
+   * End the session and leave the reason standing.
+   *
+   * Every path that gives up goes through here so that exactly one thing is
+   * true afterwards: the screen holds a state of "error" and a sentence
+   * saying why. Idempotent — the first reason wins, because the first one is
+   * the cause and the ones after it are consequences.
+   */
+  const fail = (message: string) => {
+    if (failedReason) return;
+    failedReason = message;
+    setState("error");
+    events.onError?.(message);
+    void stop();
   };
 
   // Any real speech, in either direction, means the call is alive.
@@ -462,6 +524,7 @@ export async function startCallInterpreter(
     pc.onconnectionstatechange = () => {
       if (!pc) return;
       if (pc.connectionState === "connected") {
+        clearConnectTimer();
         setState("connected");
         if (capTimer === null) {
           capTimer = window.setTimeout(() => {
@@ -472,8 +535,8 @@ export async function startCallInterpreter(
         bumpIdle();
       }
       if (pc.connectionState === "failed") {
-        events.onError?.("Interpreter connection failed.");
-        void stop();
+        clearConnectTimer();
+        fail("The interpreter lost its connection.");
       }
     };
 
@@ -489,6 +552,11 @@ export async function startCallInterpreter(
 
       if (type === "input_audio_buffer.speech_started") {
         speechStartedMs = typeof ev.audio_start_ms === "number" ? ev.audio_start_ms : null;
+        // The partner's forwarded audio demonstrably arrived. Said once.
+        if (!hearing) {
+          hearing = true;
+          events.onHearing?.(true);
+        }
         return;
       }
       if (type === "input_audio_buffer.speech_stopped") {
@@ -585,6 +653,13 @@ export async function startCallInterpreter(
     dc.onerror = () => events.onError?.("Interpreter data channel error.");
 
     setState("connecting");
+    // The watchdog for every way this can hang rather than fail: a candidate
+    // pair that never forms, a data channel that never opens, a provider that
+    // accepts the SDP and then says nothing. `failed` covers none of them.
+    connectTimer = window.setTimeout(() => {
+      if (stopped || pc?.connectionState === "connected") return;
+      fail(`The interpreter could not connect (stuck at "${pc?.connectionState ?? "new"}").`);
+    }, CONNECT_TIMEOUT_MS);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
@@ -602,9 +677,7 @@ export async function startCallInterpreter(
     return { stop, setMuted, setDirection, spend: () => spend };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start the interpreter.";
-    setState("error");
-    events.onError?.(message);
-    await stop();
+    fail(message);
     throw error;
   }
 }

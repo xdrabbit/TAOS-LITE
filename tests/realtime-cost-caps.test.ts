@@ -120,6 +120,31 @@ describe("the cap reaches OpenAI, not just the builder", () => {
     });
   });
 
+  it("/call mints a session carrying its context cap", async () => {
+    // /call is here as of 2026-08-31. Its session object lived inline in the
+    // route until then, so it was the one realtime surface this file could not
+    // reach — and a cap nothing asserts on is a cap one refactor from gone.
+    // The route is founders-only, hence the email.
+    caller = { id: "u1", email: "xdrabbit@gmail.com" };
+    const { POST } = await import("@/app/api/call/realtime/route");
+    await POST(
+      signedInRequest("http://localhost/api/call/realtime", {
+        source: "es",
+        target: "en",
+        mode: "clone"
+      })
+    );
+
+    const { session } = mintedPayload();
+    expect(session.truncation).toEqual({
+      type: "retention_ratio",
+      retention_ratio: 0.8,
+      token_limits: { post_instructions: 100 }
+    });
+    // Clone mode asks for TEXT — the captions, and the cheap half of the bill.
+    expect(session.output_modalities).toEqual(["text"]);
+  });
+
   it("expires a minted secret on both surfaces, the way /call does", async () => {
     // A client secret is a spendable, billing session. /call has capped its
     // life since it shipped; /live and /tabletop minted immortal ones until

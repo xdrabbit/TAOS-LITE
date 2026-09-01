@@ -14,6 +14,11 @@ import {
   type CallTransport
 } from "@/lib/call/ice";
 import { relayCopy, type RelayStatusReport, type RelayTone } from "@/lib/call/relay";
+import {
+  captionsExpected,
+  interpreterCopy,
+  type InterpreterStatus
+} from "@/lib/call/interpreterStatus";
 import { probeCopy, probeRelay, type RelayProbeResult } from "@/lib/call/relayProbe";
 import {
   startCallInterpreter,
@@ -204,6 +209,12 @@ export function CallShell(): JSX.Element {
   const [idleSecondsLeft, setIdleSecondsLeft] = useState<number | null>(null);
   const [spend, setSpend] = useState<CallSpend>(() => emptySpend("elevenlabs"));
 
+  // What the interpreter is doing, as a thing the SCREEN knows. Before 8/31
+  // this existed only inside lib/call/interpreter.ts, which is why a session
+  // could fail, or run deaf, without anybody being told.
+  const [interpreterStatus, setInterpreterStatus] = useState<InterpreterStatus>("off");
+  const [interpreterReason, setInterpreterReason] = useState<string | null>(null);
+
   const [feed, setFeed] = useState<CaptionLine[]>([]);
   const [liveText, setLiveText] = useState("");
   const [liveHeard, setLiveHeard] = useState<string | null>(null);
@@ -227,6 +238,10 @@ export function CallShell(): JSX.Element {
   const voiceModeRef = useRef<InterpreterVoiceMode>("clone");
   const remoteTrackRef = useRef<MediaStreamTrack | null>(null);
   const nextIdRef = useRef(1);
+  // How many captions this screen actually put up, for the hang-up report.
+  // `feed` is state and the hang-up path reads refs; a caption count that
+  // arrives one render late is a caption count that lies about the last one.
+  const feedCountRef = useRef(0);
   const timerRef = useRef<number | null>(null);
   const heardQueueRef = useRef<string[]>([]);
   const peerSpeakingGuardRef = useRef<number | null>(null);
@@ -254,6 +269,12 @@ export function CallShell(): JSX.Element {
     () => resolveCallDirection(mine, peerLanguage, theirs),
     [mine, peerLanguage, theirs]
   );
+
+  // The interpreter's status, as words. Same shape as the relay preflight's
+  // (lib/call/relay.ts) because they answer the same kind of question and a
+  // founder should not have to learn two vocabularies on one screen.
+  const interpreterWords = interpreterCopy(interpreterStatus, interpreterReason);
+  const interpreterTone = interpreterWords.tone;
 
   const spendNow = spendUsd(spend);
   const perMinute = usdPerMinute(spend, elapsed);
@@ -355,6 +376,10 @@ export function CallShell(): JSX.Element {
     const it = interpreterRef.current;
     interpreterRef.current = null;
     if (it) void it.stop();
+    // Deliberately NOT clearing a `failed` status here: the teardown that
+    // follows a failure must not erase the reason for it, which is the same
+    // mistake lib/call/interpreter.ts's own `stop()` used to make.
+    setInterpreterStatus((s) => (s === "failed" ? s : "off"));
   }, []);
 
   /**
@@ -365,7 +390,13 @@ export function CallShell(): JSX.Element {
    * costs a log line, not a call.
    */
   const reportSpend = useCallback(
-    async (finalSpend: CallSpend, seconds: number, mode: InterpreterVoiceMode, dir: CallDirection) => {
+    async (
+      finalSpend: CallSpend,
+      seconds: number,
+      mode: InterpreterVoiceMode,
+      dir: CallDirection,
+      captions: number
+    ) => {
       if (finalSpend.responses === 0 && finalSpend.transcribedSeconds === 0) return;
       try {
         await fetch("/api/call/usage", {
@@ -376,7 +407,8 @@ export function CallShell(): JSX.Element {
             mode,
             direction: `${dir.source}->${dir.target}`,
             seconds,
-            spend: finalSpend
+            spend: finalSpend,
+            captions
           })
         });
       } catch {
@@ -396,6 +428,8 @@ export function CallShell(): JSX.Element {
       // and an interpreter pointed at its own output language either parrots
       // or sits silent. Either way it bills, so it simply doesn't start.
       if (dir.source === dir.target) {
+        setInterpreterStatus("not_needed");
+        setInterpreterReason(null);
         setNotice(
           `You and your partner are both on ${languageLabel(dir.target)} — no interpreter needed.`
         );
@@ -403,6 +437,8 @@ export function CallShell(): JSX.Element {
       }
 
       startingRef.current = true;
+      setInterpreterStatus("starting");
+      setInterpreterReason(null);
       startCallInterpreter(
         {
           direction: dir,
@@ -411,7 +447,23 @@ export function CallShell(): JSX.Element {
           voiceMode: voiceModeRef.current
         },
         {
-          onError: (msg) => setNotice(`Interpreter: ${msg}`),
+          // Every one of these is a state the screen had no word for before
+          // 8/31, and the reason a dead interpreter looked exactly like a
+          // working one.
+          onState: (state) => {
+            if (state === "minting" || state === "connecting") setInterpreterStatus("starting");
+            else if (state === "connected") setInterpreterStatus((s) => (s === "hearing" ? s : "on"));
+            else if (state === "error") setInterpreterStatus("failed");
+            else if (state === "idle") setInterpreterStatus((s) => (s === "failed" ? s : "off"));
+          },
+          // The partner's forwarded audio demonstrably arrived. "Connected"
+          // never proved that, and a session fed silence is the one failure
+          // that produces no error of any kind.
+          onHearing: () => setInterpreterStatus("hearing"),
+          onError: (msg) => {
+            setInterpreterReason(msg);
+            setNotice(`Interpreter: ${msg}`);
+          },
           // This phone's interpreter speaks translations of the PARTNER's
           // words — so it's the partner who must not talk over it. Relay the
           // state so their phone can show the hold-on indicator.
@@ -431,6 +483,11 @@ export function CallShell(): JSX.Element {
           },
           onTranslationDelta: (delta) => setLiveText((t) => t + delta),
           onTranslationDone: (text) => {
+            // Counted HERE and not inside the setFeed updater below: React may
+            // invoke an updater more than once for a single change (it does in
+            // StrictMode), and a counter that runs twice reports captions that
+            // were never on the screen. Same rule the controls follow.
+            feedCountRef.current += 1;
             const heard = heardQueueRef.current.splice(0).join(" · ") || null;
             setLiveText("");
             setLiveHeard(null);
@@ -450,8 +507,14 @@ export function CallShell(): JSX.Element {
           if (inCallRef.current) interpreterRef.current = it;
           else void it.stop();
         })
-        .catch(() => {
-          /* onError already surfaced it */
+        .catch((error: unknown) => {
+          // onError has normally already run inside the module. This is the
+          // backstop for a rejection that never reached it — the status must
+          // never be left reading "starting…" forever.
+          const message =
+            error instanceof Error ? error.message : "The interpreter could not start.";
+          setInterpreterStatus("failed");
+          setInterpreterReason((r) => r ?? message);
         })
         .finally(() => {
           startingRef.current = false;
@@ -469,6 +532,8 @@ export function CallShell(): JSX.Element {
     if (direction.source === direction.target) {
       // Gone doubled mid-call: stop paying for a session with no job.
       stopInterpreter();
+      setInterpreterStatus("not_needed");
+      setInterpreterReason(null);
       setNotice(
         `You and your partner are both on ${languageLabel(direction.target)} — no interpreter needed.`
       );
@@ -510,7 +575,8 @@ export function CallShell(): JSX.Element {
         finalSpend,
         elapsedRef.current,
         voiceModeRef.current,
-        directionRef.current
+        directionRef.current,
+        feedCountRef.current
       );
     }
     wakeHoldRef.current?.ensure(); // inCallRef is false now → holder releases
@@ -543,6 +609,7 @@ export function CallShell(): JSX.Element {
     setError(null);
     setNotice(null);
     setFeed([]);
+    feedCountRef.current = 0;
     setElapsed(0);
     setSpend(emptySpend("elevenlabs"));
     setPeerLanguage(null);
@@ -551,6 +618,14 @@ export function CallShell(): JSX.Element {
     setFlow(null);
     setPrevFlow(null);
     setTrail([]);
+    // A fresh call starts on a clean slate, including a failure left over from
+    // the last one — this is the ONE place a `failed` status is allowed to
+    // clear, so a dead interpreter can never be mistaken for a new one.
+    setInterpreterStatus("off");
+    setInterpreterReason(null);
+    // Captions are the point of the screen. They come back ON for every call
+    // regardless of how the last one ended.
+    setCaptionsOn(true);
     inCallRef.current = true;
     setPhase("call");
     setCameraOn(withVideo);
@@ -594,7 +669,17 @@ export function CallShell(): JSX.Element {
             remoteTrackRef.current = track;
             startInterpreterFor(track);
           },
-          onPeerLanguage: (code) => setPeerLanguage(code),
+          onPeerLanguage: (code) => {
+            // Point the ref BEFORE the state update, not only from the effect
+            // that follows it. The partner's announcement and their audio
+            // track arrive in the same tick, React batches both, and the
+            // effect runs after — so `startInterpreterFor` read the previous
+            // direction and minted a session for a pair that turned out to be
+            // doubled, which the effect then immediately stopped. A session
+            // that exists for one tick is still a session that was created.
+            directionRef.current = resolveCallDirection(mine, code, theirs);
+            setPeerLanguage(code);
+          },
           onTransport: (t) => setTransport(t),
           onRelayAvailable: (available) => setRelayAvailable(available),
           // Bounded: a call that reconnects repeatedly must not grow this
@@ -623,7 +708,7 @@ export function CallShell(): JSX.Element {
     } catch {
       endCall();
     }
-  }, [room, withVideo, mine, startInterpreterFor, stopInterpreter, endCall, setPeerSpeaking]);
+  }, [room, withVideo, mine, theirs, startInterpreterFor, stopInterpreter, endCall, setPeerSpeaking]);
 
   const createRoom = useCallback(() => {
     setRoom(generateRoomCode());
@@ -724,8 +809,33 @@ export function CallShell(): JSX.Element {
     }`;
 
   return (
-    <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
-      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
+    <main
+      className={`px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] ${
+        // In a CALL the page is exactly one screen tall, and the height is set
+        // HERE rather than on the column inside — `box-sizing: border-box` is
+        // global (Tailwind preflight), so 100svh here has the safe-area
+        // padding INSIDE it. Subtracting a guessed "2rem" on the column
+        // instead would come up short by the notch and the home indicator on
+        // an installed PWA, which is ~81px of controls back off the bottom of
+        // the screen — the bug this whole PR is about, in a smaller size.
+        phase === "call" ? "h-[100svh] overflow-hidden" : "min-h-screen"
+      }`}
+    >
+      {/* In the LOBBY the page may grow and scroll; in a CALL it may not.
+          The 8/31 field report ("no captions") was this line. The call screen
+          was a 1055px column poured into a 659px phone: the caption panel
+          began 591px down and the button that toggles it sat at 811px — off
+          the bottom of an iPhone, on a screen nobody thinks to scroll because
+          they are looking at a face. `svh` rather than `vh` because iOS
+          measures `vh` against the browser WITHOUT its toolbars, a viewport
+          that only exists while you are already scrolling. */}
+      <div
+        className={`mx-auto flex max-w-md flex-col ${
+          phase === "call"
+            ? "h-full gap-3 overflow-hidden"
+            : "min-h-[calc(100vh-2rem)] gap-4"
+        }`}
+      >
         <header className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
           <a
@@ -956,17 +1066,21 @@ export function CallShell(): JSX.Element {
           </>
         ) : (
           <>
-            {/* Video area */}
-            <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-stone-950/80">
+            {/* Video area. `min-h-0 flex-1` is what makes the rest of the
+                column reachable: the tile takes whatever is left after the
+                captions and the controls have had their height, instead of
+                claiming a fixed 4:3 portrait block and pushing them off the
+                bottom of the screen. */}
+            <div className="relative min-h-[7rem] flex-[2_1_0%] overflow-hidden rounded-2xl border border-white/10 bg-stone-950/80">
               <video
                 ref={remoteVideoRef}
                 playsInline
                 autoPlay
                 muted /* original audio plays via the call's ducked audio element */
-                className={`aspect-[3/4] w-full object-cover ${remoteHasVideo ? "" : "hidden"}`}
+                className={`h-full w-full object-cover ${remoteHasVideo ? "" : "hidden"}`}
               />
               {!remoteHasVideo ? (
-                <div className="flex aspect-[3/4] w-full flex-col items-center justify-center gap-2 text-amber-100/50">
+                <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-amber-100/50">
                   <div className="text-5xl">🎧</div>
                   <div className="text-sm">{stateLabel(callState) || "voice call"}</div>
                 </div>
@@ -1018,6 +1132,32 @@ export function CallShell(): JSX.Element {
                   </span>
                 ) : null}
               </div>
+              {/* The interpreter, on the video, where the face is.
+                  Before 8/31 this screen had no word for the interpreter at
+                  all: it could mint, connect, translate, spend money and hang
+                  up without ever saying so, and a session that never started
+                  looked exactly like one that started and said nothing. */}
+              <div
+                className={`absolute bottom-2 left-2 right-2 flex items-center gap-2 rounded-full px-3 py-1 text-xs ${
+                  interpreterTone === "ok"
+                    ? "bg-stone-950/70 text-emerald-200/90"
+                    : interpreterTone === "bad"
+                      ? "bg-red-950/80 text-red-200"
+                      : "bg-stone-950/80 text-amber-200/90"
+                }`}
+                title={interpreterWords.hint}
+              >
+                <span
+                  className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                    interpreterTone === "ok"
+                      ? "bg-emerald-400"
+                      : interpreterTone === "bad"
+                        ? "bg-red-400"
+                        : "animate-pulse bg-amber-300"
+                  }`}
+                />
+                <span className="truncate">{interpreterWords.label}</span>
+              </div>
               {/* The meter. /call was pulled partly because nobody could say
                   what a minute of it cost; now it says so while it spends. */}
               <div
@@ -1056,19 +1196,35 @@ export function CallShell(): JSX.Element {
               </div>
             ) : null}
 
-            {/* Captions */}
+            {/* Captions.
+                An empty panel used to read "Captions appear here…" whatever
+                was happening behind it — while the session was starting,
+                while it was dead, and while it was quietly being fed silence.
+                It says which one now, because "no captions" is a symptom with
+                four causes and the screen is the only thing in a position to
+                tell them apart. */}
             {captionsOn ? (
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="shrink-0 rounded-2xl border border-white/10 bg-white/5 p-3">
                 {liveHeard ? (
                   <div className="text-xs italic text-amber-100/40">“{liveHeard}”</div>
                 ) : null}
                 <div className="min-h-[3rem] text-lg leading-snug text-amber-50">
-                  {liveText || feed[0]?.text || (
-                    <span className="text-amber-100/40">Captions appear here…</span>
-                  )}
+                  {liveText ||
+                    feed[0]?.text ||
+                    (captionsExpected(interpreterStatus) ? (
+                      <span className="text-amber-100/40">
+                        {interpreterStatus === "hearing"
+                          ? "Listening… captions appear as they speak."
+                          : "Captions appear here as soon as they speak."}
+                      </span>
+                    ) : (
+                      <span className={interpreterTone === "bad" ? "text-red-300" : "text-amber-300/80"}>
+                        {interpreterWords.hint}
+                      </span>
+                    ))}
                 </div>
                 {feed.length > (liveText ? 0 : 1) ? (
-                  <div className="mt-2 max-h-40 space-y-2 overflow-y-auto border-t border-white/10 pt-2">
+                  <div className="mt-2 max-h-24 space-y-2 overflow-y-auto border-t border-white/10 pt-2">
                     {(liveText ? feed : feed.slice(1)).map((line) => (
                       <div key={line.id}>
                         {line.heard ? (
@@ -1080,7 +1236,19 @@ export function CallShell(): JSX.Element {
                   </div>
                 ) : null}
               </div>
-            ) : null}
+            ) : (
+              /* Captions OFF is a choice, and it must never be mistakable for
+                 captions BROKEN — which is the whole of the 8/31 report read
+                 the other way round. It leaves a mark that says so, and the
+                 mark is the button. */
+              <button
+                type="button"
+                onClick={() => setCaptionsOn(true)}
+                className="shrink-0 rounded-2xl border border-dashed border-white/20 bg-white/[0.03] p-3 text-left text-sm text-amber-100/60"
+              >
+                Captions are OFF · Subtítulos apagados — tap to show them.
+              </button>
+            )}
 
             {notice ? (
               <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3 text-xs text-amber-100/80">
@@ -1094,29 +1262,60 @@ export function CallShell(): JSX.Element {
             ) : null}
 
             {/* Controls */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid shrink-0 grid-cols-3 gap-2">
               <button type="button" onClick={toggleMic} className={btn(micMuted)}>
                 {micMuted ? "🔇 Mic off" : "🎙️ Mic on"}
               </button>
               <button type="button" onClick={toggleCamera} className={btn(cameraOn)}>
                 {cameraOn ? "📹 Cam on" : "📷 Cam off"}
               </button>
-              <button type="button" onClick={toggleVoice} className={btn(voiceOn)}>
-                {voiceOn ? "🗣️ Translation" : "💬 Captions only"}
+              {/* These two used to read "💬 Captions only" and "💬 Captions",
+                  side by side, governing DIFFERENT things — the interpreter's
+                  VOICE and the text panel. One of them turned captions off
+                  and the other turned the voice off, and both looked like the
+                  way to get captions. They no longer share a word or an icon. */}
+              <button
+                type="button"
+                onClick={toggleVoice}
+                className={btn(voiceOn)}
+                title="The interpreter's spoken translation, in your ear."
+              >
+                {voiceOn ? "🗣️ Voice on" : "🔇 Voice off"}
               </button>
-              <button type="button" onClick={() => setCaptionsOn((c) => !c)} className={btn(captionsOn)}>
-                {captionsOn ? "💬 Captions" : "💬 Hidden"}
+              <button
+                type="button"
+                onClick={() => setCaptionsOn((c) => !c)}
+                className={btn(captionsOn)}
+                title="The translated text on this screen."
+              >
+                {captionsOn ? "💬 Captions on" : "💬 Captions off"}
               </button>
               <button type="button" onClick={cycleVolume} className={`${btn(false)} col-span-2`}>
                 {VOLUME_STEPS[volumeStep].label}
               </button>
             </div>
+            <button
+              type="button"
+              onClick={endCall}
+              className="shrink-0 rounded-2xl bg-red-500 px-4 py-3 text-base font-semibold text-stone-50 transition"
+            >
+              Hang up
+            </button>
+
+            {/* Everything below here is secondary — an explanation, a language
+                change, a diagnostic trail — and it scrolls INSIDE this box.
+                That is the guarantee: no amount of copy down here can push the
+                captions or the controls off the bottom of a phone again, which
+                is the whole of the 8/31 report. */}
+            <div className="min-h-0 flex-[1_1_0%] space-y-3 overflow-y-auto">
             {/* Two voices, two controls, and until 8/28 nothing on the screen
                 said which was which. */}
             <p className="text-[11px] leading-snug text-amber-100/40">
               {voiceOn
                 ? "You hear the interpreter speaking their words in your language."
-                : "The interpreter is silent — the captions below are still running."}{" "}
+                : captionsOn
+                  ? "The interpreter's voice is off — the captions above are still running."
+                  : "The interpreter's voice is off AND captions are off, so nothing is being translated to you."}{" "}
               {VOLUME_STEPS[volumeStep].value === 0
                 ? "Their own voice is muted underneath."
                 : VOLUME_STEPS[volumeStep].value < 1
@@ -1135,14 +1334,6 @@ export function CallShell(): JSX.Element {
               onSelect={selectLanguage}
               onOpenSheet={() => setSheetOpen(true)}
             />
-
-            <button
-              type="button"
-              onClick={endCall}
-              className="rounded-2xl bg-red-500 px-4 py-3 text-base font-semibold text-stone-50 transition"
-            >
-              Hang up
-            </button>
 
             {/* The connection trail, collapsed.
                 Kept rather than removed once the 8/31 fix landed: "the call
@@ -1228,6 +1419,7 @@ export function CallShell(): JSX.Element {
                 </div>
               </details>
             ) : null}
+            </div>
           </>
         )}
 

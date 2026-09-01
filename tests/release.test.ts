@@ -10,6 +10,7 @@ import {
   tutorComingSoon,
   tutorEnabled
 } from "@/lib/release";
+import { buildCallSession } from "@/lib/call/realtimeSession";
 
 // The v1 release scope, decided 8/18 (Tom: "take us to minimum first release
 // candidate"). Customers see Translate, Live, Chat, Table, and the Photo
@@ -349,10 +350,30 @@ describe("/call cost guards (ENHANCEMENTS.md, asked for on 8/03)", () => {
     // every response re-reads the whole call at $32/Mtok. Capped, it billed
     // 66% and held flat. Deleting this is how a long call gets expensive
     // again, silently.
+    //
+    // Asserted on the BUILT session rather than on the route's source text as
+    // of 8/31: the session object moved into lib/call/realtimeSession.ts so
+    // the live-fire rig could drive the thing that ships (the same reason
+    // /live and /tabletop have builders — see tests/realtime-cost-caps.ts).
+    // Reading the object is the stronger claim anyway; the old grep would
+    // have passed on a `truncation` sitting in a comment.
+    const session = buildCallSession({
+      direction: { source: "es", target: "en" },
+      model: "gpt-realtime",
+      voice: "marin",
+      transcribeModel: "gpt-4o-mini-transcribe",
+      mode: "clone"
+    }) as { truncation?: { type: string; retention_ratio: number; token_limits: { post_instructions: number } } };
+    expect(session.truncation).toEqual({
+      type: "retention_ratio",
+      retention_ratio: 0.8,
+      token_limits: { post_instructions: 100 }
+    });
+    // And the route still mints with it, rather than building it and dropping
+    // it on the floor.
     const route = read("app/api/call/realtime/route.ts");
-    expect(route).toContain("truncation");
-    expect(route).toContain("post_instructions");
-    expect(route).toContain("retention_ratio");
+    expect(route).toContain("buildCallSession");
+    expect(route).toContain("session");
   });
 
   it("shrinks the four-hour client cap to the API's own one-hour ceiling", () => {

@@ -31,6 +31,8 @@ interface UsageBody {
   direction?: string;
   seconds?: number;
   spend?: Partial<CallSpend>;
+  /** How many captions the screen actually put up. See costLogLine. */
+  captions?: number;
 }
 
 function num(value: unknown, max: number): number {
@@ -83,7 +85,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       mode: body.mode === "instant" ? "instant" : "clone",
       direction: safeLabel(body.direction),
       seconds: num(body.seconds, 4 * 3600),
-      spend
+      spend,
+      captions: num(body.captions, 100_000)
     })
   );
 
