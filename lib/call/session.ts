@@ -9,6 +9,7 @@ import {
   type CallMediaFlow,
   type CallTransport
 } from "./ice";
+import { closeCallAudioContext, ensureCallAudioContext } from "./audioBridge";
 
 // 1:1 WebRTC call between Tom and Liz, signaled over a Supabase Realtime
 // broadcast channel (no extra infra: the app's existing Supabase project
@@ -223,7 +224,6 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   // The ducking control's real output stage. See attachRemoteGain() below:
   // HTMLMediaElement.volume is READ-ONLY on iOS, so on an iPhone the element
   // alone can only ever be all-or-nothing, and "quiet" did nothing at all.
-  let remoteAudioCtx: AudioContext | null = null;
   let remoteGain: GainNode | null = null;
   // Only true once the graph has been SEEN carrying audio. Until then the
   // element is still the thing making sound and the graph is held at zero, so
@@ -346,11 +346,15 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       remoteAudioEl.remove();
       remoteAudioEl = null;
     }
-    if (remoteAudioCtx) {
-      void remoteAudioCtx.close().catch(() => {
-        /* already closed */
-      });
-      remoteAudioCtx = null;
+    if (remoteGain) {
+      // The NODES go; the context does not. It belongs to the call, not to
+      // this peer connection — a reconnect rebuilds the graph, and on iOS a
+      // context rebuilt outside the Join tap would never start again.
+      try {
+        remoteGain.disconnect();
+      } catch {
+        /* ignore */
+      }
       remoteGain = null;
       remoteGainVerified = false;
     }
@@ -362,6 +366,9 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
     ended = true;
     sendSignal({ kind: "bye" });
     teardownPeer();
+    // The last thing on the call to hold the context. The interpreter's own
+    // bridge is released before this by CallShell.endCall().
+    closeCallAudioContext();
     localStream?.getTracks().forEach((t) => t.stop());
     localStream = null;
     if (channel) {
@@ -425,11 +432,10 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
   const attachRemoteGain = (stream: MediaStream) => {
     if (remoteGain) return;
     try {
-      const Ctor =
-        window.AudioContext ??
-        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctor) return;
-      const ctx = new Ctor();
+      // Shared with the interpreter's input bridge (lib/call/audioBridge.ts),
+      // and created inside the Join tap so WebKit will actually start it.
+      const ctx = ensureCallAudioContext();
+      if (!ctx) return;
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       const gain = ctx.createGain();
@@ -437,11 +443,7 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       source.connect(analyser);
       analyser.connect(gain);
       gain.connect(ctx.destination);
-      remoteAudioCtx = ctx;
       remoteGain = gain;
-      void ctx.resume().catch(() => {
-        /* resumes on the next gesture; the element covers the gap */
-      });
 
       // Watch for the first real sample. Silence proves nothing either way —
       // nobody may have spoken yet — so this only ever flips to "working",
@@ -463,7 +465,6 @@ export async function startCall(config: CallConfig, events: CallEvents): Promise
       window.setTimeout(probe, 200);
     } catch {
       // No WebAudio here. The element keeps the job it already had.
-      remoteAudioCtx = null;
       remoteGain = null;
     }
   };

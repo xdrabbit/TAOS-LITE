@@ -216,14 +216,25 @@ export function costLogLine(fields: {
    * than a thing somebody has to reproduce.
    */
   captions?: number;
+  /**
+   * How the CALL's own media travelled, and how many speech segments the
+   * interpreter heard. Neither costs anything; both are here because the
+   * 2026-09-03 field report — two connected interpreters translating nothing
+   * — could not be told apart from a quiet call in this log line.
+   * `speech_started=0` with a non-zero `seconds` is the signature.
+   */
+  transport?: string;
+  speechStarted?: number;
 }): string {
-  const { room, mode, direction, seconds, spend, captions } = fields;
+  const { room, mode, direction, seconds, spend, captions, transport, speechStarted } = fields;
   return [
     "[taos-call-cost]",
     `room=${room}`,
     `mode=${mode}`,
     `pair=${direction}`,
     `seconds=${Math.round(seconds)}`,
+    `transport=${transport || "?"}`,
+    `speech_started=${speechStarted ?? 0}`,
     `responses=${spend.responses}`,
     `speech_s=${spend.transcribedSeconds.toFixed(1)}`,
     `audio_in_tok=${spend.audioInTokens}`,

@@ -635,6 +635,32 @@ is not a prerequisite for using it.
   that had been saying "tap Rejoin" at a screen with no Rejoin on it finally
   has one.
 
+- **The interpreter was listening to a track Safari never sends, 2026-09-03**
+  — PR #59. Two iPhones, Wi-Fi ↔ cellular. Both people heard each other's
+  real voice perfectly and the relay minted `ready`, so the call itself was
+  fine. Both interpreters minted at 20:06:29Z, both connected — and neither
+  translated a single word. Zero responses, zero `/api/call/usage`, no error.
+  Dead air until the idle timer.
+  → **The fix**: `/call` handed the track it RECEIVED from the call peer
+  connection straight to `addTrack` on the interpreter's peer connection, and
+  WebKit sends silence when a received track is re-sent that way. Nothing
+  throws. Server VAD commits nothing, and with `create_response: false` there
+  is nothing to respond to, forever. The partner's audio now goes through a
+  WebAudio graph first (`lib/call/audioBridge.ts`) — source →
+  `MediaStreamAudioDestinationNode` → a LOCALLY GENERATED track, which is a
+  thing Safari does transmit. One AudioContext per call, created inside the
+  Join tap because iOS will not start one anywhere else, shared with the
+  ducking graph in `lib/call/session.ts`.
+  → **And the reason the fix ships with telemetry**: the cause above is
+  inferred from the symptom, not measured on the phone. So the interpreter
+  now polls its own `getStats()` every 2s and writes `interp in level=…
+  energy=… speech_started=…` to the same on-screen trail the call uses;
+  counts `speech_started` / `committed`; says "connected but hearing nothing"
+  after 20s of connected silence, worded apart from the idle message; and
+  sends `speech_started` plus the call's `transport` to the
+  `[taos-call-cost]` log line, so `speech_started=0 seconds=180` is
+  diagnosable from Vercel instead of from a phone in someone's hand.
+
 - **The relay tells you it works before you dial, 2026-08-31** — PR #TBD.
   Tom entered `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` in
   Vercel and redeployed, and then nobody could find out whether they took.

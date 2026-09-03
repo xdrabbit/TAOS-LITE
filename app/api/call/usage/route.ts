@@ -33,6 +33,10 @@ interface UsageBody {
   spend?: Partial<CallSpend>;
   /** How many captions the screen actually put up. See costLogLine. */
   captions?: number;
+  /** `direct` | `relay` | `unknown` — how the call's own media travelled. */
+  transport?: string;
+  /** How many VAD speech segments this phone's interpreter heard. */
+  speechStarted?: number;
 }
 
 function num(value: unknown, max: number): number {
@@ -86,7 +90,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       direction: safeLabel(body.direction),
       seconds: num(body.seconds, 4 * 3600),
       spend,
-      captions: num(body.captions, 100_000)
+      captions: num(body.captions, 100_000),
+      // Zero speech segments on a call with minutes on the clock is the
+      // 2026-09-03 silent-interpreter signature, and the only way to see it
+      // from Vercel's logs rather than from a phone in someone's hand.
+      transport: safeLabel(body.transport, 8),
+      speechStarted: num(body.speechStarted, 100_000)
     })
   );
 

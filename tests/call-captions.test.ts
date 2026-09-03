@@ -85,6 +85,15 @@ const startCallInterpreter = vi.fn(async (_config: unknown, events: InterpreterE
       audioOutTokens: 0,
       transcribedSeconds: 0,
       ttsCharacters: 0
+    }),
+    // Added with the input telemetry: endCall reads this to decide whether a
+    // spend-free call was silence or a silent interpreter.
+    inputStats: () => ({
+      speechStarted: 0,
+      speechCommitted: 0,
+      level: null,
+      energy: null,
+      bridged: false
     })
   };
 });
