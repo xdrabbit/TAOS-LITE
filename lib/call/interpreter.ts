@@ -11,6 +11,7 @@ import {
   type RealtimeUsage
 } from "./cost";
 import { requestSpeech } from "@/lib/tts/speech";
+import { bridgeInterpreterInput, type InterpreterInputBridge } from "./audioBridge";
 
 // WebRTC client for the /call interpreter. Unlike lib/live/ambient.ts (which
 // streams the MIC), this streams the REMOTE call partner's audio track into a
@@ -72,6 +73,27 @@ export interface InterpreterConfig {
   idleTimeoutMs?: number;
 }
 
+/**
+ * What the session is actually HEARING, as numbers rather than as an absence.
+ *
+ * The 2026-09-03 field report was two connected interpreters that translated
+ * nothing, and there was no way to tell "the audio is silent" from "the model
+ * is quiet" from "the events are not arriving" — all three look like dead
+ * air. These are the three measurements that separate them.
+ */
+export interface InterpreterInputStats {
+  /** VAD segments the session started hearing. Zero is the whole symptom. */
+  speechStarted: number;
+  /** Segments VAD closed and committed for transcription. */
+  speechCommitted: number;
+  /** Latest instantaneous level on the outbound track, or null if unreported. */
+  level: number | null;
+  /** Cumulative audio energy on the outbound track, or null if unreported. */
+  energy: number | null;
+  /** Whether the track reached the session through the WebAudio bridge. */
+  bridged: boolean;
+}
+
 export interface InterpreterEvents {
   onState?: (s: InterpreterState) => void;
   onError?: (msg: string) => void;
@@ -110,6 +132,18 @@ export interface InterpreterEvents {
    * when it does not.
    */
   onHearing?: (hearing: boolean) => void;
+  /**
+   * One line of interpreter trail — the input level, the speech-segment count.
+   * Same surface as the call's own diagnostics, and for the same reason: the
+   * next silent interpreter should be readable, not guessable.
+   */
+  onDiagnostic?: (line: string) => void;
+  /**
+   * Connected for a while, hearing nothing, and the numbers agree. Distinct
+   * from the idle warning: idle means nobody spoke, this means somebody may
+   * well have and none of it reached the session.
+   */
+  onInputSilent?: () => void;
 }
 
 export interface ActiveInterpreter {
@@ -123,6 +157,8 @@ export interface ActiveInterpreter {
   setDirection: (direction: CallDirection) => void;
   /** The bill so far, for the hang-up report. */
   spend: () => CallSpend;
+  /** What the session heard, for the hang-up report and the log line. */
+  inputStats: () => InterpreterInputStats;
 }
 
 /**
@@ -157,6 +193,21 @@ const IDLE_WARNING_MS = 30 * 1000;
  * that does not work.
  */
 const CONNECT_TIMEOUT_MS = 15_000;
+/** How often the input measurement is taken once the session is connected. */
+const INPUT_POLL_MS = 2000;
+/**
+ * How long a connected session may hear literally nothing before the screen
+ * says so. Long enough that two people greeting each other is not a warning,
+ * short enough that nobody sits through the two-minute idle timeout wondering.
+ */
+const SILENT_INPUT_AFTER_MS = 20_000;
+/**
+ * Below these, the outbound track is carrying silence rather than a quiet
+ * room. `totalAudioEnergy` is cumulative, so even a whisper twenty seconds
+ * ago clears it; a track sending empty frames never does.
+ */
+const SILENT_LEVEL = 0.001;
+const SILENT_ENERGY = 1e-6;
 
 interface MintResponse {
   clientSecret: string;
@@ -226,6 +277,16 @@ export async function startCallInterpreter(
   // Speech segment timing, for the transcription half of the bill. The API
   // reports these in milliseconds against the session's own audio clock.
   let speechStartedMs: number | null = null;
+  // The WebAudio re-origination of the partner's track (see audioBridge.ts),
+  // and the input measurements taken off the session's own sender.
+  let inputBridge: InterpreterInputBridge | null = null;
+  let statsTimer: number | null = null;
+  let connectedAt: number | null = null;
+  let speechStartedCount = 0;
+  let speechCommittedCount = 0;
+  let inputLevel: number | null = null;
+  let inputEnergy: number | null = null;
+  let silenceReported = false;
 
   const setState = (s: InterpreterState) => events.onState?.(s);
   const publishSpend = () => events.onSpend?.(spend);
@@ -253,10 +314,87 @@ export async function startCallInterpreter(
   const clearTimers = () => {
     if (capTimer !== null) window.clearTimeout(capTimer);
     if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
+    if (statsTimer !== null) window.clearInterval(statsTimer);
     capTimer = null;
     audioStuckTimer = null;
+    statsTimer = null;
     clearConnectTimer();
     clearIdleTimers();
+  };
+
+  const inputStats = (): InterpreterInputStats => ({
+    speechStarted: speechStartedCount,
+    speechCommitted: speechCommittedCount,
+    level: inputLevel,
+    energy: inputEnergy,
+    bridged: inputBridge !== null
+  });
+
+  /** Compact enough to sit on the same trail as the call's own lines. */
+  const fmt = (n: number | null, places: number) => (n === null ? "?" : n.toFixed(places));
+
+  /**
+   * Read what the interpreter's own sender says it is sending.
+   *
+   * `media-source` is the honest one — it measures the track before it is
+   * encoded — but Safari has not always published it, so `outbound-rtp`
+   * stands in. A browser that reports neither leaves both null, and the
+   * silence warning below stays quiet rather than accusing it of anything.
+   */
+  const readInputStats = async () => {
+    if (stopped || !pc || typeof pc.getStats !== "function") return;
+    // Collected into an object rather than into four `let`s: values written
+    // from inside a callback are not narrowed by the compiler afterwards.
+    const seen: {
+      sourceLevel: number | null;
+      sourceEnergy: number | null;
+      rtpLevel: number | null;
+      rtpEnergy: number | null;
+    } = { sourceLevel: null, sourceEnergy: null, rtpLevel: null, rtpEnergy: null };
+    try {
+      const report = await pc.getStats();
+      report.forEach((raw) => {
+        const stat = raw as Record<string, unknown>;
+        const kind = typeof stat.kind === "string" ? stat.kind : stat.mediaType;
+        if (kind !== "audio") return;
+        const level = typeof stat.audioLevel === "number" ? stat.audioLevel : null;
+        const energy = typeof stat.totalAudioEnergy === "number" ? stat.totalAudioEnergy : null;
+        if (stat.type === "media-source") {
+          seen.sourceLevel = level ?? seen.sourceLevel;
+          seen.sourceEnergy = energy ?? seen.sourceEnergy;
+        } else if (stat.type === "outbound-rtp") {
+          seen.rtpLevel = level ?? seen.rtpLevel;
+          seen.rtpEnergy = energy ?? seen.rtpEnergy;
+        }
+      });
+    } catch {
+      return;
+    }
+    if (stopped) return;
+    const level = seen.sourceLevel ?? seen.rtpLevel;
+    const energy = seen.sourceEnergy ?? seen.rtpEnergy;
+    if (level !== null) inputLevel = level;
+    if (energy !== null) inputEnergy = energy;
+    events.onDiagnostic?.(
+      `interp in level=${fmt(level, 3)} energy=${fmt(energy, 2)}` +
+        ` speech_started=${speechStartedCount} bridged=${inputBridge !== null}`
+    );
+
+    // Only ever accuse the input when there is a number to accuse it with.
+    // No reported level AND no reported energy is an old WebKit, not silence.
+    if (
+      silenceReported ||
+      connectedAt === null ||
+      speechStartedCount > 0 ||
+      (level === null && energy === null) ||
+      Date.now() - connectedAt < SILENT_INPUT_AFTER_MS
+    ) {
+      return;
+    }
+    if ((level ?? 0) < SILENT_LEVEL && (energy ?? 0) < SILENT_ENERGY) {
+      silenceReported = true;
+      events.onInputSilent?.();
+    }
   };
 
   const stop = async () => {
@@ -277,6 +415,10 @@ export async function startCallInterpreter(
     } catch {
       /* ignore */
     }
+    // The bridge's nodes and its minted track ARE ours, and a call that is
+    // hung up and re-made must not leave a graph behind each time.
+    inputBridge?.release();
+    inputBridge = null;
     if (audioEl) {
       audioEl.pause();
       // Settle a readout that is still in the air, for the same reason
@@ -560,8 +702,20 @@ export async function startCallInterpreter(
       }
     };
 
-    // Feed the remote partner's audio straight into the interpreter session.
-    pc.addTrack(config.inputTrack, new MediaStream([config.inputTrack]));
+    // Feed the remote partner's audio into the interpreter session THROUGH a
+    // WebAudio graph. Handing the received track to `addTrack` directly is
+    // what /call did until 2026-09-03, and on iOS Safari it sends silence —
+    // see the note at the top of lib/call/audioBridge.ts. A locally generated
+    // destination track is the same audio in a form Safari will actually
+    // transmit; where there is no WebAudio, the raw track is still better
+    // than no interpreter.
+    inputBridge = bridgeInterpreterInput(config.inputTrack);
+    if (inputBridge) {
+      pc.addTrack(inputBridge.track, inputBridge.stream);
+    } else {
+      events.onDiagnostic?.("interp input bridge unavailable — sending the raw track");
+      pc.addTrack(config.inputTrack, new MediaStream([config.inputTrack]));
+    }
 
     pc.onconnectionstatechange = () => {
       if (!pc) return;
@@ -573,6 +727,11 @@ export async function startCallInterpreter(
             events.onAutoEnd?.("max_duration");
             void stop();
           }, maxMs);
+        }
+        if (statsTimer === null) {
+          connectedAt = Date.now();
+          void readInputStats();
+          statsTimer = window.setInterval(() => void readInputStats(), INPUT_POLL_MS);
         }
         bumpIdle();
       }
@@ -599,6 +758,15 @@ export async function startCallInterpreter(
           hearing = true;
           events.onHearing?.(true);
         }
+        // The count is the answer to "is the session hearing anything at
+        // all?". It ends up on the trail and in the [taos-call-cost] line,
+        // because a call that translated nothing has to say WHY in the log.
+        speechStartedCount += 1;
+        events.onDiagnostic?.(`interp speech_started=${speechStartedCount}`);
+        return;
+      }
+      if (type === "input_audio_buffer.committed") {
+        speechCommittedCount += 1;
         return;
       }
       if (type === "input_audio_buffer.speech_stopped") {
@@ -717,7 +885,7 @@ export async function startCallInterpreter(
     }
     await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
 
-    return { stop, setMuted, setDirection, spend: () => spend };
+    return { stop, setMuted, setDirection, spend: () => spend, inputStats };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start the interpreter.";
     fail(message);

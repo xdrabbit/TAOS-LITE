@@ -209,4 +209,32 @@ describe("what the meter and the log say", () => {
     expect(line).toMatch(/usd=0\.\d{4}/);
     expect(line.split("\n")).toHaveLength(1);
   });
+
+  it("names the transport and the speech count, and defaults them honestly", async () => {
+    const spend = emptySpend("elevenlabs");
+    const measured = costLogLine({
+      room: "AB123",
+      mode: "clone",
+      direction: "es->en",
+      seconds: 180,
+      spend,
+      transport: "relay",
+      speechStarted: 12
+    });
+    expect(measured).toContain("transport=relay");
+    expect(measured).toContain("speech_started=12");
+
+    // A phone on an older build sends neither. "?" is not "direct", and 0 is
+    // the truth about how many segments were REPORTED — the reader can tell
+    // an absent field from a measured zero by the transport next to it.
+    const silent = costLogLine({
+      room: "AB123",
+      mode: "clone",
+      direction: "es->en",
+      seconds: 180,
+      spend
+    });
+    expect(silent).toContain("transport=?");
+    expect(silent).toContain("speech_started=0");
+  });
 });

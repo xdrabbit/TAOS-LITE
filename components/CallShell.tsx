@@ -24,9 +24,11 @@ import {
   startCallInterpreter,
   type ActiveInterpreter,
   type InterpreterEndReason,
+  type InterpreterInputStats,
   type InterpreterVoiceMode
 } from "@/lib/call/interpreter";
 import { resolveCallDirection, type CallDirection } from "@/lib/call/instructions";
+import { ensureCallAudioContext } from "@/lib/call/audioBridge";
 import {
   emptySpend,
   formatUsd,
@@ -257,6 +259,8 @@ export function CallShell(): JSX.Element {
   const startingRef = useRef(false);
   const elapsedRef = useRef(0);
   const roomRef = useRef("");
+  // Read at hang-up, when the state itself is already being reset.
+  const transportRef = useRef<CallTransport | null>(null);
 
   // The pair, exactly as every other screen holds it. Changing it mid-call
   // re-points the live interpreter and tells the partner, rather than
@@ -306,6 +310,9 @@ export function CallShell(): JSX.Element {
   useEffect(() => {
     roomRef.current = room;
   }, [room]);
+  useEffect(() => {
+    transportRef.current = transport;
+  }, [transport]);
 
   // Prefill the room code from a shared /call?room=XYZ link.
   useEffect(() => {
@@ -386,6 +393,12 @@ export function CallShell(): JSX.Element {
     };
   }, []);
 
+  // Bounded exactly as the call's own diagnostics are: a long call must not
+  // grow this array until the phone slows down.
+  const pushTrail = useCallback((line: string) => {
+    setTrail((lines) => [...lines.slice(-39), `${new Date().toLocaleTimeString()} ${line}`]);
+  }, []);
+
   const stopInterpreter = useCallback(() => {
     const it = interpreterRef.current;
     interpreterRef.current = null;
@@ -409,9 +422,17 @@ export function CallShell(): JSX.Element {
       seconds: number,
       mode: InterpreterVoiceMode,
       dir: CallDirection,
-      captions: number
+      captions: number,
+      stats: InterpreterInputStats | null,
+      transportUsed: CallTransport | null
     ) => {
-      if (finalSpend.responses === 0 && finalSpend.transcribedSeconds === 0) return;
+      // A call that spent nothing is normally a call nobody spoke on — but it
+      // is ALSO what the silent interpreter looks like, and that one has to
+      // reach the log. `speech_started=0 seconds=180` is the whole diagnosis.
+      const heardNothing = Boolean(stats) && stats?.speechStarted === 0 && seconds >= 10;
+      if (finalSpend.responses === 0 && finalSpend.transcribedSeconds === 0 && !heardNothing) {
+        return;
+      }
       try {
         await fetch("/api/call/usage", {
           method: "POST",
@@ -422,7 +443,9 @@ export function CallShell(): JSX.Element {
             direction: `${dir.source}->${dir.target}`,
             seconds,
             spend: finalSpend,
-            captions
+            captions,
+            transport: transportUsed ?? "unknown",
+            speechStarted: stats?.speechStarted ?? 0
           })
         });
       } catch {
@@ -484,6 +507,14 @@ export function CallShell(): JSX.Element {
           // state so their phone can show the hold-on indicator.
           onSpeaking: (speaking) => callRef.current?.sendInterpreterSpeaking(speaking),
           onSpend: (next) => setSpend(next),
+          onDiagnostic: (line) => pushTrail(line),
+          // Connected, and hearing nothing. Deliberately worded apart from the
+          // idle message: idle means nobody spoke, this means the audio never
+          // reached the session — which is the 2026-09-03 failure exactly.
+          onInputSilent: () =>
+            setNotice(
+              "Interpreter is connected but hearing nothing — try Rejoin, and check the trail below."
+            ),
           onIdleWarning: (secondsLeft) => setIdleSecondsLeft(secondsLeft),
           onAutoEnd: (reason: InterpreterEndReason) => {
             setAutoEnded(reason);
@@ -536,7 +567,7 @@ export function CallShell(): JSX.Element {
           startingRef.current = false;
         });
     },
-    [stopInterpreter]
+    [stopInterpreter, pushTrail]
   );
 
   /**
@@ -604,6 +635,8 @@ export function CallShell(): JSX.Element {
     inCallRef.current = false;
     const it = interpreterRef.current;
     const finalSpend = it?.spend() ?? null;
+    const finalInput = it?.inputStats() ?? null;
+    const finalTransport = transportRef.current;
     startingRef.current = false;
     stopInterpreter();
     const call = callRef.current;
@@ -619,11 +652,14 @@ export function CallShell(): JSX.Element {
         elapsedRef.current,
         voiceModeRef.current,
         directionRef.current,
-        feedCountRef.current
+        feedCountRef.current,
+        finalInput,
+        finalTransport
       );
     }
     wakeHoldRef.current?.ensure(); // inCallRef is false now → holder releases
     remoteTrackRef.current = null;
+    transportRef.current = null;
     setPhase("lobby");
     setCallState("idle");
     setElapsed(0);
@@ -684,6 +720,10 @@ export function CallShell(): JSX.Element {
     // Acquire inside the Join tap (a user gesture — best context if a prior
     // request was denied).
     wakeHoldRef.current?.ensure();
+    // Same tap, same reason: iOS will not START an AudioContext outside a
+    // gesture, and both the ducking graph and the interpreter's input bridge
+    // hang off this one. Created here, it is running before either asks.
+    ensureCallAudioContext();
 
     try {
       const call = await startCall(
@@ -729,11 +769,7 @@ export function CallShell(): JSX.Element {
           // Bounded: a call that reconnects repeatedly must not grow this
           // array until the phone slows down. The last 40 lines are the
           // ones that explain a failure anyway.
-          onDiagnostic: (line) =>
-            setTrail((lines) => [
-              ...lines.slice(-39),
-              `${new Date().toLocaleTimeString()} ${line}`
-            ]),
+          onDiagnostic: (line) => pushTrail(line),
           onPeerInterpreterSpeaking: (speaking) => setPeerSpeaking(speaking),
           onPeerLeft: () => {
             stopInterpreter();
@@ -752,7 +788,17 @@ export function CallShell(): JSX.Element {
     } catch {
       endCall();
     }
-  }, [room, withVideo, mine, theirs, startInterpreterFor, stopInterpreter, endCall, setPeerSpeaking]);
+  }, [
+    room,
+    withVideo,
+    mine,
+    theirs,
+    startInterpreterFor,
+    stopInterpreter,
+    endCall,
+    setPeerSpeaking,
+    pushTrail
+  ]);
 
   const createRoom = useCallback(() => {
     setRoom(generateRoomCode());

@@ -269,6 +269,37 @@ describe("POST /api/call/usage — the log line, and who may write it", () => {
     info.mockRestore();
   });
 
+  it("carries what the interpreter heard and how the call travelled", async () => {
+    // The 2026-09-03 signature, as one greppable line: minutes on the clock
+    // and zero speech segments means the interpreter connected and never
+    // heard the partner. Without these two fields that call is indis-
+    // tinguishable in the log from one where nobody happened to talk, and
+    // `transport` is how the two-phone NAT question gets answered from
+    // Vercel rather than from a phone in someone's hand.
+    caller = { id: "u2", email: "xdrabbit@gmail.com" };
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const POST = await usageRoute();
+    await POST(
+      usageRequest(
+        {
+          room: "AB123",
+          mode: "clone",
+          direction: "es->en",
+          seconds: 180,
+          transport: "relay",
+          speechStarted: 0,
+          spend: { responses: 0, transcribedSeconds: 0 }
+        },
+        "tok"
+      )
+    );
+    const line = info.mock.calls[0]?.[0] as string;
+    expect(line).toContain("transport=relay");
+    expect(line).toContain("speech_started=0");
+    expect(line).toContain("seconds=180");
+    info.mockRestore();
+  });
+
   it("cannot be made to log a second line, or an invented one", async () => {
     // This ends up in a log Tom reads as fact. A newline in the room code
     // would let a caller forge a whole extra call record next to a real one.
