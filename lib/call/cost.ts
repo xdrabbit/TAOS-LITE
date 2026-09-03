@@ -205,8 +205,19 @@ export function costLogLine(fields: {
   direction: string;
   seconds: number;
   spend: CallSpend;
+  /**
+   * How many captions the SCREEN actually put up.
+   *
+   * The 8/31 field report was "no captions", and this line — with
+   * `responses=7` and `tts_chars=244` on it — proved the interpreter had run
+   * and spoken, which is most of the answer. It could not say whether
+   * anything reached the screen, and that turned out to be the half that was
+   * broken. `captions` far below `responses` is now a fact in the log rather
+   * than a thing somebody has to reproduce.
+   */
+  captions?: number;
 }): string {
-  const { room, mode, direction, seconds, spend } = fields;
+  const { room, mode, direction, seconds, spend, captions } = fields;
   return [
     "[taos-call-cost]",
     `room=${room}`,
@@ -222,6 +233,7 @@ export function costLogLine(fields: {
     `audio_out_tok=${spend.audioOutTokens}`,
     `tts=${spend.ttsEngine}`,
     `tts_chars=${spend.ttsCharacters}`,
+    `captions=${captions ?? 0}`,
     `usd=${spendUsd(spend).toFixed(4)}`,
     `usd_per_min=${usdPerMinute(spend, seconds).toFixed(4)}`
   ].join(" ");

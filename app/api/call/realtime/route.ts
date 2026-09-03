@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildCallInterpreterInstructions, type CallDirection } from "@/lib/call/instructions";
+import type { CallDirection } from "@/lib/call/instructions";
+import {
+  buildCallSession,
+  CALL_CONTEXT_TOKEN_LIMIT,
+  CALL_SECRET_TTL_SECONDS
+} from "@/lib/call/realtimeSession";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 import { callVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
@@ -45,28 +50,6 @@ const CLIENT_SECRETS_URL =
   "https://api.openai.com/v1/realtime/client_secrets";
 const CALLS_URL =
   process.env.OPENAI_REALTIME_CALLS_URL ?? "https://api.openai.com/v1/realtime/calls";
-
-/**
- * How much conversation the model may re-read per response, in tokens after
- * the instructions. 100 ≈ one phrase-sized VAD segment of audio.
- *
- * An interpreter translates the utterance in front of it; the twenty turns
- * behind it are context it never uses and pays $32/Mtok to re-read. Measured
- * over five turns: uncapped billed 209% of the audio actually spoken and was
- * still climbing (49→100→164→227 tokens per turn); at 100 it billed 66% and
- * held flat, with translations that were word-for-word as good.
- */
-const CONTEXT_TOKEN_LIMIT = (() => {
-  const raw = Number(process.env.OPENAI_CALL_CONTEXT_TOKENS);
-  return Number.isFinite(raw) && raw >= 50 ? Math.floor(raw) : 100;
-})();
-
-/**
- * The minted secret is only good for two minutes. It is spent immediately —
- * the client mints and connects in one breath — so a longer window is only
- * useful to somebody who got hold of it out of a log or a proxy.
- */
-const SECRET_TTL_SECONDS = 120;
 
 function notFound(): NextResponse {
   return NextResponse.json(
@@ -133,57 +116,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const session: Record<string, unknown> = {
-    type: "realtime",
+  const session = buildCallSession({
+    direction,
     model,
-    instructions: buildCallInterpreterInstructions(direction),
-    output_modalities: mode === "instant" ? ["audio"] : ["text"],
-    // Full translation needs more room than ambient's 120-token summaries, but
-    // still capped: an unbounded response is a stale response.
-    max_output_tokens: 400,
-    // THE cost guard. See CONTEXT_TOKEN_LIMIT above for the measurements.
-    truncation: {
-      type: "retention_ratio",
-      retention_ratio: 0.8,
-      token_limits: { post_instructions: CONTEXT_TOKEN_LIMIT }
-    },
-    audio: {
-      input: {
-        // The partner is on a phone held to their face, so near_field is the
-        // right profile. It filters the buffer before VAD sees it, which
-        // means fewer segments committed for a passing bus — and a segment
-        // that is never committed is a segment never billed or transcribed.
-        noise_reduction: { type: "near_field" },
-        // Input transcription drives the faint "they said: …" caption line.
-        transcription: { model: transcribeModel },
-        turn_detection: {
-          type: "server_vad",
-          // The input here is a clean single remote voice (not a noisy room),
-          // so the default-ish threshold is fine and keeps latency down.
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          // 500ms: phone-call turn-taking is faster than dinner chatter, and
-          // chopped fragments are re-joined by the client's response gating.
-          silence_duration_ms: 500,
-          // The CLIENT creates responses (lib/call/interpreter.ts), same
-          // proven gating as /live: waits until the previous translation has
-          // finished generating AND playing, so translations never overlap.
-          create_response: false,
-          interrupt_response: false
-        }
-      },
-      // Slightly fast so the interpreter keeps up with a lively speaker. Only
-      // read in "instant" mode; a text session has no voice.
-      ...(mode === "instant" ? { output: { voice, speed: 1.1 } } : {})
-    }
-  };
+    voice,
+    transcribeModel,
+    mode
+  });
 
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        expires_after: { anchor: "created_at", seconds: SECRET_TTL_SECONDS },
+        expires_after: { anchor: "created_at", seconds: CALL_SECRET_TTL_SECONDS },
         session
       }),
       cache: "no-store"
@@ -216,7 +162,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // or a phone that was closed mid-call, which is worth being able to see.
     console.info(
       `[taos-call-mint] mode=${mode} pair=${source}->${target} model=${model} ` +
-        `context_tokens=${CONTEXT_TOKEN_LIMIT} ttl=${SECRET_TTL_SECONDS}s`
+        `context_tokens=${CALL_CONTEXT_TOKEN_LIMIT} ttl=${CALL_SECRET_TTL_SECONDS}s`
     );
 
     return NextResponse.json({

@@ -520,6 +520,103 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **The captions were there. They were 591px down a 659px phone, 2026-08-31**
+  — PR #TBD. Tom and Liz, two phones, same house, minutes after #56 landed:
+  the relay preflight **passed on both phones** (Cloudflare keys confirmed
+  minting and allocating on real networks — the first end-to-end proof they
+  are good), the call connected, audio worked, video worked, and there were
+  **no captions**. Two hypotheses were live: the interpreter never started, or
+  it started and the text never reached the screen.
+  → **The production logs answered it before any code was read.**
+  ```
+  [taos-call-cost] room=AMOR mode=clone pair=en->es seconds=125 responses=7
+    speech_s=20.5 text_out_tok=96 tts_chars=244 usd=0.0251
+  ```
+  `tts_chars` is incremented in exactly one place — `speakTranslation` in
+  `lib/call/interpreter.ts` — reached only from `onTranslationDone`, and only
+  past the `if (muted) return` guard. 244 of them proves the interpreter ran,
+  that translations completed, that the screen's own handler fired, and that
+  the voice was ON, so it spoke. **The captions existed in React state.** The
+  API was never the problem: a live-fire session built from the shipped
+  session object returned `response.output_text.delta` ×14 and a clean
+  `response.output_text.done`, and the whole client pipeline — a real
+  forwarded WebRTC track into a real `gpt-realtime` session — produced
+  captions end to end in a browser on the first try.
+  1. **The root cause is geometry, and it was measured.** The call screen was
+     a **1055px column poured into a 659px phone**. The video tile was
+     `aspect-[3/4]` — a 477px portrait block — so the caption panel began at
+     **591px** and the button that toggles captions sat at **811px**. On an
+     iPhone SE the caption panel was *entirely* below the fold. Nobody scrolls
+     a video call; they are looking at a face. The call phase is now
+     `h-[calc(100svh-2rem)]` with the video on `flex-[2_1_0%] min-h-[7rem]`,
+     so the tile takes what is *left over* instead of dictating it, and the
+     secondary rows (the explainer, the language pills, the diagnostic trail)
+     scroll inside their own box where they can never push a control off the
+     screen again. `svh`, not `vh`: iOS measures `vh` against the browser
+     *without* its toolbars — a viewport that only exists while you are
+     already scrolling. The height sits on `<main>`, not on the column inside
+     it: `box-sizing: border-box` is global, so `100svh` there has the
+     safe-area padding INSIDE it. Subtracting a guessed `2rem` on the column
+     instead comes up 81px short on an installed PWA — the notch plus the home
+     indicator — which is the same bug again in a smaller size, and the rig
+     has an arm that proves it. Measured after the fix: nothing overflows at
+     375×553, 390×659 or 430×745, in Safari or installed, and the captions,
+     both toggles and Hang up are above the fold on every one.
+  2. **The interpreter can no longer fail silently.** This is the part that
+     made a five-minute bug cost a day: the screen said *nothing* about the
+     interpreter. It could mint, connect, translate, spend money and hang up —
+     or never connect at all — and look identical. There is a status now, on
+     the video, bilingual, in the same vocabulary as the relay preflight
+     (`lib/call/interpreterStatus.ts`): *iniciando… / activo / no hace falta /
+     ✗ falló* **with the reason on it**. Three holes closed underneath it:
+     - **A connection that hangs rather than fails.**
+       `onconnectionstatechange` fires `connected` and `failed` and nothing in
+       between; a peer connection that never negotiates a pair, or a data
+       channel that never opens, produced no event at all. 15s watchdog now,
+       the same one the call itself got in #52.
+     - **An error erased by its own cleanup.** `stop()` runs on the way out of
+       every failure and finished by announcing `idle` — so the screen was
+       told the interpreter had failed and then, three lines later, told it
+       was merely not running. Failures are terminal now, and the first
+       reason wins.
+     - **Connected, and being fed silence.** The interpreter listens to the
+       partner's track *forwarded out of the call's own peer connection*, and
+       a forwarded track carrying nothing is invisible from every angle:
+       connected, open, no error, nothing happens for the rest of the call.
+       `onHearing` flips on the first VAD speech event, so *"activo"* and
+       *"✓ activo"* are different states and only the second promises
+       captions.
+  3. **Two buttons that both said 💬.** "💬 Captions only" (the interpreter's
+     VOICE) sat beside "💬 Captions" (the text panel), governing different
+     things, and either one read as the way to get captions — while one of
+     them turned them off. They are "🗣️ Voice on / 🔇 Voice off" and
+     "💬 Captions on / 💬 Captions off" now, sharing no word and no icon.
+     Captions default ON for every new call, and switching them off leaves an
+     unmistakable dashed marker that says so and turns them back on when
+     tapped — because an empty panel is exactly what a broken interpreter
+     draws.
+  4. **The log can answer this one next time.** `[taos-call-cost]` carries
+     `captions=N` — what the SCREEN put up, beside what the interpreter
+     produced. `captions` far below `responses` is now a fact in the log
+     rather than something somebody has to reproduce on two phones.
+  5. **/call's session object is a builder at last.**
+     `lib/call/realtimeSession.ts`, like `lib/live/session.ts` and
+     `lib/tabletop/session.ts` since the 8/28 cost pass. /call was the one
+     realtime surface whose session no instrument had ever seen — this bug
+     was diagnosed by copying it into a throwaway script by hand, which is
+     the practice those builders exist to end. Proven byte-identical to the
+     inline object, and `tests/realtime-cost-caps.test.ts` now asserts /call's
+     100-token cap on the JSON actually posted to OpenAI rather than
+     grepping the route for the word `truncation`.
+
+  Not closed by this: the fix is measured in Chrome at three iPhone
+  viewports, not on an actual iPhone — `svh` and Safari's toolbar behaviour
+  are the two things only a real phone can confirm. And `tts_chars=244`
+  proves the voice was *asked for*, not that Tom heard it; the second half of
+  the field report ("did the interpreter voice speak?") is still formally
+  unconfirmed, though the new status pill makes it self-answering on the next
+  call.
+
 - **The relay tells you it works before you dial, 2026-08-31** — PR #TBD.
   Tom entered `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` in
   Vercel and redeployed, and then nobody could find out whether they took.
