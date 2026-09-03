@@ -29,8 +29,13 @@ import { TextOnlyChip } from "./TextOnly";
 
 // Shared pill chrome — the picker row and the "+ More" toggle are the same
 // control at different jobs, so the classes live in one place.
+// min-h-[44px] and the inline-flex box that lets it apply: the same floor
+// #54 put on the nav pills on 8/31, for the same reason. These lay out 30px
+// tall on px-3 py-1.5 over a text-xs line, and a 30px target needs the touch
+// to land within 15px of its centre — #53's rig measured a reaching thumb
+// drifting 12-20px. This is the row a stranger holding the phone aims at.
 export const PILL_CLASS =
-  "rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95";
+  "inline-flex min-h-[44px] items-center justify-center rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition active:scale-95";
 export const PILL_SELECTED_CLASS = "border-amber-300 bg-amber-400 text-stone-950"; // the output
 export const PILL_MINE_CLASS = "border-amber-300 bg-transparent text-amber-200"; // your side
 export const PILL_IDLE_CLASS = "border-amber-300/30 bg-amber-400/10 text-amber-200";
@@ -59,6 +64,18 @@ interface PickerCommon {
    * and a "Theirs · Suyo" badge leave no such ambiguity.
    */
   pairedTitle?: string;
+  /**
+   * Your own side is a LABEL here, not a control — draw it inert and make its
+   * tap do nothing.
+   *
+   * /call sets this for the duration of a call. Tom, mid-call on 9/3, tapped
+   * the outlined pill his phone had just captioned "You hear this" and got
+   * the other language: the flip is right at a table and wrong on a call,
+   * where the pair is half of a handshake with another phone. The rule that
+   * makes the tap harmless lives in lib/translate/useLanguagePair.ts
+   * (`lockMine`); this is the half a thumb can see before it lands.
+   */
+  pairedLocked?: boolean;
   onSelect: (code: LanguageCode) => void;
 }
 
@@ -73,23 +90,30 @@ export function LanguagePill({
   selected,
   paired,
   pairedTitle = "tap to flip",
+  pairedLocked = false,
   onSelect
 }: PickerCommon & { code: LanguageCode }): JSX.Element {
   const isSelected = code === selected;
   const isPaired = code === paired;
+  const locked = isPaired && pairedLocked;
   const textOnly = !canSpeak(code);
   const name = languageNative(code);
   const pairedNote = isPaired ? ` — ${pairedTitle}` : "";
   return (
     <button
       type="button"
-      onClick={() => onSelect(code)}
+      // aria-disabled and a no-op, NOT `disabled`: a disabled button is
+      // dropped from the tab order and stops announcing its label, and this
+      // pill is still the answer to "which language am I hearing?". It just
+      // isn't a control any more.
+      onClick={locked ? undefined : () => onSelect(code)}
+      aria-disabled={locked || undefined}
       aria-pressed={isSelected}
       title={`${name}${pairedNote}${textOnly ? ` · ${TEXT_ONLY_TITLE}` : ""}`}
       aria-label={`${name}${pairedNote}${textOnly ? ` — ${TEXT_ONLY_TITLE}` : ""}`}
       className={`${PILL_CLASS} ${
         isSelected ? PILL_SELECTED_CLASS : isPaired ? PILL_MINE_CLASS : PILL_IDLE_CLASS
-      }`}
+      }${locked ? " cursor-default active:scale-100" : ""}`}
     >
       {languageFlag(code)} {code.toUpperCase()}
       {textOnly ? <span className="ml-1 opacity-60">🔇</span> : null}
@@ -111,6 +135,7 @@ export function LanguageSheet({
   selected,
   paired,
   pairedLabel = "Yours",
+  pairedLocked = false,
   caption = DEFAULT_PICKER_CAPTION,
   onSelect,
   onClose
@@ -186,15 +211,20 @@ export function LanguageSheet({
             results.map((language) => {
               const isSelected = language.code === selected;
               const isPaired = language.code === paired;
+              // The same lock as the pill: the sheet is the OTHER way to tap
+              // your own side, and a fix that only covered the row would have
+              // left the flip one "+ More" away.
+              const locked = isPaired && pairedLocked;
               return (
                 <li key={language.code}>
                   <button
                     type="button"
-                    onClick={() => onSelect(language.code)}
+                    onClick={locked ? undefined : () => onSelect(language.code)}
+                    aria-disabled={locked || undefined}
                     aria-pressed={isSelected}
-                    className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
-                      isSelected ? "bg-amber-400/20" : "hover:bg-white/5"
-                    }`}
+                    className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
+                      locked ? "" : "active:scale-[0.99] "
+                    }${isSelected ? "bg-amber-400/20" : locked ? "" : "hover:bg-white/5"}`}
                   >
                     <span className="text-xl">{language.flag}</span>
                     <span className="min-w-0 flex-1">
@@ -235,6 +265,7 @@ export function LanguagePillRow({
   selected,
   paired,
   pairedTitle,
+  pairedLocked,
   caption,
   sheetOpen,
   onSelect,
@@ -259,6 +290,7 @@ export function LanguagePillRow({
             selected={selected}
             paired={paired}
             pairedTitle={pairedTitle}
+            pairedLocked={pairedLocked}
             onSelect={onSelect}
           />
         ))}

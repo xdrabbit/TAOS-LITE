@@ -32,6 +32,36 @@ describe("language pills: tapping a language picks the OUTPUT", () => {
     expect(nextPair(["it", "en"], "es")).toEqual(["it", "es"]);
   });
 
+  it("does NOT flip your own side when the caller has locked it", () => {
+    // Tom, mid-call on 9/3: the outlined pill said "You hear this", he tapped
+    // it wanting that language, and the flip gave him the other one — plus an
+    // announcement to his partner's phone and a write to localStorage. On a
+    // call the pair is half of a handshake, so /call passes flipOnOwnSide
+    // false and the tap becomes exactly what tapping the selected pill is.
+    const pair = ["en", "es"] as const;
+    expect(nextPair(pair, "en", { flipOnOwnSide: false })).toEqual(["en", "es"]);
+    // The SAME reference, which is what makes it free: useLanguagePair's
+    // identity check returns before setPair, writeStoredPair, or onPairChange.
+    expect(nextPair(pair, "en", { flipOnOwnSide: false })).toBe(pair);
+  });
+
+  it("still picks a THIRD language when your own side is locked", () => {
+    // The lock is about your own side, not about the row. Mid-call, changing
+    // what your PARTNER speaks is the one thing this row is for.
+    expect(nextPair(["en", "es"], "it", { flipOnOwnSide: false })).toEqual(["en", "it"]);
+    // ...and the already-selected pill is still a no-op, as ever.
+    const pair = ["en", "es"] as const;
+    expect(nextPair(pair, "es", { flipOnOwnSide: false })).toBe(pair);
+  });
+
+  it("flips by default, so no other screen changed", () => {
+    // /translate, /live and /tabletop pass nothing. The table rule is the
+    // default precisely so that locking is something a caller opts INTO.
+    expect(nextPair(["en", "it"], "en")).toEqual(["it", "en"]);
+    expect(nextPair(["en", "it"], "en", {})).toEqual(["it", "en"]);
+    expect(nextPair(["en", "it"], "en", { flipOnOwnSide: true })).toEqual(["it", "en"]);
+  });
+
   it("never produces a pair of the same language twice", () => {
     // Auto-detect is scoped to the pair's two languages — a doubled side would
     // ask the model to choose between a language and itself.

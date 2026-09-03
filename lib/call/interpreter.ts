@@ -379,15 +379,57 @@ export async function startCallInterpreter(
     }
   };
 
+  /**
+   * Re-point the session mid-call, or remember to as soon as it can be.
+   *
+   * `direction` used to move first and the send was allowed to fall through:
+   * before the data channel opens — the ~1s mint-and-connect window a tap can
+   * easily land in — the model kept its ORIGINAL instructions while this
+   * phone's local direction had already moved. The two sides then disagreed
+   * silently, and nothing ever retried, so the session stayed pointed the
+   * wrong way for the rest of the call.
+   *
+   * So the local direction only moves when the update is actually on the
+   * wire; otherwise the change is parked and `flushDirection` applies both
+   * together the moment the channel opens.
+   */
+  let pendingDirection: CallDirection | null = null;
+
+  const sendDirection = (next: CallDirection): boolean => {
+    if (stopped || !dc || dc.readyState !== "open") return false;
+    try {
+      dc.send(
+        JSON.stringify({
+          type: "session.update",
+          session: { type: "realtime", instructions: buildCallInterpreterInstructions(next) }
+        })
+      );
+    } catch {
+      // A channel that is open-but-closing throws here. Treat it as not sent,
+      // so the direction stays parked rather than silently diverging.
+      return false;
+    }
+    return true;
+  };
+
   const setDirection = (next: CallDirection) => {
-    direction = next;
-    if (stopped || !dc || dc.readyState !== "open") return;
-    dc.send(
-      JSON.stringify({
-        type: "session.update",
-        session: { type: "realtime", instructions: buildCallInterpreterInstructions(next) }
-      })
-    );
+    if (sendDirection(next)) {
+      direction = next;
+      pendingDirection = null;
+      return;
+    }
+    // Not sent. Park it and leave `direction` where the session still is.
+    pendingDirection = next;
+  };
+
+  /** Data channel open: apply anything that arrived before it was usable. */
+  const flushDirection = () => {
+    const next = pendingDirection;
+    if (!next) return;
+    if (sendDirection(next)) {
+      direction = next;
+      pendingDirection = null;
+    }
   };
 
   const clearAudioStuckTimer = () => {
@@ -650,6 +692,7 @@ export async function startCallInterpreter(
         events.onError?.(msg);
       }
     };
+    dc.onopen = flushDirection; // apply a direction parked during the mint
     dc.onerror = () => events.onError?.("Interpreter data channel error.");
 
     setState("connecting");
