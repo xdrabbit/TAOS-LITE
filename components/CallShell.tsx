@@ -207,6 +207,11 @@ export function CallShell(): JSX.Element {
   const [prevFlow, setPrevFlow] = useState<CallMediaFlow | null>(null);
   const [trail, setTrail] = useState<string[]>([]);
   const [idleSecondsLeft, setIdleSecondsLeft] = useState<number | null>(null);
+  // Why the interpreter stopped on its own, or null while it is running. The
+  // notice used to say "tap Rejoin" at a screen that had no Rejoin on it —
+  // the only control was Hang up, which drops the CALL too. This is what
+  // draws the button the copy was already promising.
+  const [autoEnded, setAutoEnded] = useState<InterpreterEndReason | null>(null);
   const [spend, setSpend] = useState<CallSpend>(() => emptySpend("elevenlabs"));
 
   // What the interpreter is doing, as a thing the SCREEN knows. Before 8/31
@@ -256,7 +261,16 @@ export function CallShell(): JSX.Element {
   // The pair, exactly as every other screen holds it. Changing it mid-call
   // re-points the live interpreter and tells the partner, rather than
   // dropping the session: the languages are a setting, not a restart.
-  const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
+  //
+  // `lockMine` is what /call does DIFFERENTLY, and it is the 9/3 field report:
+  // at a table, tapping your own outlined pill flips the pair, and one tap
+  // undoes it. On a call that same tap re-points the live interpreter, tells
+  // the partner's phone to follow, and persists — so Tom, wanting to hear the
+  // language his own pill was labelled with, heard the other one and moved his
+  // partner's side too. In a call your own side is a LABEL. In the lobby,
+  // before anyone is listening, it is still the flip it has always been.
+  const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage, mineLocked } =
+    useLanguagePair({ lockMine: phase === "call" });
 
   // Seeded from the pair rather than from two literal codes — a call that
   // starts before the first effect runs still starts on the catalog's answer,
@@ -423,6 +437,7 @@ export function CallShell(): JSX.Element {
       if (startingRef.current) return;
       stopInterpreter();
       setNotice(null); // clears the "partner left" banner on rejoin
+      setAutoEnded(null);
       const dir = directionRef.current;
       // Two people who already share a language have nothing to interpret,
       // and an interpreter pointed at its own output language either parrots
@@ -471,10 +486,11 @@ export function CallShell(): JSX.Element {
           onSpend: (next) => setSpend(next),
           onIdleWarning: (secondsLeft) => setIdleSecondsLeft(secondsLeft),
           onAutoEnd: (reason: InterpreterEndReason) => {
+            setAutoEnded(reason);
             setNotice(
               reason === "idle"
-                ? "The interpreter stopped after two minutes of quiet — tap Rejoin to bring it back."
-                : "The interpreter hit its one-hour limit — tap Rejoin to start a fresh hour."
+                ? "The interpreter stopped after two minutes of quiet — tap Rejoin to bring it back. You are still on the call."
+                : "The interpreter hit its one-hour limit — tap Rejoin to start a fresh hour. You are still on the call."
             );
           },
           onHeard: (text) => {
@@ -522,6 +538,33 @@ export function CallShell(): JSX.Element {
     },
     [stopInterpreter]
   );
+
+  /**
+   * Bring the interpreter back after it stopped itself.
+   *
+   * The notice has said "tap Rejoin" since the idle timer was added; there has
+   * never been a Rejoin. The only button on the screen was Hang up, which ends
+   * the CALL — so the copy was asking for something a person could not do, and
+   * the cheapest way out of two minutes of quiet was to drop a working call
+   * and dial again.
+   *
+   * The call itself is untouched by an auto-end: the peer connection, the
+   * remote track and the wake lock are all still in hand. So this restarts one
+   * realtime session on the audio that is already arriving, and nothing else.
+   * `startInterpreterFor` stops whatever is left and clears the notice.
+   */
+  const rejoinInterpreter = useCallback(() => {
+    const track = remoteTrackRef.current;
+    if (!inCallRef.current || !track || track.readyState !== "live") {
+      // No partner audio to interpret — a rejoin here would mint a session
+      // against a dead track and bill for it. Say what IS true instead.
+      setAutoEnded(null);
+      setNotice("Waiting for your partner's audio — the interpreter starts when it arrives.");
+      return;
+    }
+    setIdleSecondsLeft(null);
+    startInterpreterFor(track);
+  }, [startInterpreterFor]);
 
   // Keep the live session pointed at the current pair. Either phone changing
   // its language lands here — mine through the picker, theirs over the wire.
@@ -588,6 +631,7 @@ export function CallShell(): JSX.Element {
     setLiveText("");
     setLiveHeard(null);
     setIdleSecondsLeft(null);
+    setAutoEnded(null);
     setPeerLanguage(null);
     setPeerSpeaking(false);
   }, [stopInterpreter, setPeerSpeaking, reportSpend]);
@@ -866,6 +910,7 @@ export function CallShell(): JSX.Element {
               selected={theirs}
               paired={mine}
               pairedTitle="You hear this · Tú escuchas esto"
+              pairedLocked={mineLocked}
               caption="They speak · Ellos hablan"
               sheetOpen={sheetOpen}
               onSelect={selectLanguage}
@@ -1253,6 +1298,20 @@ export function CallShell(): JSX.Element {
             {notice ? (
               <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3 text-xs text-amber-100/80">
                 {notice}
+                {/* The button the copy above has been promising since the
+                    idle timer landed. Only here, because this is the only
+                    state it does anything in: the call is still up, the
+                    partner's audio is still arriving, and the one thing that
+                    stopped is the realtime session. */}
+                {autoEnded ? (
+                  <button
+                    type="button"
+                    onClick={rejoinInterpreter}
+                    className="mt-2 inline-flex min-h-[44px] items-center justify-center rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 transition active:scale-95"
+                  >
+                    ↻ Rejoin · Reanudar
+                  </button>
+                ) : null}
               </div>
             ) : null}
             {error ? (
@@ -1324,16 +1383,32 @@ export function CallShell(): JSX.Element {
             </p>
 
             {/* Mid-call language change: re-points the live session and tells
-                the partner's phone, without either of you rejoining. */}
+                the partner's phone, without either of you rejoining.
+
+                Captioned, which it was not until 9/3. The lobby row carries
+                "They speak · Ellos hablan" and this one carried nothing, so
+                mid-call the only thing saying what the two pill styles meant
+                was a `title` — and a phone has no hover, so on the device
+                where this row is actually used it said nothing at all. Tom
+                read the outlined pill as the language he would hear and
+                tapped it. Same caption as the lobby now, and the sentence
+                under it spells out both sides in words rather than styling. */}
             <LanguagePillRow
               pills={pills}
               selected={theirs}
               paired={mine}
               pairedTitle="You hear this · Tú escuchas esto"
+              pairedLocked={mineLocked}
+              caption="They speak · Ellos hablan"
               sheetOpen={sheetOpen}
               onSelect={selectLanguage}
               onOpenSheet={() => setSheetOpen(true)}
             />
+            <p className="-mt-2 text-xs text-amber-100/50">
+              You hear <span className="text-amber-200">{languageLabel(mine)}</span> — the outlined
+              pill, and it stays put while you are on a call. Tap another pill to change what your
+              partner speaks.
+            </p>
 
             {/* The connection trail, collapsed.
                 Kept rather than removed once the 8/31 fix landed: "the call
@@ -1428,6 +1503,7 @@ export function CallShell(): JSX.Element {
           selected={theirs}
           paired={mine}
           pairedLabel="You hear this"
+          pairedLocked={mineLocked}
           caption="What they speak · Lo que ellos hablan"
           onSelect={selectLanguage}
           onClose={() => setSheetOpen(false)}

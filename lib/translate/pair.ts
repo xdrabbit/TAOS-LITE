@@ -18,18 +18,42 @@
 // The pair is what /api/translate scopes auto-detect to, which is why the rule
 // never produces a pair of one repeated language: two identical sides would
 // ask the model to pick between a language and itself.
+//
+// ── When the flip is wrong (9/3) ────────────────────────────────────
+// The flip is a good rule at a table, where the pair is yours alone and one
+// tap undoes it. It is the WRONG rule mid-call, where the pair is half of a
+// handshake: Tom, on a call, saw his own outlined pill labelled "You hear
+// this", tapped it wanting to hear that language, and the flip pointed the
+// interpreter at the other one AND announced the change to his partner's
+// phone, degrading both sides of a live conversation — then persisted it to
+// localStorage so the next screen he opened was wrong too.
+//
+// So the flip is an OPTION, not a law. A caller that cannot afford it passes
+// `flipOnOwnSide: false` and a tap on your own side becomes what tapping the
+// selected pill already is: nothing at all, same reference back.
 import { isLanguageCode, LANGUAGES, type LanguageCode } from "@/lib/languages/catalog";
+
+export interface NextPairOptions {
+  /**
+   * Whether tapping your own side flips the pair. Default true — the table
+   * rule. /call turns it off for the duration of a call (see above).
+   */
+  flipOnOwnSide?: boolean;
+}
 
 export function nextPair<T extends string>(
   pair: readonly [T, T],
-  tapped: T
+  tapped: T,
+  options: NextPairOptions = {}
 ): readonly [T, T] {
+  const { flipOnOwnSide = true } = options;
   const [mine, theirs] = pair;
   // Returning the SAME reference (not a copy) lets the caller skip the state
   // churn — clearing the on-screen turn for a tap that changed nothing would
-  // wipe a translation someone is still reading.
+  // wipe a translation someone is still reading. A locked own-side tap takes
+  // the same road, so it costs nothing and writes nothing.
   if (tapped === theirs) return pair;
-  if (tapped === mine) return [theirs, mine];
+  if (tapped === mine) return flipOnOwnSide ? [theirs, mine] : pair;
   return [mine, tapped];
 }
 

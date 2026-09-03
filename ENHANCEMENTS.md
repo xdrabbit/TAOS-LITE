@@ -617,6 +617,24 @@ is not a prerequisite for using it.
   unconfirmed, though the new status pill makes it self-answering on the next
   call.
 
+- **Your own pill is not a flip, 2026-09-03** — PR #TBD. Tom, mid-call on
+  `[en, es]`, saw the outlined EN pill his phone had captioned "You hear this",
+  tapped it wanting English, and got Spanish. Tapping your own side is the
+  FLIP — the rule that gives one row of pills both EN⇄IT and ES⇄IT at a table.
+  At a table it is a good rule and one tap undoes it. On a call it did three
+  things at once: re-pointed the live interpreter, announced the new language
+  down the data channel so his partner's phone followed him into the wrong
+  language too, and persisted the flipped pair to localStorage for whatever
+  screen he opened next. The flip is an option now (`flipOnOwnSide`), off for
+  the duration of a call and on everywhere else. Two things that hid it also
+  went: the in-call row had no caption at all, so mid-call the only thing
+  separating the solid pill from the outlined one was a `title` — and a phone
+  has no hover; and `setDirection` moved the local direction before checking
+  the data channel was open, so a re-point during the ~1s mint window was
+  dropped with no retry while this phone believed it had moved. The notice
+  that had been saying "tap Rejoin" at a screen with no Rejoin on it finally
+  has one.
+
 - **The relay tells you it works before you dial, 2026-08-31** — PR #TBD.
   Tom entered `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` in
   Vercel and redeployed, and then nobody could find out whether they took.

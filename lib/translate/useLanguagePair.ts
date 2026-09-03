@@ -56,11 +56,30 @@ export interface LanguagePairSelection {
   pills: readonly PairLangCode[];
   sheetOpen: boolean;
   setSheetOpen: (open: boolean) => void;
-  /** The tap rule: pick a language, or tap your own side to flip. */
+  /**
+   * The tap rule: pick a language, or tap your own side to flip. With
+   * `lockMine` the flip is off and your own side is inert (see below).
+   */
   selectLanguage: (code: LanguageCode) => void;
+  /** True while your own side is inert, so the row can draw it that way. */
+  mineLocked: boolean;
 }
 
 export interface LanguagePairOptions {
+  /**
+   * Turn OFF the tap-your-own-side flip, and say so to the row that draws it.
+   *
+   * /call sets this for the duration of a call. There the pair is half of a
+   * handshake with another phone, so a flip is not a local preference: it
+   * re-points the live interpreter, announces the new language over the data
+   * channel, and persists to localStorage — three consequences for one tap on
+   * a pill whose own label ("You hear this") reads like a destination. Tom
+   * hit exactly that on 9/3. The lobby keeps the flip; a call does not.
+   *
+   * Reactive on purpose: it moves when the phase does, and `selectLanguage`
+   * is rebuilt with it.
+   */
+  lockMine?: boolean;
   /**
    * Called whenever the pair actually changes — a pick, a flip, or the
    * restore at mount. NOT called for a tap that changed nothing (tapping the
@@ -71,7 +90,7 @@ export interface LanguagePairOptions {
 }
 
 export function useLanguagePair(options: LanguagePairOptions = {}): LanguagePairSelection {
-  const { onPairChange } = options;
+  const { onPairChange, lockMine = false } = options;
   const [pair, setPair] = useState<readonly [PairLangCode, PairLangCode]>(DEFAULT_PAIR);
   const [recent, setRecent] = useState<readonly PairLangCode[]>(DEFAULT_RECENT);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -109,7 +128,7 @@ export function useLanguagePair(options: LanguagePairOptions = {}): LanguagePair
         writeStoredRecent(updated);
         return updated;
       });
-      const updated = nextPair(pair, code);
+      const updated = nextPair(pair, code, { flipOnOwnSide: !lockMine });
       setSheetOpen(false);
       // nextPair returns the SAME reference for a no-op tap — that identity
       // check is the whole reason it does, so honour it here and leave the
@@ -119,7 +138,7 @@ export function useLanguagePair(options: LanguagePairOptions = {}): LanguagePair
       writeStoredPair(updated);
       changeRef.current?.(updated);
     },
-    [pair]
+    [pair, lockMine]
   );
 
   return {
@@ -129,6 +148,7 @@ export function useLanguagePair(options: LanguagePairOptions = {}): LanguagePair
     pills: visiblePills(pair, recent),
     sheetOpen,
     setSheetOpen,
-    selectLanguage
+    selectLanguage,
+    mineLocked: lockMine
   };
 }
