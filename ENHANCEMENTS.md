@@ -636,7 +636,7 @@ is not a prerequisite for using it.
   has one.
 
 - **The interpreter was listening to a track Safari never sends, 2026-09-03**
-  — PR #TBD. Two iPhones, Wi-Fi ↔ cellular. Both people heard each other's
+  — PR #59. Two iPhones, Wi-Fi ↔ cellular. Both people heard each other's
   real voice perfectly and the relay minted `ready`, so the call itself was
   fine. Both interpreters minted at 20:06:29Z, both connected — and neither
   translated a single word. Zero responses, zero `/api/call/usage`, no error.
