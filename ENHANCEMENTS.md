@@ -607,7 +607,7 @@ is not a prerequisite for using it.
   deliberately does not, the "a ver" example verbatim, and that the realtime
   `OUTPUT LANGUAGE … REMINDER` bookends still survive the ~90 longer words.
 
-- **The wake lock outlived the translation, 2026-09-06** — PR #TBD. Tom's
+- **The wake lock outlived the translation, 2026-09-06** — PR #61. Tom's
   iPhone went from ~2 days of battery to ~half a day just from leaving TAOS
   open in a tab. The lock was added on 8/2 for a real bug (the phone slept
   mid-utterance) and it overshot: `TranslatorShell` and `TabletopShell` each
