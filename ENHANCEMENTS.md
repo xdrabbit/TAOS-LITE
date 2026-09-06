@@ -607,6 +607,31 @@ is not a prerequisite for using it.
   deliberately does not, the "a ver" example verbatim, and that the realtime
   `OUTPUT LANGUAGE … REMINDER` bookends still survive the ~90 longer words.
 
+- **The wake lock outlived the translation, 2026-09-06** — PR #TBD. Tom's
+  iPhone went from ~2 days of battery to ~half a day just from leaving TAOS
+  open in a tab. The lock was added on 8/2 for a real bug (the phone slept
+  mid-utterance) and it overshot: `TranslatorShell` and `TabletopShell` each
+  called `createWakeLockHold(() => true)` **in a mount effect**, so the answer
+  to "should the screen stay awake?" was `true` for the life of the page —
+  MacBooks included. `/live` and `/call` were already gated on a running
+  session, but nothing capped a session that never cleanly ended.
+  → `lib/wakeLock.ts` is now `hold(reason)` / `release(reason)`, keyed by
+  reason, with one idle rule: **nothing acquires at mount**; the acquiring
+  moments are the push-to-talk mic opening, a `/call` connecting, a `/live`
+  session starting, the `/fast` mic going live, and a tutor speech attempt
+  recording. The last release keeps the lock for a **60s grace** so the pause
+  between two turns does not blink the screen off, and a new hold inside the
+  grace cancels it. A reason nobody has refreshed in **60s** is dropped
+  regardless — ongoing sessions prove they are alive through `keepWake()`,
+  which re-holds every 20s, so a shell that crashed mid-call cannot leak the
+  lock past a minute. Hidden releases explicitly; visible re-acquires only if
+  a reason is still active, and time spent hidden does not count against the
+  idle cap. The 8/2 fix is intact underneath: the sentinel's `release` event
+  still re-acquires without a `visibilitychange`, and a rejected (or
+  synchronously throwing) `request()` never escapes. Every hold and release
+  writes to `/call`'s on-screen trail, so a field report can show it. 15 tests
+  in `tests/wake-lock.test.ts` pin the whole rule set.
+
 - **The captions were there. They were 591px down a 659px phone, 2026-08-31**
   — PR #TBD. Tom and Liz, two phones, same house, minutes after #56 landed:
   the relay preflight **passed on both phones** (Cloudflare keys confirmed

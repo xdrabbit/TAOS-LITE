@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live";
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
-import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { holdWake, keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { TextOnlyNote } from "./TextOnly";
@@ -151,7 +151,6 @@ export function TabletopShell(): JSX.Element {
   const timerRef = useRef<number | null>(null);
   const cancelledRef = useRef(false);
   const playerRef = useRef<HTMLAudioElement | null>(null);
-  const wakeHoldRef = useRef<WakeLockHold | null>(null);
   const voiceOnRef = useRef(true);
   const liveRef = useRef<ActiveTabletopLive | null>(null);
   const turnRef = useRef<TurnState>({ kind: "idle" });
@@ -168,20 +167,14 @@ export function TabletopShell(): JSX.Element {
     }
   }, [voiceOn]);
 
-  // Wake lock while the page is open — a tabletop session dies if the screen
-  // sleeps. Shared holder (lib/wakeLock.ts) re-acquires on the sentinel's
-  // "release" event too: iOS drops the lock WITHOUT a visibilitychange under
-  // Low Power Mode / pressure (8/2 field report on /translate; same pattern
-  // here). Each turn tap re-asserts it inside the gesture.
+  // Wake lock for the duration of a TURN, not of the page. It used to be taken
+  // at mount and wanted forever, which is how a tabletop left open overnight
+  // held a phone awake (9/6). lib/wakeLock.ts keeps it through a 60s grace, so
+  // the gap between one person finishing and the other tapping is covered.
   useEffect(() => {
-    const hold = createWakeLockHold(() => true);
-    wakeHoldRef.current = hold;
-    hold.ensure();
-    return () => {
-      wakeHoldRef.current = null;
-      hold.stop();
-    };
-  }, []);
+    if (turn.kind === "idle") return;
+    return keepWake("tabletop-turn");
+  }, [turn.kind]);
 
   // Same guard the "swap ends" button carries: the pair decides what the
   // open turn is being translated INTO, so moving it mid-turn would land the
@@ -470,8 +463,10 @@ export function TabletopShell(): JSX.Element {
 
   const tap = useCallback(
     (side: Lang) => {
-      // Re-assert the wake lock inside the tap gesture (see the mount effect).
-      wakeHoldRef.current?.ensure();
+      // Take it inside the tap gesture — the best context to ask in if a
+      // prior request was denied. The effect above refreshes and releases it;
+      // a tap that never opens a turn is dropped by the idle cap.
+      holdWake("tabletop-turn");
       const t = turnRef.current;
       if (t.kind === "idle") {
         if (engine === "live") void startLiveTurn(side);

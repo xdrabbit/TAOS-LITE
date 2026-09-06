@@ -23,7 +23,7 @@ import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, tutorEnabled } from "@/lib/release";
-import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
 
@@ -362,7 +362,7 @@ export function TranslatorShell({
   const lastMimeRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
-  const wakeHoldRef = useRef<WakeLockHold | null>(null);
+  const wakeStopRef = useRef<(() => void) | null>(null);
   const maxStopTimerRef = useRef<number | null>(null);
   // Visual ramp state (drives the record button directly, no re-render per frame).
   const recordBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -422,22 +422,24 @@ export function TranslatorShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The screen must never sleep mid-dictation. Held for the whole time this
-  // page is open, via the shared holder in lib/wakeLock.ts — which, unlike
-  // the old inline pattern (8/2 field report: screens still slept mid-turn),
-  // also listens for the sentinel's "release" event: iOS drops the lock
-  // WITHOUT a visibilitychange under Low Power Mode / pressure, and only
-  // that event says so. startRecording() calls ensure() too, so a previously
-  // denied lock gets retried inside a user gesture.
+  // The screen must never sleep mid-dictation — but it must be allowed to
+  // sleep between dictations. This used to acquire at mount and want the lock
+  // for the life of the page (9/6: an open tab cost Tom a day and a half of
+  // iPhone battery). The lock is now taken inside the record gesture and let
+  // go when the turn ends; lib/wakeLock.ts holds it through a 60s grace so the
+  // pause between two turns does not blink the screen off.
   useEffect(() => {
-    const hold = createWakeLockHold(() => true);
-    wakeHoldRef.current = hold;
-    hold.ensure();
-    return () => {
-      wakeHoldRef.current = null;
-      hold.stop();
-    };
-  }, []);
+    if (status === "recording") return;
+    wakeStopRef.current?.();
+    wakeStopRef.current = null;
+  }, [status]);
+  useEffect(
+    () => () => {
+      wakeStopRef.current?.();
+      wakeStopRef.current = null;
+    },
+    []
+  );
 
   // Load this month's usage (skip for subscribers — they're unlimited).
   useEffect(() => {
@@ -633,10 +635,11 @@ export function TranslatorShell({
     setError(null);
     if (trialBlocked) return; // free translations used up — show upgrade instead
     blessAudio();
-    // Re-assert the wake lock inside the tap gesture: if the page-lifetime
-    // acquire was denied (Low Power Mode) or silently dropped, the start of a
-    // recording is the moment that matters — and the best context to ask in.
-    wakeHoldRef.current?.ensure();
+    // Take the wake lock inside the tap gesture — the moment that matters,
+    // and the best context to ask in if a prior request was denied (Low Power
+    // Mode). The effect above lets it go when status leaves "recording".
+    wakeStopRef.current?.();
+    wakeStopRef.current = keepWake("home-mic");
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setStatus("error");

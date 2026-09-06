@@ -42,7 +42,7 @@ import { languageLabel } from "@/lib/languages/catalog";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { isTextOnlyLanguage, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { jsonAuthHeaders } from "@/lib/authClient";
-import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { keepWake, onWakeLog } from "@/lib/wakeLock";
 
 // ── /call: translated 1:1 calls ─────────────────────────────────────────────
 // Use case: Tom and Liz call each other over wifi or cellular — video or
@@ -236,7 +236,7 @@ export function CallShell(): JSX.Element {
   const interpreterRef = useRef<ActiveInterpreter | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const wakeHoldRef = useRef<WakeLockHold | null>(null);
+  const wakeStopRef = useRef<(() => void) | null>(null);
   const inCallRef = useRef(false);
   const voiceOnRef = useRef(true);
   const micMutedRef = useRef(false);
@@ -380,24 +380,27 @@ export function CallShell(): JSX.Element {
     }
   }, []);
 
-  // Screen wake lock for the duration of the call. Shared holder
-  // (lib/wakeLock.ts): re-acquires on visibility return AND on the sentinel's
-  // "release" event — iOS drops the lock without a visibilitychange under Low
-  // Power Mode / pressure (8/2 field report on /translate; same gap here).
-  useEffect(() => {
-    const hold = createWakeLockHold(() => inCallRef.current);
-    wakeHoldRef.current = hold;
-    return () => {
-      wakeHoldRef.current = null;
-      hold.stop();
-    };
-  }, []);
+  // Screen wake lock for the duration of the call — taken in the Join tap,
+  // let go when the call ends (lib/wakeLock.ts). Nothing is held at mount: a
+  // /call page sitting in the lobby is not a reason to keep a phone awake.
+  useEffect(
+    () => () => {
+      wakeStopRef.current?.();
+      wakeStopRef.current = null;
+    },
+    []
+  );
 
   // Bounded exactly as the call's own diagnostics are: a long call must not
   // grow this array until the phone slows down.
   const pushTrail = useCallback((line: string) => {
     setTrail((lines) => [...lines.slice(-39), `${new Date().toLocaleTimeString()} ${line}`]);
   }, []);
+
+  // Every hold and release lands on the same trail the connection writes, so
+  // a screenshot from Liz answers "did the lock actually come off?" without
+  // anybody guessing at it.
+  useEffect(() => onWakeLog(pushTrail), [pushTrail]);
 
   const stopInterpreter = useCallback(() => {
     const it = interpreterRef.current;
@@ -657,7 +660,8 @@ export function CallShell(): JSX.Element {
         finalTransport
       );
     }
-    wakeHoldRef.current?.ensure(); // inCallRef is false now → holder releases
+    wakeStopRef.current?.(); // the call is over — the screen may sleep again
+    wakeStopRef.current = null;
     remoteTrackRef.current = null;
     transportRef.current = null;
     setPhase("lobby");
@@ -718,8 +722,10 @@ export function CallShell(): JSX.Element {
     volumeStepRef.current = 1;
 
     // Acquire inside the Join tap (a user gesture — best context if a prior
-    // request was denied).
-    wakeHoldRef.current?.ensure();
+    // request was denied). keepWake's heartbeat is what carries it past the
+    // idle cap for the length of a real call.
+    wakeStopRef.current?.();
+    wakeStopRef.current = keepWake("call");
     // Same tap, same reason: iOS will not START an AudioContext outside a
     // gesture, and both the ducking graph and the interpreter's input bridge
     // hang off this one. Created here, it is running before either asks.
