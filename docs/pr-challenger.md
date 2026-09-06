@@ -31,3 +31,9 @@ superseded or stale without checking whether their content was actually on
 that failure produced are now mandatory steps in the agent's procedure:
 content-on-main before ever suggesting CLOSE, and behind-main before ever
 suggesting MERGE.
+
+The first dry run (2026-09-06) found a real orphan — `dev`, 1 commit, a
+hardcoded production origin in `app/layout.tsx` metadata — and a contradiction
+between `docs/stripe-live-fire.md` and `ENHANCEMENTS.md` on `main` about whether
+the money path had been certified: exactly the kind of thing the check exists
+for.
