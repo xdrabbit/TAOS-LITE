@@ -41,6 +41,7 @@ const REACHABLE: Record<string, Array<keyof typeof SURFACES>> = {
   vision: ["app"],
   about: ["app", "landing"],
   guide: ["app", "landing"],
+  "love-in-translation": ["landing"],
   try: ["landing"]
 };
 
