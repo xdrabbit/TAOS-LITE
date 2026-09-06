@@ -16,6 +16,61 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **The wake lock holds the whole device awake, not just the translation** —
+  Driver report, 2026-09-06: as long as TAOS is open on any device — phone or
+  MacBook — that device never sleeps. It is not a bug in the holder; it is the
+  scope. The shared holder (`lib/wakeLock.ts:51`, requesting a screen sentinel
+  at `lib/wakeLock.ts:90`) is asked to hold *unconditionally* on two screens:
+  home passes `createWakeLockHold(() => true)` at
+  `components/TranslatorShell.tsx:433`, and Table does the same at
+  `components/TabletopShell.tsx:177` — both from a mount effect, so the lock is
+  taken the moment the page opens and only ever released when the component
+  unmounts. `/live` (`components/LiveShell.tsx:636`) and `/call`
+  (`components/CallShell.tsx:388`) already do the right thing: they pass a
+  predicate (`runningRef` / `inCallRef`) and the holder releases when it goes
+  false. This overshot from a real fix — the phone was sleeping mid-utterance
+  during a spoken turn (8/2 field report, quoted in the comments at both call
+  sites) — and the answer was to hold it always. Note the Wake Lock API
+  auto-releases when a tab is hidden, and the holder re-acquires on
+  `visibilitychange` (`lib/wakeLock.ts:114-118`); a laptop that never sleeps
+  with the tab in front of you is exactly what an at-mount lock looks like.
+  Proposed fix: scope the two unconditional holds to the moments that need
+  them — acquire when the mic opens / a call connects / a live session starts,
+  release on stop plus a short grace (~60s idle) so the pause between turns is
+  still covered, and let the browser's own release-on-hidden do the rest. What
+  we'd lose: nothing, if the grace window covers the pause between turns.
+  (added 2026-09-06)
+
+- **/live never gets a breath: continuous or group speech is never flushed** —
+  Driver report, 2026-09-06: when one person talks without pausing, or a group
+  talks over each other, `/live` goes quiet. Server VAD never sees a silence
+  long enough to end a turn, so nothing is committed, the engine never
+  translates the running section, and earlier speech is lost outright rather
+  than arriving late. The config is server VAD only (`lib/live/session.ts:87`):
+  `type: "server_vad"`, `threshold: 0.6`, `prefix_padding_ms: 300`,
+  `silence_duration_ms: 600`, `create_response: false`,
+  `interrupt_response: false`. There is no timer-based
+  `input_audio_buffer.commit` anywhere in the `/live` path — the client only
+  ever *responds* (`maybeRespond()` → `response.create`,
+  `lib/live/ambient.ts:202-210`), and it responds to turns the server already
+  committed (`input_audio_buffer.committed`, `lib/live/ambient.ts:314`). Audio
+  that never hits a 600ms gap therefore sits uncommitted with nothing in the
+  client able to force it out. `semantic_vad` is not used or referenced
+  anywhere in the repo today. Proposed fix, in order of preference: (1) try
+  OpenAI `semantic_vad` for `/live` if the realtime API version in use
+  supports it — it ends turns on content rather than silence, which is exactly
+  the failure here; (2) a boundary-aware forced flush — once ~15s of
+  uncommitted audio has accumulated, commit at the next short dip (~250ms)
+  rather than mid-word, with a hard cap at ~25s; (3) as a last resort, lower
+  `silence_duration_ms` for `/live` only (600 was itself raised from 450
+  because fragments made summaries disjointed, so this trades one known
+  problem for another). What we'd lose: a few words, or some context, at the
+  flush point — **the Driver accepts word loss at flush over losing whole
+  sections.** Note the cost fence: `/live` is capped by
+  `LIVE_CONTEXT_TOKEN_LIMIT` (`lib/live/session.ts:34`) and
+  `tests/realtime-cost-caps.test.ts` pins `create_response: false` for `/live`,
+  so any of these lands with that test in the same PR. (added 2026-09-06)
+
 - **Resolve founder-ness on the server, not from the client bundle** — every
   founders gate in the app (`/fast`, `/call`, `/video`) ends at
   `isFounder(email)` in `lib/release.ts`, and that function reads
