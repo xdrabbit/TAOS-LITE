@@ -284,6 +284,12 @@ export function Landing({ onSignIn }: { onSignIn: () => void }): JSX.Element {
           >
             About TAOS · Acerca de TAOS
           </a>
+          <a
+            href="/love-in-translation"
+            className="mt-1 text-xs text-amber-100/45 underline-offset-2 hover:text-amber-100/70 hover:underline"
+          >
+            Love in Translation · Podcast
+          </a>
           <span className="text-xs text-amber-100/30">
             © {new Date().getFullYear()} TAOS ·{" "}
             {comingSoon
