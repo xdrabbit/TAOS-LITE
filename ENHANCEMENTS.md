@@ -255,6 +255,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   the stock app covers her now. "It's pretty good, but it's not us" — if
   field use wants "us," the smallest build is the native shell wrapping
   Apple's Translation framework (TAOS UX, Apple brains), not Gemma.
+  Tom (9/6), after getting it working himself: "even Apple's app... it just
+  feels like you're driving a baseline Honda." The fallback works; the
+  experience is the gap.
 
 - **/fast's live mic — PARKED 2026-08-31, and worth reviving on Android.**
   Tom's call, and the one-line version is: *worked on Android, killed by the
