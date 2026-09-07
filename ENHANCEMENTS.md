@@ -242,6 +242,16 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   neutral voices only, no clones. Quality well below the cloud path outside
   the big languages, but the payoff is offline + zero marginal cost.
 
+  → Tom (9/6), the actual want: **bare-minimum offline translation for Liz**,
+  working somewhere with unreliable cell coverage — no signal means TAOS-LITE
+  is dead for her. Open to leaning on Apple's built-in AI. Step 0 is not a
+  build at all: Apple's stock Translate app does fully offline two-way spoken
+  conversation once both languages are downloaded (Settings → Translate →
+  Downloaded Languages, plus On-Device Mode) — covers ~20 major languages
+  incl. Spanish. If TAOS itself must work offline, Apple's Translation
+  framework is native-only (no Safari/PWA access), so that route means a
+  native shell; Gemma 4 E2B (above) is the deeper DIY fallback.
+
 - **/fast's live mic — PARKED 2026-08-31, and worth reviving on Android.**
   Tom's call, and the one-line version is: *worked on Android, killed by the
   iOS WebKit audio stack after three fix rounds; candidate for an Android-only
