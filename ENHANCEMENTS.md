@@ -251,6 +251,10 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   incl. Spanish. If TAOS itself must work offline, Apple's Translation
   framework is native-only (no Safari/PWA access), so that route means a
   native shell; Gemma 4 E2B (above) is the deeper DIY fallback.
+  Tom (9/6): Liz's pair is **ES↔EN only** — inside Apple's offline list, so
+  the stock app covers her now. "It's pretty good, but it's not us" — if
+  field use wants "us," the smallest build is the native shell wrapping
+  Apple's Translation framework (TAOS UX, Apple brains), not Gemma.
 
 - **/fast's live mic — PARKED 2026-08-31, and worth reviving on Android.**
   Tom's call, and the one-line version is: *worked on Android, killed by the
