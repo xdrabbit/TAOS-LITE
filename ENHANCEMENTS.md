@@ -229,6 +229,19 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- **TAOS "even liter" offline mode — Gemma 4 E2B on-device** — Tom (9/6):
+  asked whether TAOS-LITE could run standalone on his iPhone 15 Pro Max with
+  Gemma 4 E2B doing the work. Feasible in principle: E2B (5.1B total, ~2B
+  effective footprint, Apache-2.0) takes audio in, so one model could replace
+  STT + translate; official LiteRT-LM and 4-bit QAT builds exist, and there
+  is a WebGPU browser demo (webml-community/Gemma-4-WebGPU). The catch is
+  the PWA boundary: in-Safari inference needs iOS-26 WebGPU plus a ~2 GB
+  model download inside WebKit's per-tab memory ceiling (borderline), while
+  the comfortable path is a native shell (Capacitor + LiteRT-LM or MLX),
+  which is a product shift. TTS would fall back to `speechSynthesis` —
+  neutral voices only, no clones. Quality well below the cloud path outside
+  the big languages, but the payoff is offline + zero marginal cost.
+
 - **/fast's live mic — PARKED 2026-08-31, and worth reviving on Android.**
   Tom's call, and the one-line version is: *worked on Android, killed by the
   iOS WebKit audio stack after three fix rounds; candidate for an Android-only
