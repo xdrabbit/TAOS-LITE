@@ -201,7 +201,11 @@ describe("the interpreting direction comes from the catalog, not from en/es", ()
     const instructions = await instructionsFor({ source: "it", target: "en" });
     expect(instructions).toContain("Italian");
     expect(instructions).toContain("OUTPUT LANGUAGE: English");
-    expect(instructions).not.toContain("Spanish");
+    // Spanish must never be the DIRECTION. It does appear as a word now — the
+    // shared meaning-first rule cites 'English "let me see" is Spanish "a ver"'
+    // as its natural-equivalent example — so pin the direction, not the word.
+    expect(instructions).not.toContain("OUTPUT LANGUAGE: Spanish");
+    expect(instructions).not.toMatch(/(?:into|output|speaking|in) Spanish/);
   });
 
   it("handles a pair with neither launch language in it", async () => {

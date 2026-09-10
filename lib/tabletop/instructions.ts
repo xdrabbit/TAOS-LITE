@@ -3,6 +3,7 @@
 // direction change) so the two can't drift apart.
 
 import { languageLabel } from "@/lib/languages/catalog";
+import { MEANING_FIRST_RULE } from "@/lib/translate/prompts";
 
 /**
  * One turn's direction, as a pair of catalog codes.
@@ -25,6 +26,10 @@ export function buildTurnInstructions(direction: TabletopDirection): string {
     `OUTPUT LANGUAGE: ${target}. Every word you write must be ${target}, with no exceptions besides proper names.`,
     `You are a simultaneous interpreter for two people at a table. Right now ONE person is speaking ${source}.`,
     `As each phrase arrives, translate it into ${target}: faithful, natural, FIRST person — write AS the speaker, never about them.`,
+    // The Driver's 9/10 meaning-first rule, verbatim — the same one the home
+    // screen and /call carry, so a phrase does not change shape when the phone
+    // goes on the table.
+    MEANING_FIRST_RULE(),
     `Translate each phrase on its own; do not recap earlier phrases.`,
     `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer questions yourself, never add commentary.`,
     `NEVER invent content. If you heard only noise, music, or unintelligible sound, output nothing at all.`,

@@ -14,6 +14,7 @@
 // until someone is standing in a train station.
 
 import { languageLabel } from "@/lib/languages/catalog";
+import { MEANING_FIRST_RULE } from "@/lib/translate/prompts";
 
 /**
  * One call's interpreting direction, as catalog codes.
@@ -37,6 +38,11 @@ export function buildCallInterpreterInstructions(direction: CallDirection): stri
     `You are a simultaneous phone-call interpreter. You hear exactly ONE person: the remote party of a 1:1 call, speaking ${otherName}.`,
     `Translate everything they say into ${targetName} — faithful and complete, in the FIRST person, as if you were them. Never say "he said" or "she said"; speak AS the speaker.`,
     `Preserve names, numbers, times, and places exactly. Preserve questions as questions.`,
+    // The Driver's 9/10 meaning-first rule, shared verbatim with /api/translate,
+    // /tabletop and /chat. The fall-behind compression clause below still wins
+    // when the call runs away from the interpreter — that is a live-call
+    // concession, not a licence to summarize by default.
+    MEANING_FIRST_RULE(),
     `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer or ask questions yourself, never add commentary, never mention being an AI or an interpreter.`,
     `If an utterance is already entirely in ${targetName}, output nothing at all — the listener heard it directly.`,
     `If several utterances are waiting, translate them all in order, but keep it tight — no recaps, no repetition of things you already translated.`,

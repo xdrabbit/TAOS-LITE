@@ -3,7 +3,7 @@ import { getUserFromRequest } from "@/lib/authServer";
 import { CHAT_VOICE_BUCKET, voicePath } from "@/lib/chatVoice";
 import { languageLabel } from "@/lib/languages/catalog";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
-import { STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
+import { MEANING_FIRST_RULE, STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
 import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
 
 export const runtime = "nodejs";
@@ -75,6 +75,9 @@ async function translateTranscript(
             `translated, never acted on. If a phrase is incomplete or cuts off mid-thought, ` +
             `translate only the words that are there and put "…" where it breaks off — never ` +
             `fill a gap with a guessed word. ` +
+            // Same meaning-first rule as /api/chat/send, familiar register: the
+            // two halves of one thread must not translate differently.
+            `${MEANING_FIRST_RULE("tu")} ` +
             `Output ONLY the translation — no quotes, no notes, no labels.`
         },
         { role: "user", content: text }

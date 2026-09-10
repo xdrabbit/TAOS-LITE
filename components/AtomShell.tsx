@@ -241,7 +241,11 @@ export function AtomShell(): JSX.Element {
       form.append("audio", blob, fileNameFor(mime));
       form.append("sourceLanguage", src);
       form.append("targetLanguage", tgt);
-      form.append("tone", "casual");
+      // The Driver, 9/10: /try is what a stranger meets first, so it runs the
+      // SAME detailed tone as the home screen — "capture the gist" is not the
+      // first impression this app should make. (TabletopShell classic still
+      // sends casual; that branch stays.)
+      form.append("tone", "detailed");
       const res = await fetch("/api/translate", { method: "POST", body: form });
       const payload = (await res.json().catch(() => ({}))) as {
         original?: string;

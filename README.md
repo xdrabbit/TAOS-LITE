@@ -15,13 +15,15 @@ optional spoken playback.
 
 ### Modes
 
-- **Casual** — warm, conversational gist. Trims filler.
-- **Detailed** — for important conversations. Preserves nuance, numbers, names, and emotion.
+- **Detailed, always** — the home screen and `/try` run one tone: every fact, name, number,
+  condition, and the feeling behind it, said the way a fluent native speaker would say it.
+- **The exceptions** — `/fast` is the one literal surface (word-level, for a sign or an address);
+  `/live` is the one that summarizes (rolling gist of a room).
 - **Swap** — flip the direction (Liz · Español ↔ Tom · English) with one tap.
 - **Auto-play voice** — speak the translation automatically after each turn (Use Case 2),
   or turn it off and tap the speaker icon (Use Case 1).
 
-The whole app is one screen: who's speaking, a tone toggle, the translation, and a big mic button.
+The whole app is one screen: who's speaking, the translation, and a big mic button.
 
 ## Pipeline
 
