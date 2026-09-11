@@ -23,3 +23,7 @@ scripts/fixtures
 .smbdelete*
 *.swp
 .vercel
+
+# Claude Code: commit agent definitions, ignore local state
+.claude/worktrees/
+.claude/settings.local.json
