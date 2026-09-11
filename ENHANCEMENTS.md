@@ -16,31 +16,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
-- **The wake lock holds the whole device awake, not just the translation** —
-  Driver report, 2026-09-06: as long as TAOS is open on any device — phone or
-  MacBook — that device never sleeps. It is not a bug in the holder; it is the
-  scope. The shared holder (`lib/wakeLock.ts:51`, requesting a screen sentinel
-  at `lib/wakeLock.ts:90`) is asked to hold *unconditionally* on two screens:
-  home passes `createWakeLockHold(() => true)` at
-  `components/TranslatorShell.tsx:433`, and Table does the same at
-  `components/TabletopShell.tsx:177` — both from a mount effect, so the lock is
-  taken the moment the page opens and only ever released when the component
-  unmounts. `/live` (`components/LiveShell.tsx:636`) and `/call`
-  (`components/CallShell.tsx:388`) already do the right thing: they pass a
-  predicate (`runningRef` / `inCallRef`) and the holder releases when it goes
-  false. This overshot from a real fix — the phone was sleeping mid-utterance
-  during a spoken turn (8/2 field report, quoted in the comments at both call
-  sites) — and the answer was to hold it always. Note the Wake Lock API
-  auto-releases when a tab is hidden, and the holder re-acquires on
-  `visibilitychange` (`lib/wakeLock.ts:114-118`); a laptop that never sleeps
-  with the tab in front of you is exactly what an at-mount lock looks like.
-  Proposed fix: scope the two unconditional holds to the moments that need
-  them — acquire when the mic opens / a call connects / a live session starts,
-  release on stop plus a short grace (~60s idle) so the pause between turns is
-  still covered, and let the browser's own release-on-hidden do the rest. What
-  we'd lose: nothing, if the grace window covers the pause between turns.
-  (added 2026-09-06)
-
 - **/live never gets a breath: continuous or group speech is never flushed** —
   Driver report, 2026-09-06: when one person talks without pausing, or a group
   talks over each other, `/live` goes quiet. Server VAD never sees a silence
@@ -630,7 +605,9 @@ is not a prerequisite for using it.
   still re-acquires without a `visibilitychange`, and a rejected (or
   synchronously throwing) `request()` never escapes. Every hold and release
   writes to `/call`'s on-screen trail, so a field report can show it. 15 tests
-  in `tests/wake-lock.test.ts` pin the whole rule set.
+  in `tests/wake-lock.test.ts` pin the whole rule set. Field-tested by Tom on
+  an iPhone, 2026-09-11: the phone auto-locked after a spoken turn, and a call
+  held the screen awake for its duration.
 
 - **The captions were there. They were 591px down a 659px phone, 2026-08-31**
   — PR #TBD. Tom and Liz, two phones, same house, minutes after #56 landed:
