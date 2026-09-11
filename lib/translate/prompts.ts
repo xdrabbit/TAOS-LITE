@@ -34,6 +34,44 @@ export const STT_NO_GUESS_RULE =
   " NEVER guess, fill in, or substitute words that are not clearly spoken." +
   " An incomplete sentence is correct output; invented words are not.";
 
+// The register a surface addresses its listener in, when the SOURCE language
+// does not mark formality (English "you" is both tú and usted). Left
+// unstated, the model picks one per turn and a conversation drifts between
+// them mid-sentence.
+export type Register = "tu" | "usted";
+
+// Strangers by default: the app is used at a kiosk, a counter, a
+// receptionist's desk, and usted is the form that is never rude to a stranger.
+// /chat overrides to "tu" because that thread is explicitly between partners.
+export const DEFAULT_REGISTER: Register = "usted";
+
+export function registerLineFor(register: Register): string {
+  return register === "tu"
+    ? "use the familiar form (tú) — these are partners or friends."
+    : "use the polite form (usted) — assume a stranger.";
+}
+
+// The Driver's 9/10 decision, after reading every translation prompt at once:
+// on a CONVERSATIONAL surface the engine's job is a meaning-preserving
+// paraphrase — closest to what was actually said, the way a fluent native
+// speaker would say it. Not word-for-word, not a summary. Before this, each
+// surface described that in its own words (or, in the case of formality and
+// natural equivalents, in nobody's), so the same sentence came out differently
+// depending on which screen heard it.
+//
+// One string, appended VERBATIM everywhere it applies — home /, /try, the
+// tabletop (classic and live), /call, /chat, /translate. Deliberately NOT
+// applied to /live (a summarizer by design), /fast (literal by design),
+// /vision, /video, or tutor.
+export const MEANING_FIRST_RULE = (register: Register = DEFAULT_REGISTER): string =>
+  `Say what they said the way a fluent native speaker would say it — closest to the original ` +
+  `meaning, no more and no less. Not word for word, not a summary. Keep every fact, name, ` +
+  `number, and condition, and the feeling behind it. When a phrase has a natural equivalent in ` +
+  `the target language, use it instead of the literal rendering (English "let me see" is ` +
+  `Spanish "a ver", not "déjame ver"). Match the speaker's register: formal stays formal, ` +
+  `casual stays casual. When the source language does not mark formality, ` +
+  `${registerLineFor(register)}`;
+
 export function parseTone(value: FormDataEntryValue | null): Tone {
   return value === "detailed" ? "detailed" : "casual";
 }
@@ -61,7 +99,11 @@ export function buildInstructions(sourceLabel: string, targetLabel: string, tone
     `If a phrase is incomplete or cuts off mid-thought, translate only the words that are there ` +
     `and put "…" where it breaks off. NEVER fill a gap with a guessed word — no guessed places, ` +
     `objects, activities, or names. ` +
-    `Output ONLY the ${targetLabel} translation: no preamble, no quotes, no notes, no language labels.`;
+    `Output ONLY the ${targetLabel} translation: no preamble, no quotes, no notes, no language labels.` +
+    // The Driver's 9/10 meaning-first rule, verbatim and in BOTH tones: it is
+    // what "concept paraphrase" was always trying to say, plus the two things
+    // no surface said at all — natural equivalents and formality.
+    ` ${MEANING_FIRST_RULE()}`;
 
   if (tone === "detailed") {
     return (
@@ -142,7 +184,7 @@ export function buildAutoDetectInstructions(
     // Same gap rule as buildInstructions — see the wording warning there.
     `If a phrase is incomplete or cuts off mid-thought, translate only the words that are there ` +
     `and put "…" where it breaks off. NEVER fill a gap with a guessed word — no guessed places, ` +
-    `objects, activities, or names. ${toneLine}${cantonese} ` +
+    `objects, activities, or names. ${MEANING_FIRST_RULE()} ${toneLine}${cantonese} ` +
     `Respond ONLY with JSON: ` +
     `{"source_lang":"${a.code}"|"${b.code}","translation":"<text in the OTHER language>"}. ` +
     `"source_lang" is the language the USER'S TEXT is written in — the language you DETECTED — ` +

@@ -520,6 +520,38 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **Say it the way a native speaker would, 2026-09-10** — PR #TBD. The Driver
+  read every translation prompt in the app side by side and found each surface
+  describing the same job in different words — "concept paraphrase" on the home
+  screen, "faithful and complete" on `/call`, "capture the gist the way a close
+  friend would relay it" on `/try`, the screen a stranger meets first — and
+  **none** of them saying the two things a Spanish speaker notices in the first
+  sentence: whether "let me see" comes out as *a ver* or as the calque
+  *déjame ver*, and whether they are being addressed as **tú** or **usted**.
+  → One exported `MEANING_FIRST_RULE` in `lib/translate/prompts.ts`, appended
+  verbatim to the home screen and `/try` (both tones), auto-detect (both tones),
+  `/call`, `/tabletop`, `/chat` send + voice, and `/translate`. It says the job
+  outright: closest to the original meaning, no more and no less — **not word
+  for word, not a summary** — every fact, name, number and condition plus the
+  feeling behind it, the natural equivalent over the literal rendering, and the
+  speaker's register preserved.
+  → **Formality is now stated, and it defaults to `usted`.** The app is handed
+  across a counter to a stranger; being too formal with a friend is a smile,
+  being too familiar with a stranger is a mistake. `/chat` is the one override
+  to `tú` — that thread is explicitly between partners. No UI for it yet.
+  → **Two surfaces are excluded on purpose.** `/live` stays a summarizer (a
+  rolling gist of a room is its job; its forced-flush problem is E2 and is
+  untouched here) and `/fast` stays literal (a sign or an address wants the
+  word, and a "natural equivalent" would be exactly wrong). `/vision`, `/video`
+  and tutor are out too — no speaker, no register.
+  → `/try` now sends `tone=detailed`, the same as the home screen. The casual
+  branch stays: the classic tabletop still sends it.
+  → README stopped advertising a Casual/Detailed toggle the home screen has not
+  had since 8/9.
+  → `tests/meaning-first-rule.test.ts` pins where the rule appears, where it
+  deliberately does not, the "a ver" example verbatim, and that the realtime
+  `OUTPUT LANGUAGE … REMINDER` bookends still survive the ~90 longer words.
+
 - **The captions were there. They were 591px down a 659px phone, 2026-08-31**
   — PR #TBD. Tom and Liz, two phones, same house, minutes after #56 landed:
   the relay preflight **passed on both phones** (Cloudflare keys confirmed
