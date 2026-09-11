@@ -15,6 +15,7 @@ import { ENDED_NOTICE, WARN_NOTICE, joinBilingual, minutesLabel } from "@/lib/tu
 import { MinutesChip } from "./tutor/MinutesChip";
 import { OutOfMinutes } from "./tutor/OutOfMinutes";
 import { blobToWav16k } from "@/lib/tutor/wav";
+import { keepWake } from "@/lib/wakeLock";
 import {
   startConversation,
   type ActiveConversation,
@@ -419,6 +420,14 @@ function Drills({
 
   const recording = status === "recording";
   const scoring = status === "scoring";
+
+  // The screen stays awake for a speech attempt and nothing else — a lesson
+  // read on-screen for ten minutes is not a reason to hold a phone open
+  // (lib/wakeLock.ts; 60s grace covers the gap between attempts).
+  useEffect(() => {
+    if (!recording) return;
+    return keepWake("tutor-attempt");
+  }, [recording]);
 
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">

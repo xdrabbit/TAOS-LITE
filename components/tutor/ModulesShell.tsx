@@ -65,6 +65,7 @@ import {
   type CrawlOutcome
 } from "@/lib/tutor/crawl";
 import { ENDED_NOTICE, WARN_NOTICE, joinBilingual, minutesLabel } from "@/lib/tutor/meterCopy";
+import { keepWake } from "@/lib/wakeLock";
 import {
   startConversation,
   type ActiveConversation,
@@ -749,6 +750,12 @@ function Crawl({
   const recording = status === "recording";
   const scoring = status === "scoring";
   const hook = lesson.contrastHook;
+
+  // Same rule as TutorShell: awake for the attempt, not for the lesson.
+  useEffect(() => {
+    if (!recording) return;
+    return keepWake("tutor-attempt");
+  }, [recording]);
 
   return (
     <section className="flex flex-col gap-3 pb-4">

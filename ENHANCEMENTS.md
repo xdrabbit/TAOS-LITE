@@ -16,31 +16,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
-- **The wake lock holds the whole device awake, not just the translation** —
-  Driver report, 2026-09-06: as long as TAOS is open on any device — phone or
-  MacBook — that device never sleeps. It is not a bug in the holder; it is the
-  scope. The shared holder (`lib/wakeLock.ts:51`, requesting a screen sentinel
-  at `lib/wakeLock.ts:90`) is asked to hold *unconditionally* on two screens:
-  home passes `createWakeLockHold(() => true)` at
-  `components/TranslatorShell.tsx:433`, and Table does the same at
-  `components/TabletopShell.tsx:177` — both from a mount effect, so the lock is
-  taken the moment the page opens and only ever released when the component
-  unmounts. `/live` (`components/LiveShell.tsx:636`) and `/call`
-  (`components/CallShell.tsx:388`) already do the right thing: they pass a
-  predicate (`runningRef` / `inCallRef`) and the holder releases when it goes
-  false. This overshot from a real fix — the phone was sleeping mid-utterance
-  during a spoken turn (8/2 field report, quoted in the comments at both call
-  sites) — and the answer was to hold it always. Note the Wake Lock API
-  auto-releases when a tab is hidden, and the holder re-acquires on
-  `visibilitychange` (`lib/wakeLock.ts:114-118`); a laptop that never sleeps
-  with the tab in front of you is exactly what an at-mount lock looks like.
-  Proposed fix: scope the two unconditional holds to the moments that need
-  them — acquire when the mic opens / a call connects / a live session starts,
-  release on stop plus a short grace (~60s idle) so the pause between turns is
-  still covered, and let the browser's own release-on-hidden do the rest. What
-  we'd lose: nothing, if the grace window covers the pause between turns.
-  (added 2026-09-06)
-
 - **/live never gets a breath: continuous or group speech is never flushed** —
   Driver report, 2026-09-06: when one person talks without pausing, or a group
   talks over each other, `/live` goes quiet. Server VAD never sees a silence
@@ -606,6 +581,33 @@ is not a prerequisite for using it.
   → `tests/meaning-first-rule.test.ts` pins where the rule appears, where it
   deliberately does not, the "a ver" example verbatim, and that the realtime
   `OUTPUT LANGUAGE … REMINDER` bookends still survive the ~90 longer words.
+
+- **The wake lock outlived the translation, 2026-09-06** — PR #61. Tom's
+  iPhone went from ~2 days of battery to ~half a day just from leaving TAOS
+  open in a tab. The lock was added on 8/2 for a real bug (the phone slept
+  mid-utterance) and it overshot: `TranslatorShell` and `TabletopShell` each
+  called `createWakeLockHold(() => true)` **in a mount effect**, so the answer
+  to "should the screen stay awake?" was `true` for the life of the page —
+  MacBooks included. `/live` and `/call` were already gated on a running
+  session, but nothing capped a session that never cleanly ended.
+  → `lib/wakeLock.ts` is now `hold(reason)` / `release(reason)`, keyed by
+  reason, with one idle rule: **nothing acquires at mount**; the acquiring
+  moments are the push-to-talk mic opening, a `/call` connecting, a `/live`
+  session starting, the `/fast` mic going live, and a tutor speech attempt
+  recording. The last release keeps the lock for a **60s grace** so the pause
+  between two turns does not blink the screen off, and a new hold inside the
+  grace cancels it. A reason nobody has refreshed in **60s** is dropped
+  regardless — ongoing sessions prove they are alive through `keepWake()`,
+  which re-holds every 20s, so a shell that crashed mid-call cannot leak the
+  lock past a minute. Hidden releases explicitly; visible re-acquires only if
+  a reason is still active, and time spent hidden does not count against the
+  idle cap. The 8/2 fix is intact underneath: the sentinel's `release` event
+  still re-acquires without a `visibilitychange`, and a rejected (or
+  synchronously throwing) `request()` never escapes. Every hold and release
+  writes to `/call`'s on-screen trail, so a field report can show it. 15 tests
+  in `tests/wake-lock.test.ts` pin the whole rule set. Field-tested by Tom on
+  an iPhone, 2026-09-11: the phone auto-locked after a spoken turn, and a call
+  held the screen awake for its duration.
 
 - **The captions were there. They were 591px down a 659px phone, 2026-08-31**
   — PR #TBD. Tom and Liz, two phones, same house, minutes after #56 landed:

@@ -9,6 +9,7 @@ import { FAST_MAX_DICTATION_MS } from "@/lib/fast/dictation";
 import { appendDictated } from "@/lib/fast/liveTranscript";
 import { speechCandidates } from "@/lib/fast/speechLocale";
 import { useLiveDictation } from "@/lib/fast/useLiveDictation";
+import { keepWake } from "@/lib/wakeLock";
 
 // ── /fast's mic — PARKED ────────────────────────────────────────────────────
 //
@@ -178,6 +179,13 @@ export default function FastMicDock({
     onPartialChange(dictation.partial);
   }, [dictation.partial, onPartialChange]);
   useEffect(() => () => onPartialChange(""), [onPartialChange]);
+
+  // Awake while the mic is live, and only then (lib/wakeLock.ts). /fast is a
+  // typing screen with a mic bolted on; the typing does not need a lock.
+  useEffect(() => {
+    if (dictation.state === "idle") return;
+    return keepWake("fast-mic");
+  }, [dictation.state]);
 
   // Clear cancels the mic: a tail still arriving is text on its way into a box
   // somebody just emptied. The first render is not a cancel — the signal only

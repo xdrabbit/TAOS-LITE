@@ -6,7 +6,7 @@ import {
   type ActiveAmbientSession,
   type AmbientState
 } from "@/lib/live/ambient";
-import { createWakeLockHold, type WakeLockHold } from "@/lib/wakeLock";
+import { keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
@@ -167,7 +167,6 @@ export function LiveShell(): JSX.Element {
   // Screen wake lock: while live mode runs the phone must not sleep — the user
   // is reading the feed, and on iOS a locked screen suspends the page and
   // kills the session entirely.
-  const wakeHoldRef = useRef<WakeLockHold | null>(null);
 
   // Voice readout plumbing (device engine).
   const voiceOnRef = useRef(true);
@@ -627,23 +626,12 @@ export function LiveShell(): JSX.Element {
 
   const running = engine === "ambient" ? ambientActive : listening;
 
-  // Hold a screen wake lock while running (either engine). Shared holder
-  // (lib/wakeLock.ts): re-acquires on visibility return AND on the sentinel's
-  // "release" event — iOS drops the lock without a visibilitychange under Low
-  // Power Mode / pressure (8/2 field report on /translate; same gap here).
-  const runningRef = useRef(false);
+  // Hold a screen wake lock while running (either engine) — and only then.
+  // keepWake refreshes on a heartbeat, so a session that is genuinely live
+  // outlives the idle cap while a stopped one does not (lib/wakeLock.ts).
   useEffect(() => {
-    const hold = createWakeLockHold(() => runningRef.current);
-    wakeHoldRef.current = hold;
-    return () => {
-      wakeHoldRef.current = null;
-      hold.stop();
-    };
-  }, []);
-  useEffect(() => {
-    runningRef.current = running;
-    // running → acquire; stopped → the holder releases (shouldHold is false).
-    wakeHoldRef.current?.ensure();
+    if (!running) return;
+    return keepWake("live-session");
   }, [running]);
 
   const handlePrimary = useCallback(() => {
