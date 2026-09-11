@@ -14,7 +14,7 @@
 // until someone is standing in a train station.
 
 import { languageLabel } from "@/lib/languages/catalog";
-import { MEANING_FIRST_RULE } from "@/lib/translate/prompts";
+import { DEFAULT_REGISTER, MEANING_FIRST_RULE, registerLineFor } from "@/lib/translate/prompts";
 
 /**
  * One call's interpreting direction, as catalog codes.
@@ -51,6 +51,11 @@ export function buildCallInterpreterInstructions(direction: CallDirection): stri
     // Liz's 7/27 gap rule, same as /api/translate and /tabletop.
     `If a phrase cut off or a word was unintelligible, translate only the words you clearly heard — never guess or complete the missing part.`,
     `Delivery: quick, clear, neutral — a professional interpreter, not a narrator.`,
+    // The register line, again at the tail. It sits in MEANING_FIRST_RULE
+    // above with eight instructions after it, and a call is one long session
+    // whose opening instructions are all the model gets — so the form of
+    // address is restated where recency keeps it, just inside the bookend.
+    `Form of address: when ${otherName} does not mark formality, ${registerLineFor(DEFAULT_REGISTER)}`,
     `REMINDER: your output language is ${targetName} and ONLY ${targetName}.`
   ].join(" ");
 }

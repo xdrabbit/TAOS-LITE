@@ -550,7 +550,26 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **Say it the way a native speaker would, 2026-09-10** — PR #TBD. The Driver
+- **The default register is tú, not usted, 2026-09-11** — PR #TBD. Liz
+  field-tested #64 on production: talking with Tom, TAOS had him address her as
+  *usted* — "es como que si estuviéramos en el principio... me siento
+  incómoda." She was right. Register belongs to the relationship between the
+  two speakers, not to a global app default, and the people using TAOS talk to
+  each other every day.
+  → `DEFAULT_REGISTER` in `lib/translate/prompts.ts` is `"tu"`. Every surface
+  on the default follows (home, `/try`, auto-detect, `/call`, `/tabletop`,
+  `/translate`); `/chat` already passed `"tu"` and now agrees. `usted` and
+  `registerLineFor("usted")` stay callable for a future kiosk/business context.
+  → The tú line now reads as a standing rule for the whole conversation, not a
+  one-time choice — #64's known limit was register drifting between turns. It
+  names only the form to keep, never usted (naming the failure primes it).
+  → `/call` restates the form of address just inside its closing REMINDER: one
+  long session hears its instructions once, and the rule sat eight
+  instructions from the end. `/tabletop` is frozen and only gets the constant.
+  → Per-pair register (a picker) is a separate item, not this one.
+  → Two-phone field test on the preview is pending before merge.
+
+- **Say it the way a native speaker would, 2026-09-10** — PR #64. The Driver
   read every translation prompt in the app side by side and found each surface
   describing the same job in different words — "concept paraphrase" on the home
   screen, "faithful and complete" on `/call`, "capture the gist the way a close

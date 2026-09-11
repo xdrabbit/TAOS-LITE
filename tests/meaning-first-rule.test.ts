@@ -64,12 +64,28 @@ describe("the rule itself", () => {
     expect(MEANING_FIRST_RULE()).toContain("Match the speaker's register");
   });
 
-  it("defaults to usted — the app is handed to strangers", () => {
-    // A kiosk, a counter, a receptionist. Being too formal with a friend is a
-    // smile; being too familiar with a stranger is a mistake.
-    expect(DEFAULT_REGISTER).toBe("usted");
-    expect(MEANING_FIRST_RULE()).toBe(MEANING_FIRST_RULE("usted"));
-    expect(MEANING_FIRST_RULE()).toContain("polite form (usted)");
+  it("defaults to tú — register follows the relationship, not the app", () => {
+    // #64 shipped usted. Liz, 9/11, on production, talking with Tom: "es como
+    // que si estuviéramos en el principio... me siento incómoda." The people
+    // using TAOS talk to each other every day; usted made them strangers.
+    expect(DEFAULT_REGISTER).toBe("tu");
+    expect(MEANING_FIRST_RULE()).toBe(MEANING_FIRST_RULE("tu"));
+    expect(MEANING_FIRST_RULE()).toContain("familiar form (tú)");
+    expect(MEANING_FIRST_RULE()).not.toContain("polite form (usted)");
+  });
+
+  it("keeps usted callable — for a kiosk or business context, just not by default", () => {
+    expect(MEANING_FIRST_RULE("usted")).toContain("polite form (usted)");
+    expect(MEANING_FIRST_RULE("usted")).not.toBe(MEANING_FIRST_RULE());
+  });
+
+  it("states tú as a standing rule for the whole conversation", () => {
+    // Register stated once drifts. The line has to read as holding for every
+    // turn, and it names only the form to keep — naming usted would prime it.
+    const line = registerLineFor("tu");
+    expect(line).toContain("standing rule for the whole conversation");
+    expect(line).toContain("on every turn");
+    expect(line).not.toContain("usted");
   });
 });
 
@@ -97,6 +113,14 @@ describe("the conversational surfaces all carry it", () => {
     );
   });
 
+  it("/call restates the form of address at the tail, just inside the bookend", () => {
+    // One long session, instructions heard once at the top: the register line
+    // is repeated where recency keeps it, right before the closing REMINDER.
+    const p = buildCallInterpreterInstructions({ source: "en", target: "es" });
+    const tail = `Form of address: when English does not mark formality, ${registerLineFor("tu")}`;
+    expect(p).toContain(`${tail} REMINDER: your output language is Spanish`);
+  });
+
   it("/call keeps its fall-behind concession, which the rule does not revoke", () => {
     // "Not a summary" and "compress the oldest material" both live in this
     // prompt on purpose: compression is what a live call costs when the
@@ -109,10 +133,11 @@ describe("the conversational surfaces all carry it", () => {
     expect(buildTurnInstructions({ source: "en", target: "es" })).toContain(MEANING_FIRST_RULE());
   });
 
-  it("/chat send and voice — with the FAMILIAR register", () => {
+  it("/chat send and voice — with the FAMILIAR register, stated explicitly", () => {
     // The one surface that knows who is on the other end: a private thread
     // between two partners. usted there would be a stranger's voice in a
-    // love letter.
+    // love letter. It agrees with the default now, but stays explicit so a
+    // future kiosk default cannot reach a love letter.
     for (const path of ["app/api/chat/send/route.ts", "app/api/chat/voice/route.ts"]) {
       const src = code(path);
       expect(src).toContain("MEANING_FIRST_RULE");
@@ -121,7 +146,7 @@ describe("the conversational surfaces all carry it", () => {
     }
   });
 
-  it("/translate typed — at the default (polite) register", () => {
+  it("/translate typed — at the default register", () => {
     const src = code("app/api/text-translate/route.ts");
     expect(src).toContain("MEANING_FIRST_RULE()");
     expect(src).not.toContain(`MEANING_FIRST_RULE("tu")`);

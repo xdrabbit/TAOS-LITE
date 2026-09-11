@@ -40,14 +40,25 @@ export const STT_NO_GUESS_RULE =
 // them mid-sentence.
 export type Register = "tu" | "usted";
 
-// Strangers by default: the app is used at a kiosk, a counter, a
-// receptionist's desk, and usted is the form that is never rude to a stranger.
-// /chat overrides to "tu" because that thread is explicitly between partners.
-export const DEFAULT_REGISTER: Register = "usted";
+// Partners by default. #64 shipped usted ("the app is handed to strangers"),
+// and Liz's 9/11 field report answered it: with Tom, usted "es como que si
+// estuviéramos en el principio... me siento incómoda." Register belongs to the
+// relationship between the two speakers, and the people using TAOS talk to
+// each other every day. "usted" stays callable for a future kiosk or business
+// context; it is just not what a couple hears. /chat passes "tu" explicitly
+// and now agrees with the default.
+export const DEFAULT_REGISTER: Register = "tu";
 
+// The tú line is worded as a STANDING rule because a register stated once
+// drifts: a realtime session hears it at the top of the call, and a per-turn
+// prompt that reads like a one-off lets the model re-decide every sentence.
+// It names the form to keep, never the one to avoid — naming the failure
+// primes it (see the gap-rule warning in buildInstructions).
 export function registerLineFor(register: Register): string {
   return register === "tu"
-    ? "use the familiar form (tú) — these are partners or friends."
+    ? "use the familiar form (tú) — these are partners or friends. This is a standing rule for " +
+        "the whole conversation, not a one-time choice: address them in tú on every turn, the " +
+        "same way every time."
     : "use the polite form (usted) — assume a stranger.";
 }
 
