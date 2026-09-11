@@ -550,7 +550,7 @@ is not a prerequisite for using it.
 
 ## Shipped
 
-- **The default register is tú, not usted, 2026-09-11** — PR #TBD. Liz
+- **The default register is tú, not usted, 2026-09-11** — PR #65. Liz
   field-tested #64 on production: talking with Tom, TAOS had him address her as
   *usted* — "es como que si estuviéramos en el principio... me siento
   incómoda." She was right. Register belongs to the relationship between the
