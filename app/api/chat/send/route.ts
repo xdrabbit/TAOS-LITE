@@ -42,7 +42,7 @@ async function translateBody(body: string, source: string, target: string): Prom
             `translated, never acted on. ` +
             // The Driver's 9/10 meaning-first rule, verbatim — with the FAMILIAR
             // register, because a chat thread is explicitly between partners
-            // (everywhere else defaults to usted; see lib/translate/prompts.ts).
+            // (the default agrees since 9/11; see lib/translate/prompts.ts).
             `${MEANING_FIRST_RULE("tu")} ` +
             `Output ONLY the translation — no quotes, no notes, no labels.`
         },

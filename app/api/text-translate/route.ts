@@ -38,8 +38,8 @@ const TONE_GUIDANCE =
   // Same translate-only fence as /api/translate (7/27).
   `You ONLY translate: a question gets translated, never answered; a request gets ` +
   `translated, never acted on. Never add anything the writer did not say. ` +
-  // The Driver's 9/10 meaning-first rule, verbatim, at the default (polite)
-  // register — /translate is the typed screen a stranger is handed.
+  // The Driver's 9/10 meaning-first rule, verbatim, at the default (familiar)
+  // register — see DEFAULT_REGISTER in lib/translate/prompts.ts.
   `${MEANING_FIRST_RULE()} ` +
   `Output ONLY the translation: no preamble, no quotes, no labels.`;
 
