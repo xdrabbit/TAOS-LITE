@@ -259,6 +259,36 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Ideas
 
+- **TAOS "even liter" offline mode — Gemma 4 E2B on-device** — Tom (9/6):
+  asked whether TAOS-LITE could run standalone on his iPhone 15 Pro Max with
+  Gemma 4 E2B doing the work. Feasible in principle: E2B (5.1B total, ~2B
+  effective footprint, Apache-2.0) takes audio in, so one model could replace
+  STT + translate; official LiteRT-LM and 4-bit QAT builds exist, and there
+  is a WebGPU browser demo (webml-community/Gemma-4-WebGPU). The catch is
+  the PWA boundary: in-Safari inference needs iOS-26 WebGPU plus a ~2 GB
+  model download inside WebKit's per-tab memory ceiling (borderline), while
+  the comfortable path is a native shell (Capacitor + LiteRT-LM or MLX),
+  which is a product shift. TTS would fall back to `speechSynthesis` —
+  neutral voices only, no clones. Quality well below the cloud path outside
+  the big languages, but the payoff is offline + zero marginal cost.
+
+  → Tom (9/6), the actual want: **bare-minimum offline translation for Liz**,
+  working somewhere with unreliable cell coverage — no signal means TAOS-LITE
+  is dead for her. Open to leaning on Apple's built-in AI. Step 0 is not a
+  build at all: Apple's stock Translate app does fully offline two-way spoken
+  conversation once both languages are downloaded (Settings → Translate →
+  Downloaded Languages, plus On-Device Mode) — covers ~20 major languages
+  incl. Spanish. If TAOS itself must work offline, Apple's Translation
+  framework is native-only (no Safari/PWA access), so that route means a
+  native shell; Gemma 4 E2B (above) is the deeper DIY fallback.
+  Tom (9/6): Liz's pair is **ES↔EN only** — inside Apple's offline list, so
+  the stock app covers her now. "It's pretty good, but it's not us" — if
+  field use wants "us," the smallest build is the native shell wrapping
+  Apple's Translation framework (TAOS UX, Apple brains), not Gemma.
+  Tom (9/6), after getting it working himself: "even Apple's app... it just
+  feels like you're driving a baseline Honda." The fallback works; the
+  experience is the gap.
+
 - **/fast's live mic — PARKED 2026-08-31, and worth reviving on Android.**
   Tom's call, and the one-line version is: *worked on Android, killed by the
   iOS WebKit audio stack after three fix rounds; candidate for an Android-only
