@@ -20,16 +20,18 @@ export function generateMetadata(): Metadata {
 }
 
 export default function CallPage(): JSX.Element {
-  // Founders only (lib/release.ts). A stranger who taps a forwarded
-  // /call?room=XYZ link gets bounced home rather than shown a card for a
-  // screen they can't have — see FounderGate's `deny`.
+  // Founders, plus the outside test pairs on CALL_ALLOWLIST_EMAILS
+  // (lib/release.ts). That list is server-only, so the gate asks
+  // /api/call/access for it. A stranger who taps a forwarded /call?room=XYZ
+  // link gets bounced home rather than shown a card for a screen they can't
+  // have — see FounderGate's `deny`.
   //
   // The gate that MATTERS is in app/api/call/realtime/route.ts: this one runs
   // in the browser off a client-held session, so it hides the screen without
-  // defending it. Rendering CallShell without a founder's access token buys
+  // defending it. Rendering CallShell without an allowed access token buys
   // you a 404 from the only route that spends money.
   return (
-    <FounderGate publicRelease={callEnabled()} deny="home">
+    <FounderGate publicRelease={callEnabled()} deny="home" accessCheck="/api/call/access">
       <CallShell />
     </FounderGate>
   );
