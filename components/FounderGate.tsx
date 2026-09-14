@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
+import { authHeaders } from "@/lib/authClient";
 import { isFounder } from "@/lib/release";
 import { supabase } from "@/lib/supabase";
 
@@ -36,16 +37,32 @@ export interface FounderGateProps {
   publicRelease?: boolean;
   /** What a non-founder sees: the card, or a bounce to the home screen. */
   deny?: "coming-soon" | "home";
+  /**
+   * A route that can let in a signed-in non-founder the browser cannot
+   * recognise — POSTed with the access token, 204 means yes, anything else
+   * (including a network error) means no. /call passes /api/call/access so
+   * its server-only test-pair allowlist reaches the page without entering the
+   * bundle. Omitted, the gate is founders-only, exactly as before.
+   */
+  accessCheck?: string;
 }
 
 export function FounderGate({
   children,
   publicRelease = false,
-  deny = "coming-soon"
+  deny = "coming-soon",
+  accessCheck
 }: FounderGateProps): JSX.Element {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
+  // The server's answer, remembered per USER rather than per token. Supabase
+  // refreshes the access token hourly and hands the gate a new session when it
+  // does; keyed on the token, that refresh would re-ask, flash "Loading…" and
+  // unmount a /call that is mid-conversation.
+  const [serverAnswer, setServerAnswer] = useState<{ userId: string; allowed: boolean } | null>(
+    null
+  );
 
   useEffect(() => {
     let active = true;
@@ -64,15 +81,45 @@ export function FounderGate({
     };
   }, []);
 
-  const allowed = publicRelease || isFounder(session?.user?.email);
+  const clientAllowed = publicRelease || isFounder(session?.user?.email);
+  const userId = session?.user?.id ?? null;
+  const asksServer = Boolean(accessCheck) && ready && !clientAllowed && userId !== null;
 
-  // The bounce waits for `ready`: firing it on the first render would send a
-  // founder home every time, because getSession() has not answered yet.
   useEffect(() => {
-    if (ready && !allowed && deny === "home") router.replace("/");
-  }, [ready, allowed, deny, router]);
+    if (!asksServer || !accessCheck || !userId) return;
+    let active = true;
+    (async () => {
+      let allowed = false;
+      try {
+        const res = await fetch(accessCheck, {
+          method: "POST",
+          headers: await authHeaders(),
+          cache: "no-store"
+        });
+        allowed = res.status === 204;
+      } catch {
+        // Fail closed: an unreachable check lets nobody in.
+        allowed = false;
+      }
+      if (active) setServerAnswer({ userId, allowed });
+    })();
+    return () => {
+      active = false;
+    };
+  }, [asksServer, accessCheck, userId]);
 
-  if (!ready) {
+  const answered = asksServer && serverAnswer?.userId === userId;
+  const allowed = clientAllowed || (answered && serverAnswer?.allowed === true);
+  const settled = ready && (!asksServer || answered);
+
+  // The bounce waits until the gate has its answer: firing it on the first
+  // render would send a founder home every time, because getSession() has not
+  // answered yet — and a test pair too, while the server check is in flight.
+  useEffect(() => {
+    if (settled && !allowed && deny === "home") router.replace("/");
+  }, [settled, allowed, deny, router]);
+
+  if (!settled) {
     return (
       <main className="flex min-h-screen items-center justify-center text-amber-100/60">
         Loading…
