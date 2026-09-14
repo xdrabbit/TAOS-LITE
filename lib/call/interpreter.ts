@@ -12,6 +12,7 @@ import {
 } from "./cost";
 import { requestSpeech } from "@/lib/tts/speech";
 import { bridgeInterpreterInput, type InterpreterInputBridge } from "./audioBridge";
+import type { LagSession } from "./lag";
 
 // WebRTC client for the /call interpreter. Unlike lib/live/ambient.ts (which
 // streams the MIC), this streams the REMOTE call partner's audio track into a
@@ -71,6 +72,11 @@ export interface InterpreterConfig {
   maxDurationMs?: number;
   /** Hang up after this long with nothing said. Defaults to 2 min. */
   idleTimeoutMs?: number;
+  /**
+   * Where this session's per-turn timings go (lib/call/lag.ts). Measurement
+   * only — nothing here changes what the interpreter does.
+   */
+  lag?: LagSession;
 }
 
 /**
@@ -400,6 +406,7 @@ export async function startCallInterpreter(
   const stop = async () => {
     if (stopped) return;
     stopped = true;
+    config.lag?.closed();
     setState("stopping");
     clearTimers();
     events.onIdleWarning?.(null);
@@ -587,6 +594,7 @@ export async function startCallInterpreter(
     pendingTurns = 0; // everything committed so far is covered by this response
     responseActive = true;
     dc.send(JSON.stringify({ type: "response.create" }));
+    config.lag?.requested();
   };
 
   /**
@@ -729,6 +737,9 @@ export async function startCallInterpreter(
           }, maxMs);
         }
         if (statsTimer === null) {
+          // The session's audio clock starts here, which is what lets lag.ts
+          // place `audio_end_ms` on this phone's own timeline.
+          config.lag?.opened();
           connectedAt = Date.now();
           void readInputStats();
           statsTimer = window.setInterval(() => void readInputStats(), INPUT_POLL_MS);
@@ -773,6 +784,11 @@ export async function startCallInterpreter(
         // The seconds transcription actually bills for: what VAD committed,
         // not what the microphone streamed.
         const endMs = typeof ev.audio_end_ms === "number" ? ev.audio_end_ms : null;
+        config.lag?.speechStopped(
+          typeof ev.item_id === "string" ? ev.item_id : null,
+          endMs,
+          inputBridge?.clockDriftMs() ?? null
+        );
         if (speechStartedMs !== null && endMs !== null && endMs > speechStartedMs) {
           spend = addTranscribedSeconds(spend, (endMs - speechStartedMs) / 1000);
           publishSpend();
@@ -783,6 +799,8 @@ export async function startCallInterpreter(
 
       if (type === "response.done") {
         responseActive = false;
+        // Before anything below can fire the NEXT response.create.
+        config.lag?.done();
         const response = ev.response as { usage?: RealtimeUsage } | undefined;
         spend = addResponseUsage(spend, response?.usage);
         publishSpend();
@@ -816,6 +834,8 @@ export async function startCallInterpreter(
         // Only turns with real words become pending translations; filters the
         // "…"/"[inaudible]" junk that noise-triggered turns produce.
         if (t && /[\p{L}\p{N}]{2,}/u.test(t)) {
+          // Before onHeard, so the heard line's render has a segment to mark.
+          config.lag?.transcribed(typeof ev.item_id === "string" ? ev.item_id : null);
           events.onHeard?.(t);
           bumpIdle();
           pendingTurns += 1;
@@ -831,6 +851,7 @@ export async function startCallInterpreter(
       ) {
         const d = typeof ev.delta === "string" ? ev.delta : "";
         if (d) {
+          config.lag?.token();
           translationBuffer += d;
           events.onTranslationDelta?.(d);
         }
