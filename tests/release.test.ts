@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  callAllowlist,
   callEnabled,
   callVisibleTo,
+  fastVisibleTo,
   founderEmails,
   HELD_BACK_V1,
+  isCallAllowlisted,
   isFounder,
   onDeviceSttEnabled,
   tutorComingSoon,
@@ -41,6 +44,7 @@ const ORIGINAL_ENV = process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
 const ORIGINAL_TUTOR = process.env.NEXT_PUBLIC_ENABLE_TUTOR;
 const ORIGINAL_ONDEVICE = process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT;
 const ORIGINAL_CALL = process.env.NEXT_PUBLIC_ENABLE_CALL;
+const ORIGINAL_CALL_ALLOWLIST = process.env.CALL_ALLOWLIST_EMAILS;
 
 function restore(name: string, original: string | undefined): void {
   if (original === undefined) {
@@ -55,6 +59,7 @@ afterEach(() => {
   restore("NEXT_PUBLIC_ENABLE_TUTOR", ORIGINAL_TUTOR);
   restore("NEXT_PUBLIC_ENABLE_ONDEVICE_STT", ORIGINAL_ONDEVICE);
   restore("NEXT_PUBLIC_ENABLE_CALL", ORIGINAL_CALL);
+  restore("CALL_ALLOWLIST_EMAILS", ORIGINAL_CALL_ALLOWLIST);
 });
 
 function read(path: string): string {
@@ -300,6 +305,115 @@ describe("callVisibleTo (founders now, everyone only when the flag ships)", () =
     expect(gate).toBeGreaterThan(guard);
     expect(spend).toBeGreaterThan(gate);
     expect(route).toContain('status: 404');
+  });
+});
+
+describe("CALL_ALLOWLIST_EMAILS — outside test pairs reach /call, and only /call", () => {
+  // T6, 2026-09-14: outside pairs get /call by being named on a list, not by
+  // flipping NEXT_PUBLIC_ENABLE_CALL. Every case here runs with the public
+  // flag OFF, because the flag being off is the whole premise.
+  function flagOff(): void {
+    delete process.env.NEXT_PUBLIC_ENABLE_CALL;
+    delete process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
+  }
+
+  it("lets a listed email in", () => {
+    flagOff();
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com,ben@example.com";
+    expect(isCallAllowlisted("ana@example.com")).toBe(true);
+    expect(callVisibleTo("ana@example.com")).toBe(true);
+    expect(callVisibleTo("ben@example.com")).toBe(true);
+  });
+
+  it("keeps an unlisted email out", () => {
+    flagOff();
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    expect(isCallAllowlisted("customer@example.com")).toBe(false);
+    expect(callVisibleTo("customer@example.com")).toBe(false);
+    // A near-miss is a miss.
+    expect(callVisibleTo("ana@example.co")).toBe(false);
+    expect(callVisibleTo("xana@example.com")).toBe(false);
+  });
+
+  it("FAILS CLOSED: unset or empty grants nobody", () => {
+    flagOff();
+    for (const value of [undefined, "", "   ", ",", " , ,\n"]) {
+      if (value === undefined) delete process.env.CALL_ALLOWLIST_EMAILS;
+      else process.env.CALL_ALLOWLIST_EMAILS = value;
+      expect(callAllowlist(process.env.CALL_ALLOWLIST_EMAILS).size).toBe(0);
+      for (const who of ["customer@example.com", "", null, undefined]) {
+        expect(callVisibleTo(who)).toBe(false);
+      }
+    }
+  });
+
+  it("FAILS CLOSED: a malformed list grants nobody, never everybody", () => {
+    // The mistakes someone makes at a Vercel env field at midnight. Each must
+    // lose access, not open /call to the internet.
+    flagOff();
+    for (const value of ["*", "all", "true", "1", "@example.com", "example.com", "*@example.com", "ana@", "ana @example.com"]) {
+      process.env.CALL_ALLOWLIST_EMAILS = value;
+      expect(callVisibleTo("customer@example.com")).toBe(false);
+      expect(callVisibleTo(value)).toBe(false);
+      expect(callVisibleTo("")).toBe(false);
+      expect(callVisibleTo(null)).toBe(false);
+    }
+  });
+
+  it("drops only the malformed entries, keeping the good ones", () => {
+    flagOff();
+    process.env.CALL_ALLOWLIST_EMAILS = "*, ana@example.com, not-an-email";
+    expect([...callAllowlist(process.env.CALL_ALLOWLIST_EMAILS)]).toEqual(["ana@example.com"]);
+    expect(callVisibleTo("ana@example.com")).toBe(true);
+    expect(callVisibleTo("customer@example.com")).toBe(false);
+  });
+
+  it("matches across case and stray whitespace, on either side", () => {
+    flagOff();
+    process.env.CALL_ALLOWLIST_EMAILS = " Liz@Example.com ,\n  BEN@example.COM ";
+    expect(callVisibleTo("liz@example.com")).toBe(true);
+    expect(callVisibleTo("Liz@Example.com ")).toBe(true);
+    expect(callVisibleTo("  LIZ@EXAMPLE.COM")).toBe(true);
+    expect(callVisibleTo("ben@example.com")).toBe(true);
+  });
+
+  it("revokes by removal — no other step", () => {
+    flagOff();
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com, ben@example.com";
+    expect(callVisibleTo("ben@example.com")).toBe(true);
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    expect(callVisibleTo("ben@example.com")).toBe(false);
+    expect(callVisibleTo("ana@example.com")).toBe(true);
+  });
+
+  it("grants /call and nothing else a founder gets", () => {
+    // Founder-ness also opens /fast and /video, bypasses metering, and unlocks
+    // the orphan sweep. A test pair must get none of that.
+    flagOff();
+    delete process.env.NEXT_PUBLIC_ENABLE_FAST;
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    expect(callVisibleTo("ana@example.com")).toBe(true);
+    expect(isFounder("ana@example.com")).toBe(false);
+    expect(fastVisibleTo("ana@example.com")).toBe(false);
+  });
+
+  it("is read server-only, so the addresses never ship in the browser bundle", () => {
+    const source = read("lib/release.ts");
+    expect(source).toContain("process.env.CALL_ALLOWLIST_EMAILS");
+    expect(source).not.toContain("NEXT_PUBLIC_CALL_ALLOWLIST");
+  });
+
+  it("does not touch the public flag — /call is still off by default", () => {
+    flagOff();
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    expect(callEnabled()).toBe(false);
+  });
+
+  it("the /call page asks the server for the half the browser cannot see", () => {
+    expect(read("app/call/page.tsx")).toContain('accessCheck="/api/call/access"');
+    // /video and /fast stay founders-only: they do not consult the list.
+    expect(read("app/video/page.tsx")).not.toContain("accessCheck");
+    expect(read("app/fast/page.tsx")).not.toContain("accessCheck");
   });
 });
 

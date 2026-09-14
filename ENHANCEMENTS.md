@@ -548,6 +548,14 @@ in its own language, which is the trade that lets the catalog grow without a
 translator. Adding a seventh is a kindness to a language people keep using; it
 is not a prerequisite for using it.
 
+## /call test pairs: granting and revoking access
+
+- **Where:** the `CALL_ALLOWLIST_EMAILS` env var in Vercel (project `taos-lite`, Production), read server-only by `isCallAllowlisted()` in `lib/release.ts`.
+- **Format:** addresses separated by commas, e.g. `ana@example.com, ben@example.com`. Case and spaces don't matter. An entry that isn't a single address (`*`, `all`, `@example.com`) is ignored, and an unset or empty list lets nobody in.
+- **To add:** `vercel env rm CALL_ALLOWLIST_EMAILS production`, then `vercel env add CALL_ALLOWLIST_EMAILS production` with the full new list (or edit it in the dashboard), then redeploy. The person signs in with that exact Google address and opens `taoslite.com/call`. There is no nav pill for them.
+- **To remove:** delete the address from the same list and redeploy. Nothing else holds it.
+- **The public flag stays off:** do NOT set `NEXT_PUBLIC_ENABLE_CALL`, which opens /call to everyone. Don't add test pairs to `NEXT_PUBLIC_FOUNDER_EMAILS` either: that list also grants /fast, /video, unmetered tutor, and the orphan sweep, and it ships in the public bundle.
+
 ## Shipped
 
 - **The default register is tú, not usted, 2026-09-11** — PR #65. Liz

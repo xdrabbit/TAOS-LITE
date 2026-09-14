@@ -131,18 +131,24 @@ export function callEnabled(): boolean {
  *
  * THE question every /call surface asks — the nav link, the page gate, and
  * POST /api/call/realtime, which is the one that spends money. Public when
- * the flag says so; founders always. A single helper because the three
- * surfaces disagreeing is precisely how /tabletop lost its nav entry: each
- * one grew its own idea of who was allowed.
+ * the flag says so; founders always; and the outside test pairs on
+ * CALL_ALLOWLIST_EMAILS (see isCallAllowlisted below). A single helper
+ * because the three surfaces disagreeing is precisely how /tabletop lost its
+ * nav entry: each one grew its own idea of who was allowed.
  *
  * The route-level check is the load-bearing one. The nav link and the page
  * gate run in the browser off a Supabase session the client already holds,
  * which makes them a courtesy, not a fence — a determined stranger can render
  * the component. What they cannot do is mint a realtime session, because the
  * route re-asks this question against a server-validated access token.
+ *
+ * In the BROWSER the allowlist half is always false — the variable is not
+ * NEXT_PUBLIC_, so it never reaches the bundle. The page gate asks
+ * POST /api/call/access for that half instead; the nav does not ask at all,
+ * so a test pair reaches /call by its URL or a room link, not a pill.
  */
 export function callVisibleTo(email: string | null | undefined): boolean {
-  return callEnabled() || isFounder(email);
+  return callEnabled() || isFounder(email) || isCallAllowlisted(email);
 }
 
 // /fast: FOUNDERS ONLY, on the same two-function shape as /call above —
@@ -313,4 +319,46 @@ export function founderEmails(extra: string | undefined): Set<string> {
 export function isFounder(email: string | null | undefined): boolean {
   if (!email) return false;
   return founderEmails(process.env.NEXT_PUBLIC_FOUNDER_EMAILS).has(email.trim().toLowerCase());
+}
+
+// /call's OUTSIDE TEST PAIRS — a named, revocable list of people who may reach
+// /call and nothing else. Decided 2026-09-14 (T6): the pairs get in by email,
+// and NEXT_PUBLIC_ENABLE_CALL stays off, because the flag opens /call to every
+// visitor and this wants a handful of people you can name.
+//
+// Not NEXT_PUBLIC_FOUNDER_EMAILS, on purpose. "Founder" is a much wider grant
+// than /call: it also opens /fast and /video, bypasses tutor metering and the
+// shared monthly allowance (lib/tutor/meter.ts, lib/fast/meter.ts), and unlocks
+// the chat-voice orphan sweep, which deletes storage objects. And it is
+// NEXT_PUBLIC_, so every address on it ships in the JavaScript every visitor
+// downloads — tolerable for two founders whose addresses are on /about, not
+// for a stranger who agreed to test a phone call.
+//
+// So this list is SERVER-ONLY. Granting is one Vercel env edit + a redeploy:
+//
+//     CALL_ALLOWLIST_EMAILS=ana@example.com, ben@example.com
+//
+// Comma- (or space-/newline-) separated, compared trimmed and lowercased.
+// Revoking is deleting the address and redeploying; nothing else holds it.
+//
+// FAILS CLOSED: unset or empty grants nobody, and an entry that is not
+// shaped like one address — `*`, `all`, `@example.com`, a bare domain — is
+// dropped rather than interpreted. A typo can lose someone access; it cannot
+// open /call to everybody. tests/release.test.ts pins that.
+const EMAIL_SHAPE = /^[^\s@,;*]+@[^\s@,;*]+\.[^\s@,;*]+$/;
+
+export function callAllowlist(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(/[\s,;]+/)
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => EMAIL_SHAPE.test(e))
+  );
+}
+
+export function isCallAllowlisted(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  if (!EMAIL_SHAPE.test(normalized)) return false;
+  return callAllowlist(process.env.CALL_ALLOWLIST_EMAILS).has(normalized);
 }

@@ -36,6 +36,7 @@ const fetchSpy = vi.fn(
 const ORIGINAL_FETCH = globalThis.fetch;
 const ORIGINAL_KEY = process.env.OPENAI_API_KEY;
 const ORIGINAL_FLAG = process.env.NEXT_PUBLIC_ENABLE_CALL;
+const ORIGINAL_ALLOWLIST = process.env.CALL_ALLOWLIST_EMAILS;
 
 beforeEach(() => {
   caller = null;
@@ -43,6 +44,7 @@ beforeEach(() => {
   globalThis.fetch = fetchSpy as unknown as typeof fetch;
   process.env.OPENAI_API_KEY = "sk-test";
   delete process.env.NEXT_PUBLIC_ENABLE_CALL;
+  delete process.env.CALL_ALLOWLIST_EMAILS;
 });
 
 afterEach(() => {
@@ -51,6 +53,8 @@ afterEach(() => {
   else process.env.OPENAI_API_KEY = ORIGINAL_KEY;
   if (ORIGINAL_FLAG === undefined) delete process.env.NEXT_PUBLIC_ENABLE_CALL;
   else process.env.NEXT_PUBLIC_ENABLE_CALL = ORIGINAL_FLAG;
+  if (ORIGINAL_ALLOWLIST === undefined) delete process.env.CALL_ALLOWLIST_EMAILS;
+  else process.env.CALL_ALLOWLIST_EMAILS = ORIGINAL_ALLOWLIST;
   vi.resetModules();
 });
 
@@ -119,6 +123,82 @@ describe("POST /api/call/realtime — the route that spends money", () => {
     const POST = await mintRoute();
     const res = await POST(mintRequest({ source: "es", target: "en" }, "tok"));
     expect(res.status).toBe(200);
+  });
+});
+
+describe("outside test pairs on CALL_ALLOWLIST_EMAILS — against the real handlers", () => {
+  // The list is server-only, so these handlers are where it actually has to
+  // work. The public flag is off for every case (beforeEach).
+  function accessRequest(token?: string): NextRequest {
+    return new NextRequest("https://taoslite.com/api/call/access", {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+  }
+  async function accessRoute() {
+    return (await import("@/app/api/call/access/route")).POST;
+  }
+
+  it("mints for a listed test pair — case and whitespace notwithstanding", async () => {
+    process.env.CALL_ALLOWLIST_EMAILS = " Ana@Example.com , ben@example.com";
+    caller = { id: "t1", email: "ana@example.com" };
+    const POST = await mintRoute();
+    const res = await POST(mintRequest({ source: "es", target: "en" }, "tok"));
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("still 404s an unlisted customer without calling OpenAI", async () => {
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    caller = { id: "u1", email: "customer@example.com" };
+    const POST = await mintRoute();
+    const res = await POST(mintRequest({ source: "es", target: "en" }, "tok"));
+    expect(res.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("FAILS CLOSED: a malformed list mints for nobody", async () => {
+    process.env.CALL_ALLOWLIST_EMAILS = "*";
+    caller = { id: "u1", email: "customer@example.com" };
+    const POST = await mintRoute();
+    const res = await POST(mintRequest({ source: "es", target: "en" }, "tok"));
+    expect(res.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("the usage log accepts a listed pair's line", async () => {
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    caller = { id: "t1", email: "ana@example.com" };
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const POST = await usageRoute();
+    const res = await POST(usageRequest({ room: "AB123", seconds: 60 }, "tok"));
+    expect(res.status).toBe(204);
+    info.mockRestore();
+  });
+
+  it("POST /api/call/access: 204 for a listed pair and a founder", async () => {
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    const POST = await accessRoute();
+    caller = { id: "t1", email: "ANA@example.com" };
+    expect((await POST(accessRequest("tok"))).status).toBe(204);
+    caller = { id: "u2", email: "xdrabbit@gmail.com" };
+    expect((await POST(accessRequest("tok"))).status).toBe(204);
+  });
+
+  it("POST /api/call/access: 404 for unlisted, signed-out, and an unset list", async () => {
+    const POST = await accessRoute();
+    process.env.CALL_ALLOWLIST_EMAILS = "ana@example.com";
+    caller = { id: "u1", email: "customer@example.com" };
+    expect((await POST(accessRequest("tok"))).status).toBe(404);
+    caller = null;
+    expect((await POST(accessRequest())).status).toBe(404);
+    delete process.env.CALL_ALLOWLIST_EMAILS;
+    caller = { id: "t1", email: "ana@example.com" };
+    const res = await POST(accessRequest("tok"));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    // Spends nothing, ever.
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
