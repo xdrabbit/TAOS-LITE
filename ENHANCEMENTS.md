@@ -502,6 +502,16 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   (added 2026-08-03)
 - Decide the fate of the stale `dev` branch — merged-history only or does it
   hold anything worth keeping? (added 2026-08-03)
+- /call automatic resync — quietly rebuild whichever piece drifts every
+  10–15 minutes during a natural pause and swap it in: the input bridge via
+  `sender.replaceTrack`, or a new realtime session opened before the old one
+  closes. Waiting on the `[taos-call-lag]` telemetry (E6) to say WHICH piece
+  drifts; building both blind is how two bugs ship. The manual Resync button
+  is the stopgap. (added 2026-09-14)
+- /call cost accounting drops the old session on every rejoin (E7) — endCall
+  reads only the current interpreter's spend, so `[taos-call-cost]`
+  under-reports every call over 60 minutes, and every Resync press makes it
+  worse. (added 2026-09-14)
 
 ## Languages: the two tiers, and adding one
 
