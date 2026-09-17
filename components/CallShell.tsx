@@ -43,6 +43,7 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { isTextOnlyLanguage, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { jsonAuthHeaders } from "@/lib/authClient";
 import { keepWake, onWakeLog } from "@/lib/wakeLock";
+import { copyFor, fill, splitAround, type ChromeCopy, type ChromeKey } from "@/lib/chrome/copy";
 
 // ── /call: translated 1:1 calls ─────────────────────────────────────────────
 // Use case: Tom and Liz call each other over wifi or cellular — video or
@@ -66,6 +67,18 @@ import { keepWake, onWakeLog } from "@/lib/wakeLock";
 //
 // So a phone left on [en, it] after ordering dinner is already correct for a
 // call to the Italian side of the family, with no taps.
+//
+// ── Which language the SCREEN is in ────────────────────────────────────────
+// `mine` — what this phone's owner HEARS — and not `direction.source`, which
+// is the partner's language and would hand Liz's phone an English screen.
+// Every word below comes from lib/chrome/copy.ts through `c`, which is why
+// the bilingual doubling ("connected · conectado") is gone: it existed
+// because a mixed pair had to share one screen, and on a call they do not.
+// A language with no chrome entry falls back to English, key by key.
+//
+// Chrome language is still TIED TO THE PAIR, exactly like the home screen.
+// Untying it — a UI-language setting of its own, defaulted from the device
+// locale — is the next PR, deliberately not this one.
 
 interface CaptionLine {
   id: number;
@@ -91,10 +104,10 @@ const MAX_FEED = 100;
  * one is, because "voice off" appearing twice on one screen with two meanings
  * is how a control ends up reported as broken when it is merely the other one.
  */
-const VOLUME_STEPS: Array<{ value: number; label: string }> = [
-  { value: 1, label: "🔊 Their real voice: full" },
-  { value: 0.25, label: "🔉 Their real voice: quiet" },
-  { value: 0, label: "🔈 Their real voice: off" }
+const VOLUME_STEPS: Array<{ value: number; label: ChromeKey }> = [
+  { value: 1, label: "callVolumeFull" },
+  { value: 0.25, label: "callVolumeQuiet" },
+  { value: 0, label: "callVolumeMuted" }
 ];
 
 function formatElapsed(sec: number): string {
@@ -103,29 +116,29 @@ function formatElapsed(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// The connection labels are BILINGUAL, on one line, for the same reason the
-// failure message in lib/call/session.ts is: the two people on a call read
-// different languages, they are looking at their own phones, and a status
-// only one of them can read is a status that gets described out loud over a
-// call that is not working yet.
-function stateLabel(s: CallState): string {
+// These labels used to be BILINGUAL on one line — "connected · conectado" —
+// because the two people on a call read different languages and the screen
+// had no idea which one its owner was. It does now: each phone draws its
+// owner's language out of lib/chrome/copy.ts, so the doubling is gone and
+// neither person has to read past somebody else's language to find theirs.
+function stateLabel(s: CallState, copy: ChromeCopy): string {
   switch (s) {
     case "media":
-      return "camera/mic… · cámara/micro…";
+      return copy.callMedia;
     case "waiting":
-      return "waiting… · esperando…";
+      return copy.callWaiting;
     case "connecting":
-      return "connecting… · conectando…";
+      return copy.callConnecting;
     case "connected":
-      return "connected · conectado";
+      return copy.callConnected;
     case "reconnecting":
-      return "reconnecting… · reconectando…";
+      return copy.callReconnecting;
     case "error":
       // Reachable for the first time as of 8/31. The old code had no path to
       // it for a connection failure — a doomed call retried until somebody
       // gave up — so the pill sat blank on the one state that most needed a
       // word on it.
-      return "not connected · sin conexión";
+      return copy.callNotConnected;
     default:
       return "";
   }
@@ -139,14 +152,14 @@ function stateLabel(s: CallState): string {
  * is also the single value Tom and Liz's three-row network matrix is there to
  * collect, so it has to be readable on the phone that is on the call.
  */
-function transportLabel(t: CallTransport): string {
+function transportLabel(t: CallTransport, copy: ChromeCopy): string {
   switch (t) {
     case "direct":
-      return "direct · directo";
+      return copy.callDirect;
     case "relay":
-      return "relay · retransmitido";
+      return copy.callRelay;
     default:
-      return "linked · enlazado";
+      return copy.callLinked;
   }
 }
 
@@ -276,6 +289,17 @@ export function CallShell(): JSX.Element {
   const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage, mineLocked } =
     useLanguagePair({ lockMine: phase === "call" });
 
+  // Every word on this screen, in the language its owner HEARS. See the note
+  // at the top of the file for why `mine` and not `direction.source`.
+  const c = copyFor(mine);
+  // The callbacks below are built once and live for the whole call; they must
+  // not take `c` as a dependency or every language change would rebuild the
+  // interpreter's handlers mid-session. They read the current table here.
+  const copyRef = useRef<ChromeCopy>(c);
+  useEffect(() => {
+    copyRef.current = c;
+  }, [c]);
+
   // Seeded from the pair rather than from two literal codes — a call that
   // starts before the first effect runs still starts on the catalog's answer,
   // not on this file's opinion about which two languages exist.
@@ -291,7 +315,7 @@ export function CallShell(): JSX.Element {
   // The interpreter's status, as words. Same shape as the relay preflight's
   // (lib/call/relay.ts) because they answer the same kind of question and a
   // founder should not have to learn two vocabularies on one screen.
-  const interpreterWords = interpreterCopy(interpreterStatus, interpreterReason);
+  const interpreterWords = interpreterCopy(interpreterStatus, interpreterReason, c);
   const interpreterTone = interpreterWords.tone;
 
   const spendNow = spendUsd(spend);
@@ -472,7 +496,7 @@ export function CallShell(): JSX.Element {
         setInterpreterStatus("not_needed");
         setInterpreterReason(null);
         setNotice(
-          `You and your partner are both on ${languageLabel(dir.target)} — no interpreter needed.`
+          fill(copyRef.current.callSameLanguage, { language: languageLabel(dir.target) })
         );
         return;
       }
@@ -503,7 +527,10 @@ export function CallShell(): JSX.Element {
           onHearing: () => setInterpreterStatus("hearing"),
           onError: (msg) => {
             setInterpreterReason(msg);
-            setNotice(`Interpreter: ${msg}`);
+            // The reason itself arrives from the provider in English and
+            // stays that way: a translated guess at somebody else's error
+            // message is worse than the message.
+            setNotice(fill(copyRef.current.callInterpreterError, { reason: msg }));
           },
           // This phone's interpreter speaks translations of the PARTNER's
           // words — so it's the partner who must not talk over it. Relay the
@@ -514,17 +541,12 @@ export function CallShell(): JSX.Element {
           // Connected, and hearing nothing. Deliberately worded apart from the
           // idle message: idle means nobody spoke, this means the audio never
           // reached the session — which is the 2026-09-03 failure exactly.
-          onInputSilent: () =>
-            setNotice(
-              "Interpreter is connected but hearing nothing — try Rejoin, and check the trail below."
-            ),
+          onInputSilent: () => setNotice(copyRef.current.callInterpreterDeaf),
           onIdleWarning: (secondsLeft) => setIdleSecondsLeft(secondsLeft),
           onAutoEnd: (reason: InterpreterEndReason) => {
             setAutoEnded(reason);
             setNotice(
-              reason === "idle"
-                ? "The interpreter stopped after two minutes of quiet — tap Rejoin to bring it back. You are still on the call."
-                : "The interpreter hit its one-hour limit — tap Rejoin to start a fresh hour. You are still on the call."
+              reason === "idle" ? copyRef.current.callIdleEnded : copyRef.current.callLimitEnded
             );
           },
           onHeard: (text) => {
@@ -562,7 +584,7 @@ export function CallShell(): JSX.Element {
           // backstop for a rejection that never reached it — the status must
           // never be left reading "starting…" forever.
           const message =
-            error instanceof Error ? error.message : "The interpreter could not start.";
+            error instanceof Error ? error.message : copyRef.current.callInterpreterStartFailed;
           setInterpreterStatus("failed");
           setInterpreterReason((r) => r ?? message);
         })
@@ -593,7 +615,7 @@ export function CallShell(): JSX.Element {
       // No partner audio to interpret — a rejoin here would mint a session
       // against a dead track and bill for it. Say what IS true instead.
       setAutoEnded(null);
-      setNotice("Waiting for your partner's audio — the interpreter starts when it arrives.");
+      setNotice(copyRef.current.callWaitingAudio);
       return;
     }
     setIdleSecondsLeft(null);
@@ -612,7 +634,7 @@ export function CallShell(): JSX.Element {
       setInterpreterStatus("not_needed");
       setInterpreterReason(null);
       setNotice(
-        `You and your partner are both on ${languageLabel(direction.target)} — no interpreter needed.`
+        fill(copyRef.current.callSameLanguage, { language: languageLabel(direction.target) })
       );
       return;
     }
@@ -687,7 +709,7 @@ export function CallShell(): JSX.Element {
   const join = useCallback(async () => {
     const code = normalizeRoomCode(room);
     if (!code) {
-      setError("Enter or create a room code first.");
+      setError(copyRef.current.callNeedRoom);
       return;
     }
     setError(null);
@@ -781,7 +803,7 @@ export function CallShell(): JSX.Element {
             stopInterpreter();
             remoteTrackRef.current = null;
             setPeerLanguage(null);
-            setNotice("Your partner left the call. Waiting for them to rejoin…");
+            setNotice(copyRef.current.callPartnerLeft);
           }
         }
       );
@@ -850,7 +872,7 @@ export function CallShell(): JSX.Element {
     const next = !cameraOnRef.current;
     cameraOnRef.current = next;
     setCameraOn(next);
-    void callRef.current?.setVideo(next).catch(() => setNotice("Could not switch the camera."));
+    void callRef.current?.setVideo(next).catch(() => setNotice(copyRef.current.callCameraFailed));
   }, []);
 
   const toggleVoice = useCallback(() => {
@@ -938,7 +960,7 @@ export function CallShell(): JSX.Element {
             href="/"
             className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
           >
-            ← Home
+            {c.home}
           </a>
         </header>
 
@@ -946,12 +968,9 @@ export function CallShell(): JSX.Element {
           <>
             <div>
               <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
-                Translated call
+                {c.callTitle}
               </div>
-              <p className="mt-1 text-sm text-amber-50/70">
-                Call each other over wifi or cellular — video or voice-only. Each of you hears the
-                other person plus an interpreter in your own language, with live captions.
-              </p>
+              <p className="mt-1 text-sm text-amber-50/70">{c.callBlurb}</p>
             </div>
 
             {/* The shared pair, drawn the way every screen draws it. The solid
@@ -961,16 +980,20 @@ export function CallShell(): JSX.Element {
               pills={pills}
               selected={theirs}
               paired={mine}
-              pairedTitle="You hear this · Tú escuchas esto"
+              pairedTitle={c.callYouHearThis}
               pairedLocked={mineLocked}
-              caption="They speak · Ellos hablan"
+              caption={c.callTheySpeak}
               sheetOpen={sheetOpen}
               onSelect={selectLanguage}
               onOpenSheet={() => setSheetOpen(true)}
             />
+            {/* Split at the {language} slot rather than glued together from
+                two halves: the translator decides where the language name
+                goes in the sentence, and it is still amber wherever that is. */}
             <p className="-mt-2 text-xs text-amber-100/50">
-              You hear <span className="text-amber-200">{languageLabel(mine)}</span>. Their phone
-              announces what they speak when the call connects.
+              {splitAround(c.callYouHear, "language")[0]}
+              <span className="text-amber-200">{languageLabel(mine)}</span>
+              {splitAround(c.callYouHear, "language")[1]}
               {noVoiceForMe ? ` ${TEXT_ONLY_TITLE}.` : ""}
             </p>
 
@@ -978,8 +1001,8 @@ export function CallShell(): JSX.Element {
             <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
               {(
                 [
-                  [true, "📹 Video call"],
-                  [false, "🎧 Voice only"]
+                  [true, c.callVideoCall],
+                  [false, c.callVoiceOnlyMode]
                 ] as [boolean, string][]
               ).map(([v, label]) => (
                 <button
@@ -1002,8 +1025,8 @@ export function CallShell(): JSX.Element {
               <div className="grid grid-cols-2 gap-2">
                 {(
                   [
-                    ["clone", "🎙️ Their voice"],
-                    ["instant", "⚡ Fastest"]
+                    ["clone", c.callVoiceClone],
+                    ["instant", c.callVoiceInstant]
                   ] as [InterpreterVoiceMode, string][]
                 ).map(([m, label]) => (
                   <button
@@ -1019,27 +1042,27 @@ export function CallShell(): JSX.Element {
                 ))}
               </div>
               <p className="px-2 pb-1 pt-2 text-[11px] text-amber-100/50">
-                {voiceMode === "clone"
-                  ? "The translation is read in their own voice — about a second behind."
-                  : "The model speaks it the moment it can. A stock voice, and the priciest way to run a call."}
+                {voiceMode === "clone" ? c.callVoiceCloneHint : c.callVoiceInstantHint}
               </p>
             </div>
 
             {/* Room */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">Room</div>
+              <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
+                {c.callRoom}
+              </div>
               <div className="mt-2 flex gap-2">
                 <input
                   value={room}
                   onChange={(e) => setRoom(normalizeRoomCode(e.target.value))}
-                  placeholder="Room code"
+                  placeholder={c.callRoomPlaceholder}
                   autoCapitalize="characters"
                   autoCorrect="off"
                   spellCheck={false}
                   className="min-w-0 flex-1 rounded-xl border border-white/10 bg-stone-950/60 px-3 py-2 text-base tracking-[0.15em] text-amber-50 placeholder:text-amber-100/30"
                 />
                 <button type="button" onClick={createRoom} className={btn(false)}>
-                  New code
+                  {c.callNewCode}
                 </button>
               </div>
               <div className="mt-2 flex items-center gap-2">
@@ -1049,11 +1072,9 @@ export function CallShell(): JSX.Element {
                   disabled={!room}
                   className={`${btn(false)} disabled:opacity-40`}
                 >
-                  {copied ? "Link copied ✓" : "Share link"}
+                  {copied ? c.callLinkCopied : c.callShareLink}
                 </button>
-                <span className="text-xs text-amber-100/50">
-                  Same code on both phones = same call.
-                </span>
+                <span className="text-xs text-amber-100/50">{c.callSameCode}</span>
               </div>
             </div>
 
@@ -1070,7 +1091,7 @@ export function CallShell(): JSX.Element {
                 fail independently, which is why both are here. */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
               <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
-                Before you dial · Antes de llamar
+                {c.callBeforeYouDial}
               </div>
 
               {(() => {
@@ -1107,11 +1128,9 @@ export function CallShell(): JSX.Element {
                   disabled={probing}
                   className={`${btn(false)} disabled:opacity-40`}
                 >
-                  {probing ? "Testing… · probando…" : "Test connection · Probar conexión"}
+                  {probing ? c.callTesting : c.callTestConnection}
                 </button>
-                <span className="text-[11px] text-amber-100/40">
-                  Forces a relay-only connection to this phone. ~1s.
-                </span>
+                <span className="text-[11px] text-amber-100/40">{c.callTestHint}</span>
               </div>
 
               {probe ? (
@@ -1135,7 +1154,7 @@ export function CallShell(): JSX.Element {
               {trail.length > 0 ? (
                 <details className="mt-2">
                   <summary className="cursor-pointer text-[11px] text-amber-100/40">
-                    Test details · Detalles de la prueba
+                    {c.callTestDetails}
                   </summary>
                   <div className="mt-1 max-h-32 overflow-y-auto font-mono text-[10px] text-amber-100/35">
                     {trail.map((line, i) => (
@@ -1158,7 +1177,7 @@ export function CallShell(): JSX.Element {
               disabled={!room}
               className="rounded-2xl bg-emerald-400 px-4 py-3 text-base font-semibold text-stone-950 transition disabled:opacity-40"
             >
-              Join call
+              {c.callJoin}
             </button>
           </>
         ) : (
@@ -1179,7 +1198,7 @@ export function CallShell(): JSX.Element {
               {!remoteHasVideo ? (
                 <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-amber-100/50">
                   <div className="text-5xl">🎧</div>
-                  <div className="text-sm">{stateLabel(callState) || "voice call"}</div>
+                  <div className="text-sm">{stateLabel(callState, c) || c.callVoiceCallFallback}</div>
                 </div>
               ) : null}
               <video
@@ -1201,7 +1220,7 @@ export function CallShell(): JSX.Element {
                         : "animate-pulse bg-amber-300"
                   }`}
                 />
-                {callState === "connected" ? formatElapsed(elapsed) : stateLabel(callState)}
+                {callState === "connected" ? formatElapsed(elapsed) : stateLabel(callState, c)}
                 <span className="text-amber-100/50">· {room}</span>
                 {/* The honest half of "connected": which path the media took.
                     `relay` is the one that spends Cloudflare bandwidth, and
@@ -1209,13 +1228,9 @@ export function CallShell(): JSX.Element {
                 {callState === "connected" && transport ? (
                   <span
                     className={transport === "relay" ? "text-sky-300/80" : "text-emerald-300/80"}
-                    title={
-                      transport === "relay"
-                        ? "Relayed through Cloudflare — one of you is on a network with no direct path."
-                        : "Peer-to-peer. No relay bandwidth is being spent."
-                    }
+                    title={transport === "relay" ? c.callRelayTitle : c.callDirectTitle}
                   >
-                    · {transportLabel(transport)}
+                    · {transportLabel(transport, c)}
                   </span>
                 ) : null}
                 {/* Only while it still matters: before a connection exists,
@@ -1223,9 +1238,9 @@ export function CallShell(): JSX.Element {
                 {callState !== "connected" && relayAvailable === false ? (
                   <span
                     className="text-amber-300/70"
-                    title="No TURN relay is configured, so this call can only connect if a direct path exists."
+                    title={c.callNoRelayTitle}
                   >
-                    · no relay
+                    · {c.callNoRelay}
                   </span>
                 ) : null}
               </div>
@@ -1259,7 +1274,7 @@ export function CallShell(): JSX.Element {
                   what a minute of it cost; now it says so while it spends. */}
               <div
                 className="absolute right-2 top-2 rounded-full bg-stone-950/70 px-3 py-1 text-xs text-amber-100/70"
-                title="This phone's share of the call. Your partner's phone spends its own."
+                title={c.callMeterTitle}
               >
                 {formatUsd(spendNow)}
                 {perMinute > 0 ? (
@@ -1272,15 +1287,17 @@ export function CallShell(): JSX.Element {
             <div className="flex items-center justify-between gap-2 text-xs text-amber-100/50">
               <span>
                 {languageLabel(direction.source)} → {languageLabel(direction.target)}
-                {peerLanguage ? "" : " (assumed)"}
+                {peerLanguage ? "" : ` ${c.callAssumed}`}
               </span>
-              <span>{voiceMode === "clone" ? "their voice" : "fastest voice"}</span>
+              <span>{voiceMode === "clone" ? c.callTheirVoiceShort : c.callFastestVoiceShort}</span>
             </div>
 
             {idleSecondsLeft !== null ? (
               <div className="rounded-2xl border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-sm text-amber-200">
-                Quiet for a while — the interpreter stops in about {idleSecondsLeft}s to save
-                money. Say anything to keep it.
+                {/* One template with a {seconds} slot, not a sentence built
+                    out of English's fragments: a language that wants the
+                    number somewhere else can put it there. */}
+                {fill(c.callIdleNotice, { seconds: idleSecondsLeft })}
               </div>
             ) : null}
 
@@ -1289,7 +1306,7 @@ export function CallShell(): JSX.Element {
             {peerInterpreterSpeaking ? (
               <div className="flex items-center gap-2 rounded-2xl border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-sm text-amber-200">
                 <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-300" />
-                Interpreter is still speaking to them — one sec…
+                {c.callPeerSpeaking}
               </div>
             ) : null}
 
@@ -1311,8 +1328,8 @@ export function CallShell(): JSX.Element {
                     (captionsExpected(interpreterStatus) ? (
                       <span className="text-amber-100/40">
                         {interpreterStatus === "hearing"
-                          ? "Listening… captions appear as they speak."
-                          : "Captions appear here as soon as they speak."}
+                          ? c.callCaptionsListening
+                          : c.callCaptionsWaiting}
                       </span>
                     ) : (
                       <span className={interpreterTone === "bad" ? "text-red-300" : "text-amber-300/80"}>
@@ -1343,7 +1360,11 @@ export function CallShell(): JSX.Element {
                 onClick={() => setCaptionsOn(true)}
                 className="shrink-0 rounded-2xl border border-dashed border-white/20 bg-white/[0.03] p-3 text-left text-sm text-amber-100/60"
               >
-                Captions are OFF · Subtítulos apagados — tap to show them.
+                {/* This whole line was English except for two words: the
+                    label was doubled and the clause that tells you what to DO
+                    about it was not. Both halves are the reader's language
+                    now. */}
+                {c.callCaptionsOffNotice}
               </button>
             )}
 
@@ -1361,7 +1382,11 @@ export function CallShell(): JSX.Element {
                     onClick={rejoinInterpreter}
                     className="mt-2 inline-flex min-h-[44px] items-center justify-center rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 transition active:scale-95"
                   >
-                    ↻ Rejoin · Reanudar
+                    {/* Was "↻ Rejoin · Reanudar". Doubling it made sense
+                        when its neighbours were English; sitting under a
+                        Spanish notice, in a Spanish row of buttons, it just
+                        reads as the one control that did not get the memo. */}
+                    {c.callRejoin}
                   </button>
                 ) : null}
               </div>
@@ -1375,10 +1400,10 @@ export function CallShell(): JSX.Element {
             {/* Controls */}
             <div className="grid shrink-0 grid-cols-3 gap-2">
               <button type="button" onClick={toggleMic} className={btn(micMuted)}>
-                {micMuted ? "🔇 Mic off" : "🎙️ Mic on"}
+                {micMuted ? c.callMicOff : c.callMicOn}
               </button>
               <button type="button" onClick={toggleCamera} className={btn(cameraOn)}>
-                {cameraOn ? "📹 Cam on" : "📷 Cam off"}
+                {cameraOn ? c.callCamOn : c.callCamOff}
               </button>
               {/* These two used to read "💬 Captions only" and "💬 Captions",
                   side by side, governing DIFFERENT things — the interpreter's
@@ -1389,20 +1414,20 @@ export function CallShell(): JSX.Element {
                 type="button"
                 onClick={toggleVoice}
                 className={btn(voiceOn)}
-                title="The interpreter's spoken translation, in your ear."
+                title={c.callVoiceTitle}
               >
-                {voiceOn ? "🗣️ Voice on" : "🔇 Voice off"}
+                {voiceOn ? c.callVoiceOn : c.callVoiceOff}
               </button>
               <button
                 type="button"
                 onClick={() => setCaptionsOn((c) => !c)}
                 className={btn(captionsOn)}
-                title="The translated text on this screen."
+                title={c.callCaptionsTitle}
               >
-                {captionsOn ? "💬 Captions on" : "💬 Captions off"}
+                {captionsOn ? c.callCaptionsOn : c.callCaptionsOff}
               </button>
               <button type="button" onClick={cycleVolume} className={`${btn(false)} col-span-2`}>
-                {VOLUME_STEPS[volumeStep].label}
+                {c[VOLUME_STEPS[volumeStep].label]}
               </button>
             </div>
             <button
@@ -1410,7 +1435,7 @@ export function CallShell(): JSX.Element {
               onClick={endCall}
               className="shrink-0 rounded-2xl bg-red-500 px-4 py-3 text-base font-semibold text-stone-50 transition"
             >
-              Hang up
+              {c.callHangUp}
             </button>
 
             {/* Everything below here is secondary — an explanation, a language
@@ -1423,15 +1448,15 @@ export function CallShell(): JSX.Element {
                 said which was which. */}
             <p className="text-[11px] leading-snug text-amber-100/40">
               {voiceOn
-                ? "You hear the interpreter speaking their words in your language."
+                ? c.callHearingInterpreter
                 : captionsOn
-                  ? "The interpreter's voice is off — the captions above are still running."
-                  : "The interpreter's voice is off AND captions are off, so nothing is being translated to you."}{" "}
+                  ? c.callVoiceOffCaptionsOn
+                  : c.callNothingTranslated}{" "}
               {VOLUME_STEPS[volumeStep].value === 0
-                ? "Their own voice is muted underneath."
+                ? c.callTheirVoiceMuted
                 : VOLUME_STEPS[volumeStep].value < 1
-                  ? "Their own voice plays quietly underneath, so you can hear them talking."
-                  : "Their own voice plays at full volume underneath."}
+                  ? c.callTheirVoiceQuiet
+                  : c.callTheirVoiceFull}
             </p>
 
             {/* Mid-call language change: re-points the live session and tells
@@ -1449,17 +1474,17 @@ export function CallShell(): JSX.Element {
               pills={pills}
               selected={theirs}
               paired={mine}
-              pairedTitle="You hear this · Tú escuchas esto"
+              pairedTitle={c.callYouHearThis}
               pairedLocked={mineLocked}
-              caption="They speak · Ellos hablan"
+              caption={c.callTheySpeak}
               sheetOpen={sheetOpen}
               onSelect={selectLanguage}
               onOpenSheet={() => setSheetOpen(true)}
             />
             <p className="-mt-2 text-xs text-amber-100/50">
-              You hear <span className="text-amber-200">{languageLabel(mine)}</span> — the outlined
-              pill, and it stays put while you are on a call. Tap another pill to change what your
-              partner speaks.
+              {splitAround(c.callMidCallPair, "language")[0]}
+              <span className="text-amber-200">{languageLabel(mine)}</span>
+              {splitAround(c.callMidCallPair, "language")[1]}
             </p>
 
             {/* The connection trail, collapsed.
@@ -1473,8 +1498,8 @@ export function CallShell(): JSX.Element {
             {trail.length > 0 ? (
               <details className="rounded-2xl border border-white/10 bg-white/5 p-3">
                 <summary className="cursor-pointer text-xs text-amber-100/50">
-                  Connection details · Detalles de conexión
-                  {relayAvailable === false ? " — no relay" : ""}
+                  {c.callConnectionDetails}
+                  {relayAvailable === false ? ` — ${c.callNoRelay}` : ""}
                 </summary>
                 <div className="mt-2 space-y-1 text-[11px] text-amber-100/40">
                   <div>
@@ -1554,9 +1579,9 @@ export function CallShell(): JSX.Element {
           open={sheetOpen}
           selected={theirs}
           paired={mine}
-          pairedLabel="You hear this"
+          pairedLabel={c.callYouHearThis}
           pairedLocked={mineLocked}
-          caption="What they speak · Lo que ellos hablan"
+          caption={c.callWhatTheySpeak}
           onSelect={selectLanguage}
           onClose={() => setSheetOpen(false)}
         />
