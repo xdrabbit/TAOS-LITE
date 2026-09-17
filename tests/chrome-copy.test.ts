@@ -8,11 +8,17 @@
 // screen, a crash, or a hold-out from the language list.
 //
 // The trigger for writing this down: a woman who wants her grandfather to use
-// TAOS in Samoan. Nobody here reads Samoan. `sm` has no entry and will not
-// have one for a while, and it has to WORK anyway. That is what the first
-// describe block below is about, and it is why the fallback is per-KEY: the
-// day somebody writes six Samoan words, those six must land without the other
-// hundred-odd going blank.
+// TAOS in Samoan. Nobody here reads Samoan. `sm` has no chrome entry and will
+// not have one for a while, and it has to WORK anyway — that is what the first
+// describe block is about, and why the fallback is per-KEY: the day somebody
+// writes six Samoan words, those six must land without the other hundred-odd
+// going blank.
+//
+// Worth knowing while reading `sm` below: it is not in lib/languages/catalog.ts
+// yet either, so today it cannot be picked on a screen at all. That is a
+// separate gap and not one a copy table can close. These tests call copyFor
+// directly, which answers for any code at all — so the day Samoan is added to
+// the catalog, this file already says what it will look like.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -123,7 +129,11 @@ describe("nobody keeps a second copy of the table", () => {
   // cut-down twin of the home screen's and /call with none at all. A screen
   // that grows its own `const STRINGS` or `const L` again fails here rather
   // than on a trip.
-  const SHELLS = ["components/TranslatorShell.tsx", "components/TabletopShell.tsx"];
+  const SHELLS = [
+    "components/TranslatorShell.tsx",
+    "components/TabletopShell.tsx",
+    "components/CallShell.tsx"
+  ];
 
   it("every shell reads the shared module", () => {
     for (const path of SHELLS) {

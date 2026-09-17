@@ -50,8 +50,11 @@ describe("the indicator is on the lobby, not in the call", () => {
 
   it("draws the status and the test button in the lobby half", async () => {
     expect(lobby).toContain("relayCopy(");
-    expect(lobby).toContain("Test connection · Probar conexión");
-    expect(lobby).toContain("Before you dial · Antes de llamar");
+    // A key rather than a literal since /call got a copy table: the button
+    // reads "Test connection" or "Probar conexión" depending on which language
+    // the phone's owner hears, instead of both at once.
+    expect(lobby).toContain("{probing ? c.callTesting : c.callTestConnection}");
+    expect(lobby).toContain("{c.callBeforeYouDial}");
   });
 
   it("re-asks on every return to the lobby", async () => {
