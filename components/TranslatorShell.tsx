@@ -26,6 +26,7 @@ import { callVisibleTo, fastVisibleTo, isFounder, tutorEnabled } from "@/lib/rel
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
+import { copyFor } from "@/lib/chrome/copy";
 
 // The pair's languages, its storage, and the tap rule all live in
 // lib/translate/pair.ts — /vision reads the same saved pair to decide what
@@ -86,165 +87,13 @@ function speakerFor(code: LangCode): Speaker {
 // Speaker-facing copy flips to whoever is talking (Tom = en, Liz = es) so each
 // person reads the controls they act on in their own language.
 //
-// These six are the languages TAOS's own CHROME has been written in — they are
-// not the languages it translates, which is now the whole catalog. A language
-// with no entry here falls back to English (copyFor below) rather than being
-// held out of the app: a Thai speaker gets English buttons and a faithful Thai
-// translation, and the translation is what they came for. Adding a seventh is
-// a kindness to a language people keep using; it is not a prerequisite for
-// using it.
-const STRINGS: Record<
-  string,
-  {
-    speak: string;
-    stop: string;
-    working: string;
-    speakingNow: string;
-    swap: string;
-    listening: string;
-    translating: string;
-    idle: string;
-    heard: string;
-    translationLabel: string;
-    wrapUp: string;
-    micUnavailable: string;
-    micDenied: string;
-    ttsFailed: string;
-    translateFailed: string;
-    connectionLost: string;
-    noAudio: string;
-    tooShort: string;
-  }
-> = {
-  en: {
-    speak: "Speak",
-    stop: "Stop & Translate",
-    working: "Working…",
-    speakingNow: "Speaking now",
-    swap: "Swap",
-    listening: "Listening…",
-    translating: "Translating…",
-    idle: "Tap the mic, speak a full thought, tap again.",
-    heard: "Heard",
-    translationLabel: "Translation",
-    wrapUp: "Wrapping up — auto stop & translate in a few seconds…",
-    micUnavailable: "Microphone not available. Open this page over HTTPS in Safari and allow mic access.",
-    micDenied: "Microphone permission was denied. Enable it in Safari settings and retry.",
-    ttsFailed: "Voice playback failed.",
-    translateFailed: "Translation failed.",
-    connectionLost: "Connection problem — check your signal and try again.",
-    noAudio: "No audio was captured. Check the mic and try again.",
-    tooShort: "Too short — tap, say a full thought, then tap again."
-  },
-  es: {
-    speak: "Hablar",
-    stop: "Detener y traducir",
-    working: "Procesando…",
-    speakingNow: "Hablando ahora",
-    swap: "Cambiar",
-    listening: "Escuchando…",
-    translating: "Traduciendo…",
-    idle: "Toca el micrófono, di una idea completa y toca otra vez.",
-    heard: "Se escuchó",
-    translationLabel: "Traducción",
-    wrapUp: "Terminando — se detiene y traduce en unos segundos…",
-    micUnavailable: "Micrófono no disponible. Abre esta página con HTTPS en Safari y permite el micrófono.",
-    micDenied: "Se denegó el permiso del micrófono. Actívalo en los ajustes de Safari e inténtalo de nuevo.",
-    ttsFailed: "No se pudo reproducir la voz.",
-    translateFailed: "No se pudo traducir.",
-    connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
-    noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
-    tooShort: "Muy corto — toca, di una idea completa y toca otra vez."
-  },
-  bs: {
-    speak: "Govori",
-    stop: "Zaustavi i prevedi",
-    working: "Obrada…",
-    speakingNow: "Sada govori",
-    swap: "Zamijeni",
-    listening: "Slušam…",
-    translating: "Prevodim…",
-    idle: "Dodirni mikrofon, izgovori cijelu misao, pa dodirni ponovo.",
-    heard: "Čulo se",
-    translationLabel: "Prijevod",
-    wrapUp: "Završavam — automatsko zaustavljanje i prijevod za nekoliko sekundi…",
-    micUnavailable:
-      "Mikrofon nije dostupan. Otvori ovu stranicu preko HTTPS-a u Safariju i dozvoli pristup mikrofonu.",
-    micDenied:
-      "Pristup mikrofonu je odbijen. Uključi ga u postavkama Safarija i pokušaj ponovo.",
-    ttsFailed: "Reprodukcija glasa nije uspjela.",
-    translateFailed: "Prijevod nije uspio.",
-    connectionLost: "Problem s vezom — provjeri signal i pokušaj ponovo.",
-    noAudio: "Zvuk nije snimljen. Provjeri mikrofon i pokušaj ponovo.",
-    tooShort: "Prekratko — dodirni, izgovori cijelu misao, pa dodirni ponovo."
-  },
-  it: {
-    speak: "Parla",
-    stop: "Ferma e traduci",
-    working: "Elaborazione…",
-    speakingNow: "Sta parlando",
-    swap: "Cambia",
-    listening: "In ascolto…",
-    translating: "Traduzione…",
-    idle: "Tocca il microfono, di' un pensiero completo, tocca di nuovo.",
-    heard: "Sentito",
-    translationLabel: "Traduzione",
-    wrapUp: "Sto per finire — si ferma e traduce tra pochi secondi…",
-    micUnavailable:
-      "Microfono non disponibile. Apri questa pagina in HTTPS su Safari e consenti l'accesso al microfono.",
-    micDenied:
-      "Permesso del microfono negato. Attivalo nelle impostazioni di Safari e riprova.",
-    ttsFailed: "Riproduzione vocale non riuscita.",
-    translateFailed: "Traduzione non riuscita.",
-    connectionLost: "Problema di connessione — controlla il segnale e riprova.",
-    noAudio: "Nessun audio registrato. Controlla il microfono e riprova.",
-    tooShort: "Troppo breve — tocca, di' un pensiero completo, poi tocca di nuovo."
-  },
-  zh: {
-    speak: "说话",
-    stop: "停止并翻译",
-    working: "处理中…",
-    speakingNow: "正在说话",
-    swap: "切换",
-    listening: "正在听…",
-    translating: "翻译中…",
-    idle: "点击麦克风，说完整的一句话，再点一次。",
-    heard: "听到",
-    translationLabel: "翻译",
-    wrapUp: "即将结束 — 几秒后自动停止并翻译…",
-    micUnavailable: "麦克风不可用。请在 Safari 中通过 HTTPS 打开此页面并允许使用麦克风。",
-    micDenied: "麦克风权限被拒绝。请在 Safari 设置中开启后重试。",
-    ttsFailed: "语音播放失败。",
-    translateFailed: "翻译失败。",
-    connectionLost: "网络连接问题 — 请检查信号后重试。",
-    noAudio: "没有录到声音。请检查麦克风后重试。",
-    tooShort: "太短了 — 点击，说完整的一句话，再点一次。"
-  },
-  yue: {
-    speak: "講嘢",
-    stop: "停低並翻譯",
-    working: "處理緊…",
-    speakingNow: "而家講緊",
-    swap: "轉換",
-    listening: "聽緊…",
-    translating: "翻譯緊…",
-    idle: "撳一下咪高峰，講完一句嘢，再撳一下。",
-    heard: "聽到",
-    translationLabel: "翻譯",
-    wrapUp: "就快完 — 幾秒後自動停低並翻譯…",
-    micUnavailable: "用唔到咪高峰。請喺 Safari 用 HTTPS 開呢頁，並允許使用咪高峰。",
-    micDenied: "咪高峰權限被拒。請喺 Safari 設定入面開返，再試多次。",
-    ttsFailed: "播唔到語音。",
-    translateFailed: "翻譯唔到。",
-    connectionLost: "網絡有問題 — 檢查吓訊號再試多次。",
-    noAudio: "錄唔到聲。檢查吓咪高峰再試多次。",
-    tooShort: "太短喇 — 撳一下，講完一句嘢，再撳一下。"
-  }
-};
-
-function copyFor(code: LangCode): (typeof STRINGS)[string] {
-  return STRINGS[code] ?? STRINGS.en;
-}
+// The table itself is lib/chrome/copy.ts now, shared with /tabletop and
+// /call. It used to live here, which is how /tabletop ended up with a
+// two-language copy of half of it and /call with none at all. The rule it
+// carries has not changed: a language with no entry falls back to English,
+// key by key, rather than being held out of the app — a Thai speaker gets
+// English buttons and a faithful Thai translation, and the translation is
+// what they came for.
 
 // In auto-detect the record button greets BOTH sides at once ("Speak ·
 // Hablar") so neither person has to wait their turn to read it. That only

@@ -16,6 +16,27 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Chrome language should be its own setting, not the translation pair** —
+  The next step after PR #68, and named as out of scope there on purpose. Every
+  screen picks its chrome language off the shared pair today: home follows the
+  active speaker, `/call` follows `mine` (what the phone's owner hears). That
+  is right often enough to ship, and wrong in one visible way — the default
+  pair is `["es", "en"]`, so a fresh install opens `/call` in Spanish until you
+  tap your own pill. The fix is a UI-language setting of its own, defaulted
+  from the device locale and overridable, read by `copyFor()` instead of the
+  pair. `lib/chrome/copy.ts` is already shaped for it: one call site to change,
+  and no screen holds an opinion about its own language any more.
+  (added 2026-09-16)
+- **Samoan is not in the language catalog** — The ask that started the copy
+  table work was a woman who wants her grandfather to use TAOS in Samoan, and
+  `sm` is not in `lib/languages/catalog.ts` at all, so it cannot be picked on
+  any screen. PR #68 made the chrome side of it free — the day `sm` is in the
+  catalog it works with English buttons and no edit to the copy table — but
+  the catalog entry itself is still missing, which means the request is not
+  actually answered yet. Needs the tier check the Languages section below
+  describes (does ElevenLabs speak it?) before it is added.
+  (added 2026-09-16)
+
 - **/live never gets a breath: continuous or group speech is never flushed** —
   Driver report, 2026-09-06: when one person talks without pausing, or a group
   talks over each other, `/live` goes quiet. Server VAD never sees a silence
@@ -542,11 +563,15 @@ That is the whole job — no second list, no flag table, no shell edit.
   which a listener has no way to recognize as broken.
 
 The app's own CHROME (buttons, status copy) is translated into six languages,
-which is a separate and much smaller list — `STRINGS` in `TranslatorShell`. A
-language without an entry there gets English buttons and a faithful translation
-in its own language, which is the trade that lets the catalog grow without a
-translator. Adding a seventh is a kindness to a language people keep using; it
-is not a prerequisite for using it.
+which is a separate and much smaller list — `lib/chrome/copy.ts` (it was
+`STRINGS` in `TranslatorShell` and a cut-down twin called `L` in
+`TabletopShell` until PR #68 made it one table). A language without an entry
+there gets English buttons and a faithful translation in its own language,
+which is the trade that lets the catalog grow without a translator. Adding a
+seventh is a kindness to a language people keep using; it is not a
+prerequisite for using it — and since #68 the fallback is per KEY, so a
+language can have six words written for it without the other hundred going
+blank.
 
 ## Shipped
 

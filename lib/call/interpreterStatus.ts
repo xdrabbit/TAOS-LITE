@@ -14,6 +14,13 @@
 // it exists for the same reason: a status only an engineer can obtain is a
 // status the founders cannot use in a kitchen.
 //
+// ── Where the words live ───────────────────────────────────────────────────
+// Not here. The labels and hints are keys in lib/chrome/copy.ts, like every
+// other word on every other screen; this file owns the STATE MACHINE — which
+// status maps to which key, and what colour it is. That split is what let the
+// whole screen follow the phone's own language instead of shipping a Spanish
+// half bolted onto an English line.
+//
 // ── The one that is not obvious ────────────────────────────────────────────
 // `on` and `hearing` are different states on purpose. The interpreter is fed
 // the partner's audio track, FORWARDED out of the call's own peer connection
@@ -22,6 +29,8 @@
 // happens for the rest of the call. `on` means the session is up; `hearing`
 // means the partner's voice has demonstrably arrived. Only the second one is
 // a promise that captions are coming.
+
+import type { ChromeCopy } from "@/lib/chrome/copy";
 
 export type InterpreterStatus =
   | "off"
@@ -43,52 +52,57 @@ export interface InterpreterCopy {
 /**
  * The line the call screen shows, and the meaning under it.
  *
- * Bilingual on one line, like every other status on this screen: the two
- * people on a call read different languages and are each looking at their own
- * phone, so a status only one of them can read is a status that gets read
- * aloud over a call that is not working yet.
+ * `copy` is the chrome table for the language THIS phone's owner reads
+ * (lib/chrome/copy.ts). These lines used to be bilingual and Spanish-first —
+ * "Intérprete: activo · on" — because that was the only way a mixed pair
+ * could both read one screen. On a call there are two screens, one per
+ * person, so each one now speaks its owner's language and the doubling is
+ * gone. A language with no entry falls back to English, key by key.
  */
 export function interpreterCopy(
   status: InterpreterStatus,
-  reason?: string | null
+  reason: string | null | undefined,
+  copy: ChromeCopy
 ): InterpreterCopy {
   switch (status) {
     case "hearing":
       return {
-        label: "Intérprete: ✓ activo · on",
-        hint: "The interpreter is running and can hear your partner. Captions appear over the video as they speak.",
+        label: copy.interpreterHearingLabel,
+        hint: copy.interpreterHearingHint,
         tone: "ok"
       };
     case "on":
       return {
-        label: "Intérprete: activo · on",
-        hint: "The interpreter is connected. It has not heard your partner speak yet — captions start with their first sentence.",
+        label: copy.interpreterOnLabel,
+        hint: copy.interpreterOnHint,
         tone: "ok"
       };
     case "starting":
       return {
-        label: "Intérprete: iniciando… · starting…",
-        hint: "Connecting to the interpreter. This takes a second or two.",
+        label: copy.interpreterStartingLabel,
+        hint: copy.interpreterStartingHint,
         tone: "warn"
       };
     case "not_needed":
       return {
-        label: "Intérprete: no hace falta · not needed",
-        hint: "You and your partner are set to the same language, so there is nothing to interpret. Change either side to start it.",
+        label: copy.interpreterNotNeededLabel,
+        hint: copy.interpreterNotNeededHint,
         tone: "warn"
       };
     case "failed":
       return {
-        label: "Intérprete: ✗ falló · failed",
+        label: copy.interpreterFailedLabel,
         // The reason is the whole point. A bare "failed" is the state PR #52
-        // spent a field test learning not to ship.
-        hint: reason?.trim() || "The interpreter stopped. Tap Rejoin to try again.",
+        // spent a field test learning not to ship. It arrives from the
+        // provider in English and stays that way — a translated guess at
+        // somebody else's error message is worse than the message.
+        hint: reason?.trim() || copy.interpreterFailedHint,
         tone: "bad"
       };
     default:
       return {
-        label: "Intérprete: apagado · off",
-        hint: "The interpreter is not running, so there are no captions and no translated voice.",
+        label: copy.interpreterOffLabel,
+        hint: copy.interpreterOffHint,
         tone: "warn"
       };
   }
