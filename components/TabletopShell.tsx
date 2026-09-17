@@ -15,6 +15,7 @@ import { languageNative } from "@/lib/languages/catalog";
 // the tier check reads before asking /api/tts for a voice.
 import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
 import { authHeaders } from "@/lib/authClient";
+import { copyFor } from "@/lib/chrome/copy";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -56,50 +57,20 @@ interface Exchange {
 const MAX_TURN_SEC_CLASSIC = 60;
 const MAX_TURN_SEC_LIVE = 120;
 
-// Button and status copy for the panes. Two entries, not a hundred: a
-// language without one gets English chrome and a faithful translation in its
-// own language, which is the same trade /translate makes (see the note in
-// ENHANCEMENTS.md) and the only reason the catalog could grow past six. The
-// pane's HEADING is not in here — that is the language's own name, from the
-// catalog, for all hundred of them.
-const L: Record<
-  string,
-  {
-    tapToTalk: string;
-    tapDone: string;
-    listening: string;
-    translating: string;
-    connecting: string;
-    theySaid: string;
-    youSaid: string;
-    idleHint: string;
-  }
-> = {
-  en: {
-    tapToTalk: "TAP TO TALK",
-    tapDone: "TAP WHEN DONE",
-    listening: "Listening to the other side…",
-    translating: "Translating…",
-    connecting: "Connecting…",
-    theySaid: "They said",
-    youSaid: "You said",
-    idleHint: "Lay the phone flat between you"
-  },
-  es: {
-    tapToTalk: "TOCA PARA HABLAR",
-    tapDone: "TOCA AL TERMINAR",
-    listening: "Escuchando al otro lado…",
-    translating: "Traduciendo…",
-    connecting: "Conectando…",
-    theySaid: "Dijo",
-    youSaid: "Dijiste",
-    idleHint: "Pon el teléfono entre ustedes"
-  }
-};
-
-function copyFor(code: Lang): (typeof L)[string] {
-  return L[code] ?? L.en;
-}
+// Button and status copy for the panes lives in lib/chrome/copy.ts now,
+// shared with the home screen and /call. It used to be a two-language table
+// right here — a cut-down twin of the home screen's, which is how the two
+// drifted. Two entries or a hundred, the rule is the same: a language without
+// one gets English chrome and a faithful translation in its own language,
+// which is the same trade /translate makes (see the note in ENHANCEMENTS.md)
+// and the only reason the catalog could grow past six.
+//
+// The pane's HEADING is not in that table either — that is the language's own
+// name, from the catalog, for all hundred of them.
+//
+// `tableListening` is the one key with a name of its own: this pane's
+// listening line names the OTHER SIDE ("Listening to the other side…"), which
+// the home screen's plain "Listening…" would get wrong.
 
 function pickRecordingMime(): string {
   if (typeof MediaRecorder === "undefined") return "";
@@ -604,7 +575,7 @@ export function TabletopShell(): JSX.Element {
               : isProcessing
                 ? t.translating
                 : otherBusy
-                  ? t.listening
+                  ? t.tableListening
                   : t.tapToTalk}
         </button>
       </section>
