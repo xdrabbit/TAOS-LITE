@@ -124,8 +124,18 @@ through), what it means in context, and build-up chunks to say out loud.
   Open in context (when the loaded data contains the message).
 - The word-for-word line is built from each word's own gloss, not written by
   the model, so it can't drift back into English order.
-- Practice (pronunciation scoring, drills) isn't built. See "Lessons from your
-  own history" in ENHANCEMENTS.md.
+- **Practice**: each sentence and each build-up chunk has ▶ (hear it in Liz's
+  cloned voice, `ELEVENLABS_LIZ_VOICE_ID`), 🐢 (slower), and ● Say it
+  (record, then Azure Pronunciation Assessment scores it, es → es-MX). You
+  get an overall score, every word coloured, and pronunciation / flow /
+  completeness with a hint naming what cost you. Attempts are saved on the
+  lesson ("best 87"). Audio is cached in `local_exports/lessons/audio/`.
+  Recording needs a secure page: on another machine use
+  **https://blackbird.tail42ac25.ts.net:3019** (tailnet-only `tailscale
+  serve`; ports 443/8443/10000 belong to other projects' public Funnels).
+  Scoring needs the real `AZURE_SPEECH_KEY` in `.env.local`.
+- A silent recording is caught in the browser (peak level) rather than sent
+  to Azure. A live mic can deliver silence without any error.
 
 ## Exporting
 

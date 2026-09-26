@@ -69,6 +69,14 @@ export class LessonStore {
     return this.put(saved);
   }
 
+  /** Record one scored practice attempt on the lesson (newest last, capped). */
+  async addAttempt(id, attempt) {
+    const saved = await this.get(id);
+    if (!saved) return null;
+    saved.practice = [...(saved.practice ?? []), attempt].slice(-300);
+    return this.put(saved);
+  }
+
   async remove(id) {
     try {
       await unlink(this.#file(id));
