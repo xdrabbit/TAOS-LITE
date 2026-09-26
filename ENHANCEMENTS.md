@@ -532,6 +532,15 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   (added 2026-08-03)
 - Decide the fate of the stale `dev` branch — merged-history only or does it
   hold anything worth keeping? (added 2026-08-03)
+- Safeguard the translations viewer and its data better — "there's you and me
+  that access this machine but soon we should safeguard a little better." Today
+  tools/translations-viewer runs on blackbird with no login of its own
+  (loopback + Tailscale only, `--tailnet`), `.env.local` holds the real
+  service-role key, and the viewer reads the history folder that is the ONLY
+  copy of Tom's pruned sensitive translations. Candidates: a per-person
+  sign-in, a read-only DB key instead of service-role, encrypting the history
+  archive at rest, and keeping merged exports out of `local_exports/`.
+  (added 2026-09-26)
 
 ## Languages: the two tiers, and adding one
 

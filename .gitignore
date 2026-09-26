@@ -27,3 +27,6 @@ scripts/fixtures
 # Claude Code: commit agent definitions, ignore local state
 .claude/worktrees/
 .claude/settings.local.json
+
+# Sensitive local database exports — never commit.
+local_exports/

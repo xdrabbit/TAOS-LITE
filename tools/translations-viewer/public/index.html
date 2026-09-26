@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TAOS-LITE translations</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --ink: #14161a;
+        --muted: #5d6673;
+        --line: #dfe3e9;
+        --accent: #1f6feb;
+        --mark: #ffe08a;
+        --mark-ink: #3d2c00;
+        --danger: #b4232c;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1115;
+          --panel: #171a21;
+          --ink: #e7eaf0;
+          --muted: #98a2b3;
+          --line: #262b35;
+          --accent: #6ea8ff;
+          --mark: #5c4a12;
+          --mark-ink: #ffe9a8;
+          --danger: #ff8a8a;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      header {
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+      h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+      main { padding: 16px 20px 60px; max-width: 1240px; margin: 0 auto; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+      label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+      input, select, button, textarea {
+        font: inherit;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 9px;
+      }
+      input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        border-color: transparent;
+        color: #fff;
+        font-weight: 600;
+        padding: 8px 13px;
+      }
+      button.ghost { background: transparent; color: var(--ink); border-color: var(--line); font-weight: 500; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .grow { flex: 1 1 280px; }
+      .muted { color: var(--muted); }
+      .danger { color: var(--danger); }
+      .pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+      tbody tr:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+      mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padding: 0 1px; }
+      .when { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
+      .text { max-width: 420px; overflow-wrap: anywhere; }
+      .meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+      .stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .empty { padding: 34px; text-align: center; color: var(--muted); }
+      .toast {
+        position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px 16px; box-shadow: 0 8px 26px rgba(0,0,0,.18); max-width: 82vw;
+      }
+      .hint { font-size: 11px; color: var(--muted); margin-top: 7px; }
+      code { background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>TAOS-LITE translations</h1>
+      <span id="sourceLabel" class="pill">nothing loaded</span>
+      <span class="grow"></span>
+      <label style="flex-direction: row; align-items: center; gap: 6px; text-transform: none">
+        <select id="sourcePicker" style="min-width: 260px"></select>
+      </label>
+      <button id="loadBtn">Load</button>
+      <button id="reloadBtn" class="ghost" title="Re-read the current source">↻</button>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="row">
+          <label class="grow">
+            Full-text search (FTS5)
+            <input id="q" placeholder="camino   ·   &quot;on my way&quot;   ·   doctor OR hospital   ·   ayud*" />
+          </label>
+          <label>From<input id="from" type="date" /></label>
+          <label>To<input id="to" type="date" /></label>
+          <label>Sort
+            <select id="order">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="relevance">Best match</option>
+            </select>
+          </label>
+          <button id="searchBtn">Search</button>
+          <button id="clearBtn" class="ghost">Clear</button>
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <label>From lang<select id="source_lang"></select></label>
+          <label>To lang<select id="target_lang"></select></label>
+          <label>Engine<select id="engine"></select></label>
+          <label>Table<select id="table"></select></label>
+          <label style="flex-direction: row; align-items: center; gap: 6px; text-transform: none; font-size: 12px">
+            <input id="raw" type="checkbox" style="width: 15px; height: 15px" />
+            Raw FTS5 syntax
+          </label>
+          <span class="grow"></span>
+          <button id="downloadBtn" class="ghost">Export JSON ↓</button>
+          <button id="saveBtn" class="ghost">Save to local_exports</button>
+        </div>
+        <div class="hint">
+          Words are AND-ed and matched whole; <code>"a phrase"</code>, <code>OR</code>,
+          <code>NEAR</code> and a trailing <code>*</code> work. Accents and case are
+          ignored. Dates filter on <code>created_at</code> in Mountain time; <em>To</em> includes the whole day.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="stats" id="stats"><span class="muted">Load a source to begin.</span></div>
+      </section>
+
+      <section class="panel" style="padding: 0; overflow: hidden">
+        <div id="results"><div class="empty">No data loaded.</div></div>
+      </section>
+
+      <div class="row" style="justify-content: center">
+        <button id="prevBtn" class="ghost">← Previous</button>
+        <span id="pageLabel" class="muted"></span>
+        <button id="nextBtn" class="ghost">Next →</button>
+      </div>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const PAGE = 50;
+      let offset = 0;
+      let lastTotal = 0;
+      let loaded = null;
+
+      const escapeHtml = (value) =>
+        String(value ?? "").replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        })[c]);
+
+      // Snippets arrive with / around hits. Escape first, mark second:
+      // that way user text can never inject a tag.
+      const renderSnippet = (snippet, fallback) => {
+        if (snippet == null) return escapeHtml(fallback);
+        return escapeHtml(snippet)
+          .split("").join("<mark>")
+          .split("").join("</mark>");
+      };
+
+      const toast = (message, isError) => {
+        document.querySelectorAll(".toast").forEach((n) => n.remove());
+        const node = document.createElement("div");
+        node.className = "toast" + (isError ? " danger" : "");
+        node.textContent = message;
+        document.body.appendChild(node);
+        setTimeout(() => node.remove(), isError ? 9000 : 4000);
+      };
+
+      const queryString = () => {
+        const params = new URLSearchParams();
+        const set = (key, value) => { if (value) params.set(key, value); };
+        set("q", $("q").value.trim());
+        set("from", $("from").value);
+        set("to", $("to").value);
+        set("source_lang", $("source_lang").value);
+        set("target_lang", $("target_lang").value);
+        set("engine", $("engine").value);
+        set("table", $("table").value);
+        set("order", $("order").value);
+        if ($("raw").checked) params.set("raw", "1");
+        return params;
+      };
+
+      const fillSelect = (id, entries, label) => {
+        const select = $(id);
+        const previous = select.value;
+        select.innerHTML = "";
+        const any = document.createElement("option");
+        any.value = "";
+        any.textContent = label;
+        select.appendChild(any);
+        for (const entry of entries) {
+          const option = document.createElement("option");
+          option.value = entry.value;
+          option.textContent = `${entry.value} (${entry.count.toLocaleString()})`;
+          select.appendChild(option);
+        }
+        if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+      };
+
+      // Shown in Mountain time, the same zone the server reads From/To in.
+      // en-CA gives YYYY-MM-DD; parts keep it sortable-looking.
+      const ZONE = "America/Denver";
+      const parts = (iso, withTime) => {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return null;
+        const p = Object.fromEntries(
+          new Intl.DateTimeFormat("en-CA", {
+            timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+            ...(withTime ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short" } : {})
+          }).formatToParts(date).map((x) => [x.type, x.value])
+        );
+        const day = `${p.year}-${p.month}-${p.day}`;
+        return withTime ? `${day} ${p.hour}:${p.minute} ${p.timeZoneName}` : day;
+      };
+      const shortDate = (iso) => (iso && parts(iso, false)) || "—";
+      const mountainTime = (iso) => (iso && parts(iso, true)) || "";
+
+      async function refreshSources() {
+        const res = await fetch("/api/sources");
+        const data = await res.json();
+        const picker = $("sourcePicker");
+        picker.innerHTML = "";
+
+        const everything = document.createElement("option");
+        everything.value = "all";
+        everything.textContent = data.live.available
+          ? "Everything — live + every export, de-duplicated"
+          : "Everything — every export, de-duplicated";
+        picker.appendChild(everything);
+
+        const live = document.createElement("option");
+        live.value = "live";
+        live.textContent = data.live.available
+          ? "Live database (taos_lite_translations)"
+          : "Live database — unavailable";
+        live.disabled = !data.live.available;
+        picker.appendChild(live);
+        if (!data.live.available) picker.title = data.live.reason;
+
+        // One group per folder; a folder that can't be read says so.
+        const groups = new Map();
+        for (const file of data.exports) {
+          if (!groups.has(file.dir)) {
+            const group = document.createElement("optgroup");
+            group.label = file.dirLabel;
+            groups.set(file.dir, group);
+            picker.appendChild(group);
+          }
+          const option = document.createElement("option");
+          if (file.missing) {
+            option.disabled = true;
+            option.textContent = "folder not reachable: " + file.path;
+          } else {
+            option.value = "export:" + file.dir + ":" + file.name;
+            const kb = (file.bytes / 1024).toFixed(0);
+            const day = file.date
+              ? new Date(file.date + "T12:00:00Z").toLocaleDateString("en-US", {
+                  month: "short", day: "numeric", year: "numeric", timeZone: "UTC"
+                }) + "  ·  "
+              : "";
+            option.textContent = `${day}${file.name}  ·  ${kb} KB`;
+          }
+          groups.get(file.dir).appendChild(option);
+        }
+        if (!data.live.available) {
+          const first = [...picker.options].find((o) => !o.disabled);
+          if (first) picker.value = first.value;
+        }
+        if (!data.live.available) {
+          $("stats").innerHTML =
+            '<span class="danger">Live: ' + escapeHtml(data.live.reason) + "</span>";
+        }
+        return data;
+      }
+
+      async function load() {
+        const value = $("sourcePicker").value;
+        const body = value === "live" || value === "all"
+          ? { source: value }
+          : (() => {
+              // "export:<dir>:<name>" — the name may itself contain colons.
+              const rest = value.slice("export:".length);
+              const cut = rest.indexOf(":");
+              return { source: "export", dir: rest.slice(0, cut), file: rest.slice(cut + 1) };
+            })();
+
+        $("loadBtn").disabled = true;
+        $("loadBtn").textContent = "Loading…";
+        try {
+          const res = await fetch("/api/load", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "load failed");
+          loaded = data;
+          offset = 0;
+          applySummary(data);
+          await search();
+          toast(`Loaded ${data.summary.total.toLocaleString()} records.`);
+        } catch (err) {
+          toast(err.message, true);
+          $("stats").innerHTML = '<span class="danger">' + escapeHtml(err.message) + "</span>";
+        } finally {
+          $("loadBtn").disabled = false;
+          $("loadBtn").textContent = "Load";
+        }
+      }
+
+      function applySummary(data) {
+        const s = data.summary;
+        $("sourceLabel").textContent =
+          data.source.kind === "live"
+            ? "live database"
+            : data.source.kind === "all"
+              ? "everything (merged)"
+              : (data.source.dir === "history" ? "history: " : "") + data.source.file;
+        fillSelect("source_lang", s.sourceLangs, "any");
+        fillSelect("target_lang", s.targetLangs, "any");
+        fillSelect("engine", s.engines, "any");
+        fillSelect("table", s.tables, "any");
+
+        const bits = [
+          `<span class="pill">${s.total.toLocaleString()} records</span>`,
+          `<span class="pill">${s.users.toLocaleString()} users</span>`,
+          `<span class="pill">${shortDate(s.firstAt)} → ${shortDate(s.lastAt)}</span>`,
+          `<span class="pill">${s.sourceLangs.length} source langs</span>`
+        ];
+        const merged = data.manifest && data.manifest.record_type === "merged" ? data.manifest : null;
+        if (merged) {
+          const ok = merged.parts.filter((p) => !p.error);
+          const failed = merged.parts.filter((p) => p.error);
+          bits.push(
+            `<span class="pill" title="${escapeHtml(
+              ok.map((p) => `${p.file ?? p.source}: ${p.records}`).join("\n")
+            )}">${ok.length} sources merged</span>`,
+            `<span class="pill">${merged.duplicates_dropped.toLocaleString()} duplicates removed</span>`
+          );
+          if (failed.length) {
+            bits.push(
+              `<span class="pill danger" title="${escapeHtml(
+                failed.map((p) => `${p.file ?? p.source}: ${p.error}`).join("\n")
+              )}">${failed.length} not loaded</span>`
+            );
+          }
+        }
+        if (data.skippedCount) {
+          bits.push(
+            `<span class="pill danger">${data.skippedCount} unparsable line(s) skipped</span>`
+          );
+        }
+        $("stats").innerHTML = bits.join(" ");
+      }
+
+      async function search() {
+        if (!loaded) return;
+        const params = queryString();
+        params.set("limit", String(PAGE));
+        params.set("offset", String(offset));
+
+        const res = await fetch("/api/search?" + params.toString());
+        const data = await res.json();
+        if (!res.ok) {
+          $("results").innerHTML =
+            '<div class="empty danger">' + escapeHtml(data.error) + "</div>";
+          $("pageLabel").textContent = "";
+          return;
+        }
+
+        lastTotal = data.total;
+        renderRows(data);
+        const shown = data.rows.length;
+        $("pageLabel").textContent = data.total
+          ? `${(offset + 1).toLocaleString()}–${(offset + shown).toLocaleString()} of ${data.total.toLocaleString()}`
+          : "no matches";
+        $("prevBtn").disabled = offset === 0;
+        $("nextBtn").disabled = offset + shown >= data.total;
+      }
+
+      function renderRows(data) {
+        if (!data.rows.length) {
+          $("results").innerHTML =
+            '<div class="empty">Nothing matched' +
+            (data.match ? " <code>" + escapeHtml(data.match) + "</code>" : "") +
+            ".</div>";
+          return;
+        }
+        const body = data.rows
+          .map((row) => {
+            const meta = [row.source_lang, "→", row.target_lang]
+              .filter(Boolean)
+              .join(" ");
+            const tags = [row.tone, row.engine].filter(Boolean).join(" · ");
+            const chat = row.source_table && row.source_table.includes("chat_messages");
+            return `
+              <tr>
+                <td class="when">${escapeHtml(mountainTime(row.created_at))}
+                  <div class="meta">${escapeHtml(meta)}</div>
+                </td>
+                <td class="text">${renderSnippet(row.original_snippet, row.original_text)}</td>
+                <td class="text">${renderSnippet(row.translation_snippet, row.translation_text)}</td>
+                <td class="meta">${escapeHtml(tags)}${chat ? '<div><span class="pill">chat</span></div>' : ""}</td>
+              </tr>`;
+          })
+          .join("");
+        $("results").innerHTML = `
+          <table>
+            <thead><tr><th>When</th><th>Original</th><th>Translation</th><th>Engine</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>`;
+      }
+
+      function download() {
+        if (!loaded) return toast("Load a source first.", true);
+        window.location = "/api/export?" + queryString().toString();
+      }
+
+      async function saveExport() {
+        if (!loaded) return toast("Load a source first.", true);
+        $("saveBtn").disabled = true;
+        try {
+          const res = await fetch("/api/export/save", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query: queryString().toString() })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "save failed");
+          toast(`Wrote ${data.records.toLocaleString()} records to ${data.path}`);
+          await refreshSources();
+        } catch (err) {
+          toast(err.message, true);
+        } finally {
+          $("saveBtn").disabled = false;
+        }
+      }
+
+      $("loadBtn").addEventListener("click", load);
+      $("reloadBtn").addEventListener("click", load);
+      $("searchBtn").addEventListener("click", () => { offset = 0; search(); });
+      $("clearBtn").addEventListener("click", () => {
+        for (const id of ["q", "from", "to"]) $(id).value = "";
+        for (const id of ["source_lang", "target_lang", "engine", "table"]) $(id).value = "";
+        $("raw").checked = false;
+        $("order").value = "newest";
+        offset = 0;
+        search();
+      });
+      $("q").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { offset = 0; search(); }
+      });
+      for (const id of ["from", "to", "source_lang", "target_lang", "engine", "table", "order"]) {
+        $(id).addEventListener("change", () => { offset = 0; search(); });
+      }
+      $("prevBtn").addEventListener("click", () => {
+        offset = Math.max(0, offset - PAGE);
+        search();
+      });
+      $("nextBtn").addEventListener("click", () => {
+        if (offset + PAGE < lastTotal) { offset += PAGE; search(); }
+      });
+      $("downloadBtn").addEventListener("click", download);
+      $("saveBtn").addEventListener("click", saveExport);
+
+      refreshSources().then((data) => {
+        if (data.loaded) {
+          loaded = data.loaded;
+          applySummary(data.loaded);
+          search();
+        }
+      });
+    </script>
+  </body>
+</html>
