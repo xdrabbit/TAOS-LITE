@@ -373,11 +373,76 @@ describe.skipIf(!VENDORED)("FTS5 index", () => {
       const exported = db.all({ match: buildMatchQuery("camino") });
       expect(exported).toHaveLength(1);
       expect(exported[0]).not.toHaveProperty("original_snippet");
+      expect(exported[0]).not.toHaveProperty("key");
       expect(exported[0].original_text).toBe("Voy en camino.");
       // Unfiltered export is the whole set.
       expect(db.all()).toHaveLength(2);
     } finally {
       db.close();
     }
+  });
+
+  describe("context — a hit in its conversation", () => {
+    // u1 says five things an hour apart; u2 says one thing in the middle.
+    const at = (h: number) => new Date(Date.UTC(2026, 8, 1, h)).toISOString();
+    const convo = [
+      ...[0, 1, 2, 3, 4].map((h) =>
+        fromTranslationRow({
+          id: `u1-${h}`,
+          user_id: "u1",
+          created_at: at(h),
+          original_text: h === 2 ? "Voy en camino al doctor" : `mensaje ${h}`,
+          translation_text: h === 2 ? "On my way to the doctor" : `message ${h}`
+        })
+      ),
+      fromTranslationRow({
+        id: "u2-2",
+        user_id: "u2",
+        created_at: at(2),
+        original_text: "otra persona",
+        translation_text: "someone else"
+      })
+    ];
+    const build = () => TranslationIndex.build({ records: convo, source: { kind: "test" } });
+
+    it("centres on the hit, oldest first, and only that person's rows", async () => {
+      const db = await build();
+      try {
+        const hit = db.search({ match: buildMatchQuery("doctor") }).rows[0];
+        const ctx = db.context(hit.key, { before: 1, after: 1 })!;
+        expect(ctx.scope).toBe("user");
+        expect(ctx.rows.map((r) => r.id)).toEqual(["u1-1", "u1-2", "u1-3"]);
+        expect(ctx.truncatedBefore).toBe(true);
+        expect(ctx.truncatedAfter).toBe(true);
+        const wide = db.context(hit.key, { before: 10, after: 10 })!;
+        expect(wide.rows).toHaveLength(5); // u2 never appears
+        expect(wide.truncatedBefore || wide.truncatedAfter).toBe(false);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("highlights the search words across the FULL text, not a snippet", async () => {
+      const db = await build();
+      try {
+        const match = buildMatchQuery("doctor");
+        const hit = db.search({ match }).rows[0];
+        const focus = db.context(hit.key, { match })!.rows.find((r) => r.key === hit.key)!;
+        expect(focus.original_marked).toBe("Voy en camino al \u0001doctor\u0002");
+        // Neighbours that don't match come back plain.
+        expect(db.context(hit.key, { match })!.rows[0].original_marked).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("is null for a key that isn't in the index", async () => {
+      const db = await build();
+      try {
+        expect(db.context(9999)).toBeNull();
+      } finally {
+        db.close();
+      }
+    });
   });
 });

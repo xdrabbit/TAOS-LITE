@@ -114,6 +114,7 @@ export class TranslationIndex {
         extra text
       );
       create index rows_created on rows_raw(created_ms);
+      create index rows_user_created on rows_raw(user_id, created_ms);
     `);
 
     // External-content FTS5: the text lives once, in rows_raw.
@@ -240,7 +241,7 @@ export class TranslationIndex {
       : "";
 
     const rows = this.#all(
-      `select rows_raw.id, rows_raw.source_table, rows_raw.created_at,
+      `select rows_raw.rowid as key, rows_raw.id, rows_raw.source_table, rows_raw.created_at,
               rows_raw.created_ms, rows_raw.user_id, rows_raw.source_lang,
               rows_raw.target_lang, rows_raw.tone, rows_raw.engine,
               rows_raw.original_text, rows_raw.translation_text, rows_raw.extra
@@ -258,6 +259,87 @@ export class TranslationIndex {
     return { total, rows };
   }
 
+  /**
+   * One row in its conversation: the row, plus the `before` rows just earlier
+   * and `after` rows just later from the SAME person (every table, so a
+   * translation sits next to that person's chat messages). A row with no
+   * user_id — some old exports have none — gets its neighbours in time from
+   * everyone, and says so.
+   *
+   * `match` highlights the search words across the full text (FTS5
+   * highlight(), same control-character markers as search snippets).
+   * Rows come back oldest first; `truncatedBefore/After` say whether more
+   * exist past the window.
+   */
+  context(key, { before = 15, after = 15, match = null } = {}) {
+    const center = this.#one(
+      "select rowid as key, user_id, created_ms from rows_raw where rowid = ?",
+      [Number(key)]
+    );
+    if (center.key == null) return null;
+
+    const scope = center.user_id != null ? "user_id = ?" : "user_id is null";
+    const scopeBinds = center.user_id != null ? [center.user_id] : [];
+    // (created_ms, rowid) orders ties stably; nulls sort as earliest.
+    const t = center.created_ms ?? -1;
+    const at = "coalesce(created_ms, -1)";
+    const neighbours = (cmp, dir, n) =>
+      this.#all(
+        `select rowid as key from rows_raw
+          where ${scope}
+            and (${at} ${cmp} ? or (${at} = ? and rowid ${cmp} ?))
+          order by ${at} ${dir}, rowid ${dir}
+          limit ?`,
+        [...scopeBinds, t, t, center.key, n + 1]
+      ).map((r) => r.key);
+
+    const earlier = neighbours("<", "desc", before);
+    const later = neighbours(">", "asc", after);
+    const keys = [...earlier.slice(0, before).reverse(), center.key, ...later.slice(0, after)];
+
+    const marks = new Map();
+    if (match) {
+      try {
+        for (const r of this.#all(
+          `select rowid as key,
+                  highlight(rows_fts, 0, char(1), char(2)) as original_marked,
+                  highlight(rows_fts, 1, char(1), char(2)) as translation_marked
+             from rows_fts
+            where rows_fts match ? and rowid in (${keys.map(() => "?").join(",")})`,
+          [match, ...keys]
+        )) {
+          marks.set(r.key, r);
+        }
+      } catch {
+        /* a raw expression the user is still typing: show plain text */
+      }
+    }
+
+    const rows = this.#all(
+      `select rowid as key, id, source_table, created_at, created_ms, user_id,
+              source_lang, target_lang, tone, engine, original_text, translation_text, extra
+         from rows_raw where rowid in (${keys.map(() => "?").join(",")})`,
+      keys
+    );
+    const byKey = new Map(rows.map((r) => [r.key, r]));
+    return {
+      key: center.key,
+      scope: center.user_id != null ? "user" : "no-user",
+      truncatedBefore: earlier.length > before,
+      truncatedAfter: later.length > after,
+      rows: keys.map((k) => {
+        const row = byKey.get(k);
+        row.extra = row.extra ? JSON.parse(row.extra) : null;
+        const m = marks.get(k);
+        if (m) {
+          row.original_marked = m.original_marked;
+          row.translation_marked = m.translation_marked;
+        }
+        return row;
+      })
+    };
+  }
+
   /** Every matching record, unpaginated — what the JSON export writes. */
   all(options = {}) {
     const { total } = this.search({ ...options, limit: 1, offset: 0 });
@@ -266,6 +348,7 @@ export class TranslationIndex {
     for (const row of rows) {
       delete row.original_snippet;
       delete row.translation_snippet;
+      delete row.key; // index-internal; means nothing once exported
     }
     return rows;
   }
