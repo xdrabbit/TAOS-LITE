@@ -21,6 +21,7 @@ import { networkInterfaces } from "node:os";
 import path from "node:path";
 
 import { dedupe, parseExport, summarise } from "./lib/records.mjs";
+import { LESSON_MODEL_DEFAULT, buildLessonPrompt, generateLesson } from "./lib/lesson.mjs";
 import { TranslationIndex, buildMatchQuery, parseDateBound } from "./lib/index-db.mjs";
 import { describeLive, fetchLiveRecords, readCredentials, readDotEnv } from "./lib/live.mjs";
 
@@ -407,6 +408,60 @@ function handleContext(res, params) {
   sendJson(res, 200, result);
 }
 
+// Same lesson asked twice (re-opening it) should not be paid for twice.
+const lessonCache = new Map();
+
+/**
+ * POST /api/lesson { keys: [rowKey…], selection, loaded }
+ * The breakdown prototype: the picked record(s) plus a little of the
+ * conversation around them go to OpenAI; a structured lesson comes back.
+ * Only the picked rows and their few neighbours leave this machine — never the
+ * history.
+ */
+async function handleLesson(req, res) {
+  const index = requireIndex(res);
+  if (!index) return;
+  const body = await readBody(req);
+  if (body.loaded && body.loaded !== index.loadedAt) {
+    return sendJson(res, 409, { error: "The data was reloaded — search again." });
+  }
+  const keys = (Array.isArray(body.keys) ? body.keys : []).slice(0, 3);
+  const records = index.rowsByKey(keys);
+  if (!records.length) return sendJson(res, 400, { error: "Pick a message to make a lesson from." });
+  const selection = String(body.selection ?? "").slice(0, 2000);
+
+  const cacheKey = JSON.stringify([index.loadedAt, records.map((r) => r.key), selection.trim()]);
+  if (lessonCache.has(cacheKey)) return sendJson(res, 200, { ...lessonCache.get(cacheKey), cached: true });
+
+  const envFile = await readDotEnv(path.join(REPO_ROOT, ".env.local"));
+  const apiKey = process.env.OPENAI_API_KEY || envFile.OPENAI_API_KEY;
+  if (!apiKey) return sendJson(res, 500, { error: "No OPENAI_API_KEY in the environment or .env.local." });
+  // Its own knob: the app's tutor models are tuned for a different job.
+  const model =
+    process.env.TRANSLATIONS_LESSON_MODEL || envFile.TRANSLATIONS_LESSON_MODEL || LESSON_MODEL_DEFAULT;
+
+  // A few lines either side is enough to say what it meant; more just costs.
+  const around = index.context(records[0].key, { before: 4, after: 4 });
+  const picked = new Set(records.map((r) => r.key));
+  const context = (around?.rows ?? []).filter((r) => !picked.has(r.key));
+
+  const prompt = buildLessonPrompt({ selection, records, context });
+  const started = Date.now();
+  try {
+    const { lesson, usage } = await generateLesson({ apiKey, model: model.trim(), prompt });
+    log(
+      `lesson: ${lesson.sentences.length} sentence(s), ${model}, ${Date.now() - started}ms` +
+        (usage ? `, ${usage.prompt_tokens}+${usage.completion_tokens} tokens` : "")
+    );
+    const result = { lesson, model, keys: records.map((r) => r.key), generatedAt: new Date().toISOString() };
+    lessonCache.set(cacheKey, result);
+    return sendJson(res, 200, result);
+  } catch (err) {
+    log(`lesson failed: ${err.message}`);
+    return sendJson(res, 502, { error: err.message });
+  }
+}
+
 function summariseFilters(options) {
   const active = [];
   if (options.query) active.push(`text: ${options.query}`);
@@ -548,6 +603,9 @@ async function handle(req, res) {
     }
     if (url.pathname === "/api/search" && req.method === "GET") {
       return handleSearch(res, url.searchParams);
+    }
+    if (url.pathname === "/api/lesson" && req.method === "POST") {
+      return await handleLesson(req, res);
     }
     if (url.pathname === "/api/context" && req.method === "GET") {
       return handleContext(res, url.searchParams);

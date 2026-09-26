@@ -100,6 +100,27 @@ and **To** includes the whole of that day.
 
 Text search, dates, language, engine and source table all combine.
 
+## In context, and lessons (prototype)
+
+Click a result to open it **in context**: the full message with your search
+words highlighted, and that person's messages just before and after it. The
+results list stays where it is; ↑/↓ (or k/j) step through results, Esc closes.
+
+**Lesson** (a button on each message), or select some text in the panel and
+press **Make a lesson from this**. The picked message and a few neighbours
+(never the history) go to OpenAI, and a breakdown comes back: the words, why
+they're in that order (with the mistake an English speaker would make, struck
+through), what it means in context, and build-up chunks to say out loud.
+
+- Model: `gpt-5.5` by default, or `TRANSLATIONS_LESSON_MODEL`. `gpt-4.1` was
+  tried first and marked correct, flexible word orders as mistakes.
+- It's slow: about 15 seconds a sentence. The same lesson is cached for the
+  life of the server.
+- The word-for-word line is built from each word's own gloss, not written by
+  the model, so it can't drift back into English order.
+- Practice (pronunciation scoring, drills) isn't built. See "Lessons from your
+  own history" in ENHANCEMENTS.md.
+
 ## Exporting
 
 - **Export JSON ↓** downloads the current filtered set.
