@@ -60,6 +60,12 @@ export declare class TranslationIndex {
   search(options?: SearchOptions): { total: number; rows: SearchRow[] };
   all(options?: SearchOptions): SearchRow[];
   rowsByKey(keys: number[]): ContextRow[];
+  findKey(source: {
+    id?: string | null;
+    source_table?: string | null;
+    original_text?: string;
+    translation_text?: string;
+  }): number | null;
   context(
     key: number,
     options?: { before?: number; after?: number; match?: string | null }

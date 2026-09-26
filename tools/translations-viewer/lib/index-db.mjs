@@ -340,6 +340,24 @@ export class TranslationIndex {
     };
   }
 
+  /**
+   * The row key, in THIS load, of a record saved elsewhere (a lesson's
+   * source): by database id when it has one, else by its exact text. Null if
+   * the loaded data doesn't contain it.
+   */
+  findKey({ id = null, source_table = null, original_text = "", translation_text = "" } = {}) {
+    const row = id
+      ? this.#one(
+          `select rowid as key from rows_raw where id = ? and (? is null or source_table = ?) limit 1`,
+          [String(id), source_table, source_table]
+        )
+      : this.#one(
+          `select rowid as key from rows_raw where original_text = ? and translation_text = ? limit 1`,
+          [original_text, translation_text]
+        );
+    return row.key ?? null;
+  }
+
   /** Specific rows by key, in the order asked for; unknown keys are skipped. */
   rowsByKey(keys) {
     const wanted = keys.map(Number).filter(Number.isInteger);

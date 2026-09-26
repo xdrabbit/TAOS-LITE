@@ -114,8 +114,14 @@ through), what it means in context, and build-up chunks to say out loud.
 
 - Model: `gpt-5.5` by default, or `TRANSLATIONS_LESSON_MODEL`. `gpt-4.1` was
   tried first and marked correct, flexible word orders as mistakes.
-- It's slow: about 15 seconds a sentence. The same lesson is cached for the
-  life of the server.
+- It's slow: about 15 seconds a sentence.
+- **Every lesson is saved** as it's made, one owner-only file per lesson in
+  `local_exports/lessons/` (gitignored). A lesson is keyed on the source
+  message's database id plus your exact selection, so reopening the same
+  message, even after a restart or a different load, shows the saved lesson
+  without paying again. **Lessons** in the header opens the library: filter,
+  open, add a note, Regenerate (keeps your note), Delete (tap twice), and
+  Open in context (when the loaded data contains the message).
 - The word-for-word line is built from each word's own gloss, not written by
   the model, so it can't drift back into English order.
 - Practice (pronunciation scoring, drills) isn't built. See "Lessons from your
