@@ -9,6 +9,7 @@ import {
   generateLesson,
   parseLesson,
   capChunks,
+  cleanTrap,
   targetSide
 } from "@/tools/translations-viewer/lib/lesson.mjs";
 
@@ -75,6 +76,17 @@ describe("buildLessonPrompt", () => {
     expect(system).toMatch(/tú by default/);
   });
 
+  it("keeps colloquial speech, warns on regional/vulgar words, and skips trivial fixes", () => {
+    // Each line answers a failure seen in the 2026-09-26 stress run: "le dije
+    // que si quería" rewritten to textbook "le pregunté si", "arrecho" taught
+    // with no warning, and "I added the final period" reported as a caveat.
+    const { system } = buildLessonPrompt({ records: [record()] });
+    expect(system).toMatch(/COLLOQUIAL speech is not an/);
+    expect(system).toMatch(/or vulgar/);
+    expect(system).toMatch(/capital letter or a final period alone is not worth reporting/);
+    expect(system).toMatch(/Only the sentence itself — no commentary/);
+  });
+
   it("carries the selection, the record, and context marked as not-to-teach", () => {
     const { user } = buildLessonPrompt({
       selection: "te lo dije",
@@ -101,6 +113,19 @@ describe("parseLesson", () => {
     // from the per-word stand-ins, the order is the Spanish order by construction.
     const lesson = parseLesson(JSON.stringify(goodLesson));
     expect(lesson.sentences[0].literal).toBe("Already to-you it I-told yesterday");
+  });
+
+  it("strips commentary and quotes from the struck-through English-order line", () => {
+    // Real outputs from the stress run.
+    expect(cleanTrap("Espero que sientas mejor pronto. — This leaves out te because")).toBe(
+      "Espero que sientas mejor pronto."
+    );
+    expect(cleanTrap("“Entonces yo pregunté a ella si quería venir” — English pushes you")).toBe(
+      "Entonces yo pregunté a ella si quería venir"
+    );
+    expect(cleanTrap("*Vediamo ci domani alle otto.")).toBe("Vediamo ci domani alle otto.");
+    expect(cleanTrap("¿Puedes recoger me en el aeropuerto?")).toBe("¿Puedes recoger me en el aeropuerto?");
+    expect(cleanTrap(undefined)).toBe("");
   });
 
   it("caps the build-up at six steps, keeping the shortest first and the whole sentence last", () => {

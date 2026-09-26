@@ -140,9 +140,15 @@ export function buildLessonPrompt({ selection = "", records, context = [] }) {
     ``,
     `The sentences come from their own translation app history — real speech captured by`,
     `speech-to-text, so they can contain transcription slips, missing punctuation, or run-ons.`,
-    `- "target" is the clean, natural ${name} sentence you will teach. If what was captured is`,
-    `  non-standard or garbled, fix it and put the captured text in "as_said"; otherwise`,
-    `  "as_said" is an empty string. Never teach an error as correct.`,
+    `- "target" is the clean, natural ${name} sentence you will teach. Fix only real slips —`,
+    `  transcription mistakes (a wrong homophone, a garbled word), missing accents and`,
+    `  punctuation — and put the captured text in "as_said"; otherwise "as_said" is an empty`,
+    `  string. Never teach an error as correct. But everyday COLLOQUIAL speech is not an`,
+    `  error: keep how people really talk ("le dije que si quería venir" for "I asked her if`,
+    `  she wanted to come" is normal spoken Spanish) and explain it, rather than rewriting it`,
+    `  into textbook phrasing the speaker didn't use.`,
+    `  Adding a capital letter or a final period alone is not worth reporting: leave "as_said"`,
+    `  empty and don't mention it in "caveats".`,
     `- Split the material into natural sentences (usually 1-3). If the learner highlighted`,
     `  English, teach the ${name} that corresponds to it.`,
     `- Latin American ${name === "Spanish" ? "Spanish, tú by default" : name} unless the text itself uses something else.`,
@@ -161,7 +167,8 @@ export function buildLessonPrompt({ selection = "", records, context = [] }) {
     `  after the verb ("dije te"), a required word left out because English doesn't need it`,
     `  (the doubled "le" in "le preparo algo a Ana"), "para" where Spanish uses "a", an`,
     `  unnecessary "yo", or an adjective before the noun. It must be something a learner would`,
-    `  plausibly say. It must be genuinely WRONG or clearly unnatural — never an alternative`,
+    `  plausibly say. Only the sentence itself — no commentary, quotes or explanation (that`,
+    `  belongs in "order_points"). It must be genuinely WRONG or clearly unnatural — never an alternative`,
     `  word order that native speakers also use (flexible adverbs like "ahí" or "ya" often`,
     `  are). If English order produces acceptable ${name}, leave it empty and say in an`,
     `  order point that the order is flexible here.`,
@@ -173,8 +180,11 @@ export function buildLessonPrompt({ selection = "", records, context = [] }) {
     `- "register": e.g. "tú, casual" or "usted, polite".`,
     `- "chunks": build-up practice from the END of the sentence, growing leftward to the`,
     `  whole sentence (e.g. "ayer" → "dije ayer" → "te lo dije ayer" → "Ya te lo dije ayer").`,
-    `  3 to 6 steps: grow by meaningful phrases, not one word at a time, and the last step is`,
-    `  always the whole sentence.`,
+    `  At most 6 steps: grow by meaningful phrases, not one word at a time, and the last step`,
+    `  is always the whole sentence. A sentence of three words or fewer needs just 1-2 steps.`,
+    `- In a word's "note", warn when a word or phrase means something different, or is rude`,
+    `  or vulgar, in other ${name}-speaking countries (e.g. Venezuelan "arrecho" = angry, but`,
+    `  vulgar in Mexico) — a learner needs to know before using it elsewhere.`,
     `"caveats": only real problems with the source text (a transcription slip you fixed, a`,
     `translation that is wrong). Never claim a correction you did not make; if "as_said" is`,
     `empty everywhere and the translation is fine, "caveats" is an empty string.`,
@@ -246,7 +256,7 @@ export function parseLesson(content) {
 /** Everything after the words; chunks capped so the build-up stays a ladder. */
 function rest(s) {
   return {
-    english_order_trap: String(s.english_order_trap ?? ""),
+    english_order_trap: cleanTrap(s.english_order_trap),
     order_points: (Array.isArray(s.order_points) ? s.order_points : []).map((p) => ({
       rule: String(p.rule ?? ""),
       explanation: String(p.explanation ?? ""),
@@ -256,6 +266,18 @@ function rest(s) {
     register: String(s.register ?? ""),
     chunks: capChunks((Array.isArray(s.chunks) ? s.chunks : []).map(String))
   };
+}
+
+/**
+ * The struck-through "English order" line must be just a sentence. Told so,
+ * the model still sometimes appends commentary ("… — English pushes you
+ * toward…") or wraps it in quotes; that reads as a crossed-out explanation.
+ */
+export function cleanTrap(value) {
+  let t = String(value ?? "").trim();
+  t = t.split(/\s[—–]\s|\s-\s(?=[A-Z])/)[0].trim(); // drop " — commentary"
+  t = t.replace(/^[“"'‘*]+|[”"'’]+$/g, "").trim(); // drop wrapping quotes / a leading "*"
+  return t;
 }
 
 export const MAX_CHUNKS = 6;
