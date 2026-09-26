@@ -23,3 +23,6 @@ scripts/fixtures
 .smbdelete*
 *.swp
 .vercel
+
+# Sensitive local database exports — never commit.
+local_exports/
