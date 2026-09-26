@@ -522,6 +522,16 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     speed: about 15s a sentence (42s for a three-sentence message). The
     word-for-word line is assembled in code from per-word glosses; asked for
     the whole line, gpt-4.1 drifted back into English order.
+  - Lessons are SAVED (local_exports/lessons/, keyed on source ids plus the
+    selection) with a library: note, regenerate, delete, open in context.
+  - Stress run on 13 written-for-the-test sentences (never real history):
+    slang, speech-to-text slips, bad translations, gustar, subjunctive,
+    clitic pairs and Italian all held up. Fixed after the run: it rewrote
+    colloquial speech into textbook Spanish, taught "arrecho" with no
+    regional warning, put commentary in the trap line, padded one-word
+    sentences, and reported "added a period". Rerun it with
+    tools/translations-viewer/scripts/lesson-stress.mjs after any model or
+    prompt change.
   (added 2026-09-26 from Tom's idea)
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is

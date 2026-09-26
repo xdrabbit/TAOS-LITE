@@ -50,6 +50,7 @@ export declare function buildLessonPrompt(input: {
 }): LessonPrompt;
 export declare function parseLesson(content: string): Lesson;
 export declare const MAX_CHUNKS: number;
+export declare function cleanTrap(value: unknown): string;
 export declare function capChunks(chunks: string[]): string[];
 export declare function generateLesson(input: {
   apiKey: string;
