@@ -170,6 +170,18 @@
       .rules .ex { color: var(--muted); font-style: italic; margin-top: 2px; }
       .chunks { padding-left: 22px; margin: 0; }
       .chunks li { font-size: 16px; padding: 3px 0; }
+      .lesson-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+      .lesson-tools button { padding: 5px 11px; }
+      .lesson-tools .danger { color: var(--danger); }
+      .lesson-note { text-transform: none; letter-spacing: 0; font-size: 12px; margin-bottom: 6px; }
+      .lesson-note textarea { width: 100%; resize: vertical; font-size: 14px; }
+      .lesson-tools + .lesson-note + .hint, .lesson-note + .hint { margin-bottom: 18px; }
+      .lib-item { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--panel); }
+      .lib-item + .lib-item { margin-top: 8px; }
+      .lib-item:hover { border-color: var(--accent); }
+      .lib-title { font-size: 16px; font-weight: 600; }
+      .lib-en { color: var(--muted); margin-top: 2px; }
+      .lib-meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
       .lsn + .lsn { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
       tbody tr { cursor: pointer; scroll-margin-top: 80px; }
       tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent) !important; }
@@ -186,6 +198,7 @@
       </label>
       <button id="loadBtn">Load</button>
       <button id="reloadBtn" class="ghost" title="Re-read the current source">↻</button>
+      <button id="lessonsBtn" class="ghost" title="Lessons you've made">Lessons</button>
     </header>
 
     <main>
@@ -263,7 +276,7 @@
     <div id="lesson" hidden>
       <div class="lesson-sheet">
         <div class="lesson-head">
-          <h2>Lesson</h2>
+          <h2 id="lessonTitle">Lesson</h2>
           <span id="lessonMeta" class="muted" style="font-size: 12px"></span>
           <span class="grow"></span>
           <button id="lessonClose" class="ghost" title="Back (Esc)">✕</button>
@@ -704,38 +717,183 @@
         const row = pageRows[Number(tr.dataset.i)];
         if (row) openDetail(row.key);
       });
-      // ------------------------------------------------ lesson prototype
+      // ------------------------------------------------ lessons (saved)
 
       let lessonSeq = 0;
+      let shownLesson = null; // the saved lesson on screen, if any
+      const WRITING =
+        '<div class="empty">Writing your lesson… about 15 seconds a sentence, so a long message can take a minute.</div>';
 
-      async function openLesson(keys, selection = "") {
+      function showSheet(title) {
         hideFab();
-        const seq = ++lessonSeq;
         $("lesson").hidden = false;
+        $("lessonTitle").textContent = title;
         $("lessonMeta").textContent = "";
-        $("lessonBody").innerHTML =
-          '<div class="empty">Writing your lesson… about 15 seconds a sentence, so a long message can take a minute.</div>';
+      }
+
+      async function lessonRequest(body) {
+        const seq = ++lessonSeq;
+        showSheet("Lesson");
+        shownLesson = null;
+        $("lessonBody").innerHTML = WRITING;
         try {
           const res = await fetch("/api/lesson", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ keys, selection, loaded: loaded && loaded.loadedAt })
+            body: JSON.stringify({ ...body, loaded: loaded && loaded.loadedAt })
           });
           const data = await res.json();
           if (seq !== lessonSeq) return; // closed or replaced meanwhile
           if (!res.ok) throw new Error(data.error || "lesson failed");
-          $("lessonMeta").textContent = `${data.model}${data.cached ? " · already made" : ""}`;
-          renderLesson(data.lesson);
+          showSaved(data.saved, data.cached);
+          refreshLessonCount();
         } catch (err) {
           if (seq !== lessonSeq) return;
           $("lessonBody").innerHTML = '<div class="empty danger">' + escapeHtml(err.message) + "</div>";
         }
+      }
+      const openLesson = (keys, selection = "") => lessonRequest({ keys, selection });
+
+      async function openSavedLesson(id) {
+        const seq = ++lessonSeq;
+        showSheet("Lesson");
+        $("lessonBody").innerHTML = '<div class="empty">Opening…</div>';
+        const res = await fetch("/api/lessons/" + id);
+        const data = await res.json();
+        if (seq !== lessonSeq) return;
+        if (!res.ok) {
+          $("lessonBody").innerHTML = '<div class="empty danger">' + escapeHtml(data.error) + "</div>";
+          return;
+        }
+        showSaved(data.saved, true);
+      }
+
+      function showSaved(saved, fromLibrary) {
+        shownLesson = saved;
+        const e = escapeHtml;
+        const made = new Date(saved.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: ZONE });
+        $("lessonMeta").textContent = `${saved.model} · saved ${made}${fromLibrary ? "" : " · new"}`;
+        const where = saved.sources && saved.sources[0];
+        const tools = `
+          <div class="lesson-tools">
+            <button class="ghost" data-act="library">← All lessons</button>
+            ${saved.key != null ? '<button class="ghost" data-act="context" title="Show the message this came from, in its conversation">Open in context</button>' : ""}
+            <span class="grow"></span>
+            <button class="ghost" data-act="regen" title="Write this lesson again (your note is kept)">Regenerate</button>
+            <button class="ghost danger" data-act="delete">Delete</button>
+          </div>
+          <label class="lesson-note">Your note
+            <textarea id="lessonNote" rows="2" placeholder="A memory hook, where you heard it, what tripped you up…">${e(saved.note || "")}</textarea>
+          </label>
+          ${where ? `<div class="hint">From ${e(mountainTime(where.created_at))}${saved.selection ? ` · your selection: “${e(saved.selection.slice(0, 120))}${saved.selection.length > 120 ? "…" : ""}”` : ""}</div>` : ""}`;
+        $("lessonBody").innerHTML = tools + renderLesson(saved.lesson);
+        $("lesson").scrollTop = 0;
+      }
+
+      async function saveNote() {
+        if (!shownLesson) return;
+        const note = $("lessonNote").value;
+        if (note === (shownLesson.note || "")) return;
+        const res = await fetch("/api/lessons/" + shownLesson.id, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ note })
+        });
+        if (res.ok) {
+          shownLesson.note = note;
+          toast("Note saved.");
+        } else {
+          toast("Couldn't save the note.", true);
+        }
+      }
+
+      async function showLibrary() {
+        const seq = ++lessonSeq;
+        shownLesson = null;
+        showSheet("Your lessons");
+        $("lessonBody").innerHTML = '<div class="empty">Loading…</div>';
+        const res = await fetch("/api/lessons");
+        const data = await res.json();
+        if (seq !== lessonSeq) return;
+        const list = data.lessons || [];
+        $("lessonMeta").textContent = `${list.length} saved`;
+        if (!list.length) {
+          $("lessonBody").innerHTML =
+            '<div class="empty">No lessons yet. Open a result, then press <b>Lesson</b> on a message — or select some text and press <b>Make a lesson from this</b>.</div>';
+          return;
+        }
+        const e = escapeHtml;
+        $("lessonBody").innerHTML =
+          '<input id="libFilter" placeholder="Filter your lessons…" style="width:100%;margin-bottom:10px" />' +
+          '<div class="lib">' +
+          list.map((l) => `
+            <div class="lib-item" data-id="${e(l.id)}" data-text="${e((l.title + " " + l.english + " " + l.note).toLowerCase())}">
+              <div class="lib-title">${e(l.title)}</div>
+              <div class="lib-en">${e(l.english)}${l.sentenceCount > 1 ? ` <span class="muted">+${l.sentenceCount - 1} more</span>` : ""}</div>
+              <div class="lib-meta">${e(shortDate(l.createdAt))}${l.note ? ` · ${e(l.note.slice(0, 80))}` : ""}</div>
+            </div>`).join("") +
+          "</div>";
+        $("libFilter").addEventListener("input", (ev) => {
+          const q = ev.target.value.trim().toLowerCase();
+          document.querySelectorAll(".lib-item").forEach((el) => { el.hidden = q && !el.dataset.text.includes(q); });
+        });
+      }
+
+      async function refreshLessonCount() {
+        try {
+          const res = await fetch("/api/lessons");
+          const data = await res.json();
+          const n = (data.lessons || []).length;
+          $("lessonsBtn").textContent = n ? `Lessons (${n})` : "Lessons";
+        } catch { /* the button just keeps its old label */ }
       }
 
       function closeLesson() {
         lessonSeq += 1;
         $("lesson").hidden = true;
       }
+
+      $("lessonBody").addEventListener("click", async (ev) => {
+        const item = ev.target.closest(".lib-item");
+        if (item) return openSavedLesson(item.dataset.id);
+        const act = ev.target.closest("[data-act]")?.dataset.act;
+        if (act === "library") return showLibrary();
+        if (!act || !shownLesson) return;
+        if (act === "context") {
+          const key = shownLesson.key;
+          if (loaded && shownLesson.loaded !== loaded.loadedAt) return toast("The data was reloaded — reopen the lesson.", true);
+          closeLesson();
+          return openDetail(key);
+        }
+        if (act === "regen") {
+          const keys = shownLesson.keys || [];
+          if (!keys.length || keys.some((k) => k == null)) {
+            return toast("Load data that contains this message to regenerate it.", true);
+          }
+          return lessonRequest({ keys, selection: shownLesson.selection, force: true });
+        }
+        if (act === "delete") {
+          const btn = ev.target.closest("[data-act]");
+          // Two taps, no browser dialog: first arms it, second deletes.
+          if (!btn.dataset.armed) {
+            btn.dataset.armed = "1";
+            btn.textContent = "Tap again to delete";
+            setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = "Delete"; } }, 4000);
+            return;
+          }
+          const res = await fetch("/api/lessons/" + shownLesson.id, { method: "DELETE" });
+          if (res.ok) {
+            toast("Lesson deleted.");
+            refreshLessonCount();
+            showLibrary();
+          } else {
+            toast("Couldn't delete it.", true);
+          }
+        }
+      });
+      $("lessonBody").addEventListener("focusout", (ev) => {
+        if (ev.target.id === "lessonNote") saveNote();
+      });
 
       function renderLesson(lesson) {
         const e = escapeHtml;
@@ -777,10 +935,10 @@
               <ol class="chunks">${s.chunks.map((c) => `<li>${e(c)}</li>`).join("")}</ol>` : ""}
             </section>`;
         });
-        $("lessonBody").innerHTML =
+        return (
           sections.join("") +
-          (lesson.caveats ? `<div class="hint" style="margin-top:20px">Note: ${e(lesson.caveats)}</div>` : "");
-        $("lesson").scrollTop = 0;
+          (lesson.caveats ? `<div class="hint" style="margin-top:20px">Note: ${e(lesson.caveats)}</div>` : "")
+        );
       }
 
       // Select text in the panel → a button to make a lesson from exactly that.
@@ -811,6 +969,8 @@
         if (pick) openLesson(pick.keys, pick.text);
       });
       $("lessonClose").addEventListener("click", closeLesson);
+      $("lessonsBtn").addEventListener("click", showLibrary);
+      refreshLessonCount();
       // Capture phase: with a lesson open, Esc closes the lesson, not the panel.
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !$("lesson").hidden) {
