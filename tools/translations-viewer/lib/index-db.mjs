@@ -340,6 +340,20 @@ export class TranslationIndex {
     };
   }
 
+  /** Specific rows by key, in the order asked for; unknown keys are skipped. */
+  rowsByKey(keys) {
+    const wanted = keys.map(Number).filter(Number.isInteger);
+    if (!wanted.length) return [];
+    const rows = this.#all(
+      `select rowid as key, id, source_table, created_at, created_ms, user_id,
+              source_lang, target_lang, tone, engine, original_text, translation_text
+         from rows_raw where rowid in (${wanted.map(() => "?").join(",")})`,
+      wanted
+    );
+    const byKey = new Map(rows.map((r) => [r.key, r]));
+    return wanted.map((k) => byKey.get(k)).filter(Boolean);
+  }
+
   /** Every matching record, unpaginated — what the JSON export writes. */
   all(options = {}) {
     const { total } = this.search({ ...options, limit: 1, offset: 0 });

@@ -59,6 +59,7 @@ export declare class TranslationIndex {
   }): Promise<TranslationIndex>;
   search(options?: SearchOptions): { total: number; rows: SearchRow[] };
   all(options?: SearchOptions): SearchRow[];
+  rowsByKey(keys: number[]): ContextRow[];
   context(
     key: number,
     options?: { before?: number; after?: number; match?: string | null }

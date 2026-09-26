@@ -490,6 +490,39 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   - Saved words should be able to feed the mastery/review queue, but notebook
     capture must never interrupt or reset the current lesson position.
   (added 2026-08-06 from Tom's Tutor notebook idea)
+- Lessons from your own history — "What better way to learn the language than
+  from what you've already said?" Search your history, block-copy a sentence
+  or two, and it becomes a lesson. In Tom's words: "it tells me the words,
+  translates the words, the meanings of the words, it tells me why it's in its
+  particular sentence structure, and what it means in context, and then it
+  helps me practice how to say it fluently." The core problem it solves: from
+  the English side you know the words but put them in English order.
+  - Words: word-by-word gloss, including what the form carries (the subject
+    inside a conjugated verb, clitics like te/lo).
+  - Why this order: contrast with English order; show the wrong English-order
+    version next to the right one; name the rule (clitics before a conjugated
+    verb, dropped subject, adjective after noun, gustar-style inversion).
+  - Meaning in context: from the surrounding conversation (the viewer's
+    context panel already assembles it): tone, tú/usted, idiom.
+  - Practice: build up from the end of the sentence, say it with Crawl's Azure
+    pronunciation score, a substitution drill so it becomes a pattern, then
+    recall from the English alone. Save to the notebook/review queue above.
+  - Home: /tutor, as a "from your own words" source that each user draws from
+    their own saved history. The local viewer can be Tom's picker meanwhile.
+  - Privacy: generating a lesson sends the picked sentences (never the
+    history) to the LLM provider; some history is Tom's deliberately pruned
+    sensitive material.
+  - Cheapest first step: prototype the words / order / context breakdown on
+    real picks and judge the explanation quality before building practice.
+  - PROTOTYPED 2026-09-26 in tools/translations-viewer (Lesson button / select
+    text → lesson). Findings: gpt-4.1 explained well but marked correct,
+    flexible orders as mistakes ("Tengo unos raviolis ahí" struck through) and
+    invented a correction it hadn't made; gpt-5.5 got the same sentences right
+    and flagged real traps ("hago le", dropping the doubled le). The cost is
+    speed: about 15s a sentence (42s for a three-sentence message). The
+    word-for-word line is assembled in code from per-word glosses; asked for
+    the whole line, gpt-4.1 drifted back into English order.
+  (added 2026-09-26 from Tom's idea)
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is
   already generic; needs accounts for guests, a thread picker, sender names
