@@ -510,6 +510,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     sentences, and reported "added a period". Rerun it with
     tools/translations-viewer/scripts/lesson-stress.mjs after any model or
     prompt change.
+  - PRACTICE built (viewer): hear each sentence and chunk in Liz's cloned
+    voice (normal/slow, cached), record, and get an Azure score per word,
+    saved on the lesson. Verified with real providers: Liz's audio of "Le
+    hago una pasta rapidita" scored 98.8 against that sentence and 13.2
+    against a different one. Still to do: the substitution drill,
+    recall-from-English, and a review queue built from saved attempts.
   (added 2026-09-26 from Tom's idea)
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is

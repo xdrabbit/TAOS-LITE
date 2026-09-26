@@ -19,10 +19,12 @@ import { readFile, readdir, stat, writeFile, mkdir, open } from "node:fs/promise
 import { fileURLToPath } from "node:url";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { dedupe, parseExport, summarise } from "./lib/records.mjs";
 import { LESSON_MODEL_DEFAULT, buildLessonPrompt, generateLesson } from "./lib/lesson.mjs";
 import { LessonStore, lessonId, newSavedLesson } from "./lib/lessonStore.mjs";
+import { assessPronunciation, azureLocale, describeScoring, speak } from "./lib/practice.mjs";
 import { TranslationIndex, buildMatchQuery, parseDateBound } from "./lib/index-db.mjs";
 import { describeLive, fetchLiveRecords, readCredentials, readDotEnv } from "./lib/live.mjs";
 
@@ -485,6 +487,126 @@ async function handleLesson(req, res) {
   return sendJson(res, 200, { saved: withKey(saved), cached: false });
 }
 
+// ---------------------------------------------------------------- practice
+
+async function practiceEnv() {
+  const f = await readDotEnv(path.join(REPO_ROOT, ".env.local"));
+  const pick = (k) => (process.env[k] || f[k] || "").trim();
+  return {
+    elevenKey: pick("ELEVENLABS_API_KEY"),
+    lizVoice: pick("ELEVENLABS_LIZ_VOICE_ID"),
+    speakModel: pick("TRANSLATIONS_SPEAK_MODEL"),
+    azureKey: pick("AZURE_SPEECH_KEY"),
+    azureRegion: pick("AZURE_SPEECH_REGION")
+  };
+}
+
+async function handlePracticeStatus(res) {
+  const env = await practiceEnv();
+  sendJson(res, 200, {
+    speak:
+      env.elevenKey && env.lizVoice
+        ? { available: true, reason: null }
+        : { available: false, reason: "Needs ELEVENLABS_API_KEY and ELEVENLABS_LIZ_VOICE_ID in .env.local." },
+    score: describeScoring({ key: env.azureKey, region: env.azureRegion })
+  });
+}
+
+const AUDIO_DIR = path.join(EXPORT_DIR, "lessons", "audio");
+
+/**
+ * POST /api/speak { text, slow } → audio/mpeg in Liz's voice. Each
+ * (text, speed, voice, model) is made once and cached on disk, so replaying a
+ * chunk is free.
+ */
+async function handleSpeak(req, res) {
+  const body = await readBody(req);
+  const text = String(body.text ?? "").trim().slice(0, 600);
+  if (!text) return sendJson(res, 400, { error: "Nothing to say." });
+  const env = await practiceEnv();
+  if (!env.elevenKey || !env.lizVoice) {
+    return sendJson(res, 503, { error: "Needs ELEVENLABS_API_KEY and ELEVENLABS_LIZ_VOICE_ID in .env.local." });
+  }
+  const slow = Boolean(body.slow);
+  const hash = createHash("sha256")
+    .update(JSON.stringify([text, slow, env.lizVoice, env.speakModel]))
+    .digest("hex")
+    .slice(0, 24);
+  const file = path.join(AUDIO_DIR, `${hash}.mp3`);
+  let audio;
+  try {
+    audio = await readFile(file);
+  } catch {
+    try {
+      audio = await speak({ apiKey: env.elevenKey, voiceId: env.lizVoice, text, slow, model: env.speakModel });
+    } catch (err) {
+      log(`speak failed: ${err.message}`);
+      return sendJson(res, 502, { error: err.message });
+    }
+    await mkdir(AUDIO_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(file, audio, { mode: 0o600 });
+    log(`speak: ${text.length} chars${slow ? " (slow)" : ""} → ${audio.length} bytes`);
+  }
+  res.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "no-store" });
+  res.end(audio);
+}
+
+function readRaw(req, max = 10_000_000) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > max) {
+        reject(new Error("recording too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * POST /api/assess?text=&lang=&lesson= with a 16 kHz mono WAV body → scores.
+ * With `lesson`, the attempt is saved on that lesson so progress is kept.
+ */
+async function handleAssess(req, res, params) {
+  const env = await practiceEnv();
+  const scoring = describeScoring({ key: env.azureKey, region: env.azureRegion });
+  if (!scoring.available) return sendJson(res, 503, { error: scoring.reason });
+  const text = String(params.get("text") ?? "").trim().slice(0, 600);
+  const locale = azureLocale(params.get("lang") || "es");
+  if (!text) return sendJson(res, 400, { error: "What were you trying to say?" });
+  if (!locale) return sendJson(res, 400, { error: `Azure can't score ${params.get("lang")} here.` });
+  const wav = await readRaw(req);
+  if (wav.length < 44 + 16000) return sendJson(res, 400, { error: "That recording is too short to score." });
+
+  let result;
+  try {
+    result = await assessPronunciation({ key: env.azureKey, region: env.azureRegion, wav, referenceText: text, locale });
+  } catch (err) {
+    log(`assess failed: ${err.message}`);
+    return sendJson(res, 502, { error: err.message });
+  }
+  log(`assess: "${text.slice(0, 40)}" → ${result.pron ?? result.accuracy}`);
+
+  const lesson = params.get("lesson");
+  if (lesson && /^[0-9a-f]{16}$/.test(lesson)) {
+    await lessons.addAttempt(lesson, {
+      at: new Date().toISOString(),
+      text,
+      pron: result.pron,
+      accuracy: result.accuracy,
+      fluency: result.fluency,
+      completeness: result.completeness
+    });
+  }
+  sendJson(res, 200, result);
+}
+
 /** GET/PATCH/DELETE /api/lessons[/<id>] — the saved-lesson library. */
 async function handleLessons(req, res, url) {
   const id = url.pathname.split("/")[3] ?? "";
@@ -653,6 +775,15 @@ async function handle(req, res) {
     }
     if (url.pathname === "/api/lesson" && req.method === "POST") {
       return await handleLesson(req, res);
+    }
+    if (url.pathname === "/api/practice/status" && req.method === "GET") {
+      return await handlePracticeStatus(res);
+    }
+    if (url.pathname === "/api/speak" && req.method === "POST") {
+      return await handleSpeak(req, res);
+    }
+    if (url.pathname === "/api/assess" && req.method === "POST") {
+      return await handleAssess(req, res, url.searchParams);
     }
     if (url.pathname === "/api/lessons" || url.pathname.startsWith("/api/lessons/")) {
       return await handleLessons(req, res, url);

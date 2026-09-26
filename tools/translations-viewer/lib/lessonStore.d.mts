@@ -67,6 +67,7 @@ export declare class LessonStore {
   get(id: string): Promise<SavedLesson | null>;
   put(saved: SavedLesson): Promise<SavedLesson>;
   update(id: string, changes: { note?: string; tags?: string[] }): Promise<SavedLesson | null>;
+  addAttempt(id: string, attempt: Record<string, unknown>): Promise<SavedLesson | null>;
   remove(id: string): Promise<boolean>;
   list(): Promise<LessonSummary[]>;
 }
