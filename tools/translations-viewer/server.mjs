@@ -384,6 +384,29 @@ function handleSearch(res, params) {
   });
 }
 
+/**
+ * GET /api/context?key=&before=&after=&q=&raw=&loaded=
+ * A search hit in its conversation. `key` is only meaningful for the load it
+ * came from, so the client echoes `loaded` (the loadedAt it saw) and a stale
+ * key after a reload gets a 409 instead of silently showing a different row.
+ */
+function handleContext(res, params) {
+  const index = requireIndex(res);
+  if (!index) return;
+  if (params.get("loaded") && params.get("loaded") !== index.loadedAt) {
+    return sendJson(res, 409, { error: "The data was reloaded — search again." });
+  }
+  const clamp = (v, d) => Math.min(Math.max(Number(v) || d, 0), 500);
+  const { match } = optionsFromQuery(params);
+  const result = index.context(Number(params.get("key")), {
+    before: clamp(params.get("before"), 15),
+    after: clamp(params.get("after"), 15),
+    match
+  });
+  if (!result) return sendJson(res, 404, { error: "That record isn't in the loaded data." });
+  sendJson(res, 200, result);
+}
+
 function summariseFilters(options) {
   const active = [];
   if (options.query) active.push(`text: ${options.query}`);
@@ -525,6 +548,9 @@ async function handle(req, res) {
     }
     if (url.pathname === "/api/search" && req.method === "GET") {
       return handleSearch(res, url.searchParams);
+    }
+    if (url.pathname === "/api/context" && req.method === "GET") {
+      return handleContext(res, url.searchParams);
     }
     if (url.pathname === "/api/export" && req.method === "GET") {
       return handleExport(res, url.searchParams);

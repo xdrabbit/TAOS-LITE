@@ -109,6 +109,42 @@
       }
       .hint { font-size: 11px; color: var(--muted); margin-top: 7px; }
       code { background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+
+      /* Results + the in-context panel. Side by side when there's room; on a
+         phone the panel covers the screen and ✕ returns to the results. */
+      .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+      .left { min-width: 0; }
+      body.detail-open main { max-width: 1600px; }
+      @media (min-width: 1000px) {
+        body.detail-open .layout { grid-template-columns: minmax(0, 1fr) minmax(380px, 44%); }
+      }
+      #detail {
+        position: sticky; top: 72px; margin: 0;
+        max-height: calc(100vh - 88px); overflow: auto; padding: 0;
+      }
+      @media (max-width: 999px) {
+        #detail { position: fixed; inset: 0; z-index: 10; max-height: none; border-radius: 0; }
+      }
+      .detail-head {
+        position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center;
+        padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+      }
+      .detail-head button { padding: 4px 10px; }
+      #detailBody { padding: 8px 12px 16px; }
+      .ctx { padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }
+      .ctx:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+      .ctx + .ctx { margin-top: 4px; }
+      .ctx.focus { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); cursor: default; }
+      .ctx .full { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .ctx .full + .full { margin-top: 4px; color: var(--muted); }
+      .ctx.focus .full + .full { color: var(--ink); }
+      .ctx .when-line { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+      .ctx .when-line button { padding: 2px 8px; font-size: 11px; margin-left: auto; }
+      .gap { text-align: center; font-size: 11px; color: var(--muted); padding: 6px 0; }
+      .more { display: block; margin: 6px auto; }
+      tbody tr { cursor: pointer; scroll-margin-top: 80px; }
+      tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent) !important; }
+      tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
     </style>
   </head>
   <body>
@@ -166,14 +202,31 @@
         <div class="stats" id="stats"><span class="muted">Load a source to begin.</span></div>
       </section>
 
-      <section class="panel" style="padding: 0; overflow: hidden">
-        <div id="results"><div class="empty">No data loaded.</div></div>
-      </section>
+      <div class="layout">
+        <div class="left">
+          <section class="panel" style="padding: 0; overflow: hidden">
+            <div id="results"><div class="empty">No data loaded.</div></div>
+          </section>
 
-      <div class="row" style="justify-content: center">
-        <button id="prevBtn" class="ghost">← Previous</button>
-        <span id="pageLabel" class="muted"></span>
-        <button id="nextBtn" class="ghost">Next →</button>
+          <div class="row" style="justify-content: center">
+            <button id="prevBtn" class="ghost">← Previous</button>
+            <span id="pageLabel" class="muted"></span>
+            <button id="nextBtn" class="ghost">Next →</button>
+          </div>
+        </div>
+
+        <!-- A clicked result, in its conversation. The results stay put. -->
+        <aside id="detail" class="panel" hidden>
+          <div class="detail-head">
+            <strong>In context</strong>
+            <span id="detailScope" class="muted"></span>
+            <span class="grow"></span>
+            <button id="detailPrev" class="ghost" title="Previous result (↑ or k)">↑</button>
+            <button id="detailNext" class="ghost" title="Next result (↓ or j)">↓</button>
+            <button id="detailClose" class="ghost" title="Close (Esc)">✕</button>
+          </div>
+          <div id="detailBody"></div>
+        </aside>
       </div>
     </main>
 
@@ -183,6 +236,9 @@
       let offset = 0;
       let lastTotal = 0;
       let loaded = null;
+      let pageRows = [];
+      // The in-context panel: which row it centres on, and how far it reaches.
+      const detail = { key: null, before: 15, after: 15 };
 
       const escapeHtml = (value) =>
         String(value ?? "").replace(/[&<>"']/g, (c) => ({
@@ -338,6 +394,7 @@
           if (!res.ok) throw new Error(data.error || "load failed");
           loaded = data;
           offset = 0;
+          closeDetail(); // row keys belong to the previous load
           applySummary(data);
           await search();
           toast(`Loaded ${data.summary.total.toLocaleString()} records.`);
@@ -411,6 +468,7 @@
         }
 
         lastTotal = data.total;
+        pageRows = data.rows;
         renderRows(data);
         const shown = data.rows.length;
         $("pageLabel").textContent = data.total
@@ -429,14 +487,15 @@
           return;
         }
         const body = data.rows
-          .map((row) => {
+          .map((row, i) => {
             const meta = [row.source_lang, "→", row.target_lang]
               .filter(Boolean)
               .join(" ");
             const tags = [row.tone, row.engine].filter(Boolean).join(" · ");
             const chat = row.source_table && row.source_table.includes("chat_messages");
+            const selected = detail.key === row.key ? ' class="selected"' : "";
             return `
-              <tr>
+              <tr data-i="${i}"${selected}>
                 <td class="when">${escapeHtml(mountainTime(row.created_at))}
                   <div class="meta">${escapeHtml(meta)}</div>
                 </td>
@@ -452,6 +511,178 @@
             <tbody>${body}</tbody>
           </table>`;
       }
+
+      // ------------------------------------------------ in-context panel
+
+      const shortId = (id) => (id ? String(id).slice(0, 8) : "");
+
+      // Clipboard API needs a secure context, which the Tailscale address
+      // (plain http) is not — fall back to the old textarea trick there.
+      async function copyText(text) {
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch { /* fall through */ }
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch { ok = false; }
+        area.remove();
+        return ok;
+      }
+
+      function markSelected() {
+        document.querySelectorAll("#results tr.selected").forEach((tr) => tr.classList.remove("selected"));
+        const i = pageRows.findIndex((r) => r.key === detail.key);
+        if (i < 0) return null;
+        const tr = document.querySelector(`#results tr[data-i="${i}"]`);
+        if (tr) {
+          tr.classList.add("selected");
+          tr.scrollIntoView({ block: "nearest" });
+        }
+        return i;
+      }
+
+      async function openDetail(key, { keepWindow = false } = {}) {
+        if (!keepWindow) { detail.before = 15; detail.after = 15; }
+        detail.key = key;
+        document.body.classList.add("detail-open");
+        $("detail").hidden = false;
+        markSelected();
+
+        const params = queryString();
+        params.set("key", String(key));
+        params.set("before", String(detail.before));
+        params.set("after", String(detail.after));
+        if (loaded && loaded.loadedAt) params.set("loaded", loaded.loadedAt);
+        const res = await fetch("/api/context?" + params.toString());
+        const data = await res.json();
+        if (detail.key !== key) return; // a newer click won
+        if (!res.ok) {
+          $("detailBody").innerHTML = '<div class="empty danger">' + escapeHtml(data.error) + "</div>";
+          return;
+        }
+        renderDetail(data);
+      }
+
+      function renderDetail(data) {
+        $("detailScope").textContent =
+          data.scope === "user"
+            ? `· this person's translations, in order`
+            : "· no user on this record — neighbours from everyone";
+        const items = data.rows.map((row) => {
+          const focus = row.key === data.key;
+          const langs = [row.source_lang, row.target_lang].filter(Boolean).join(" → ");
+          const tags = [langs, row.engine, row.source_table && row.source_table.includes("chat") ? "chat" : ""]
+            .filter(Boolean).join(" · ");
+          return `
+            <div class="ctx${focus ? " focus" : ""}" data-key="${row.key}">
+              <div class="when-line">
+                <span>${escapeHtml(mountainTime(row.created_at))}</span>
+                <span>${escapeHtml(tags)}</span>
+                ${focus && row.user_id ? `<span title="${escapeHtml(row.user_id)}">user ${escapeHtml(shortId(row.user_id))}</span>` : ""}
+                ${focus ? '<button class="ghost" data-copy>Copy</button>' : ""}
+              </div>
+              <div class="full">${renderSnippet(row.original_marked, row.original_text)}</div>
+              <div class="full">${renderSnippet(row.translation_marked, row.translation_text)}</div>
+            </div>`;
+        });
+        $("detailBody").innerHTML =
+          (data.truncatedBefore ? '<button class="ghost more" data-more="before">Show 20 earlier</button>' : '<div class="gap">start of their history</div>') +
+          items.join("") +
+          (data.truncatedAfter ? '<button class="ghost more" data-more="after">Show 20 later</button>' : '<div class="gap">end of their history</div>');
+
+        const focusEl = $("detailBody").querySelector(".ctx.focus");
+        const panel = $("detail");
+        if (focusEl) {
+          // Centre the hit inside the panel without scrolling the page. Again
+          // after the next frame: the first open reflows the results beside it
+          // (the grid gains a column), which moves the hit after we measured.
+          // A long message can be taller than the panel: then show its start,
+          // just under the sticky header, rather than its middle.
+          const centre = () => {
+            const head = panel.querySelector(".detail-head").offsetHeight;
+            const room = panel.clientHeight - head;
+            panel.scrollTop =
+              focusEl.offsetHeight > room * 0.8
+                ? focusEl.offsetTop - head - 8
+                : focusEl.offsetTop - head - (room - focusEl.offsetHeight) / 2;
+          };
+          centre();
+          requestAnimationFrame(() => requestAnimationFrame(centre));
+        }
+        const focusRow = data.rows.find((r) => r.key === data.key);
+        const copyBtn = $("detailBody").querySelector("[data-copy]");
+        if (copyBtn && focusRow) {
+          copyBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const ok = await copyText(`${focusRow.original_text}\n${focusRow.translation_text}`);
+            toast(ok ? "Copied." : "Couldn't copy — select the text instead.", !ok);
+          });
+        }
+      }
+
+      function closeDetail() {
+        detail.key = null;
+        $("detail").hidden = true;
+        document.body.classList.remove("detail-open");
+        document.querySelectorAll("#results tr.selected").forEach((tr) => tr.classList.remove("selected"));
+      }
+
+      // Step through the RESULTS (not the context), crossing pages if needed.
+      async function stepResult(delta) {
+        let i = pageRows.findIndex((r) => r.key === detail.key);
+        if (i < 0) i = delta > 0 ? -1 : pageRows.length;
+        let next = i + delta;
+        if (next >= pageRows.length) {
+          if (offset + PAGE >= lastTotal) return;
+          offset += PAGE;
+          await search();
+          next = 0;
+        } else if (next < 0) {
+          if (offset === 0) return;
+          offset = Math.max(0, offset - PAGE);
+          await search();
+          next = pageRows.length - 1;
+        }
+        if (pageRows[next]) openDetail(pageRows[next].key);
+      }
+
+      $("results").addEventListener("click", (e) => {
+        if (window.getSelection && String(window.getSelection()).length) return; // selecting text, not opening
+        const tr = e.target.closest("tr[data-i]");
+        if (!tr) return;
+        const row = pageRows[Number(tr.dataset.i)];
+        if (row) openDetail(row.key);
+      });
+      $("detailBody").addEventListener("click", (e) => {
+        const more = e.target.closest("[data-more]");
+        if (more) {
+          detail[more.dataset.more] += 20;
+          openDetail(detail.key, { keepWindow: true });
+          return;
+        }
+        if (String(window.getSelection()).length) return;
+        const ctx = e.target.closest(".ctx[data-key]");
+        if (ctx && !ctx.classList.contains("focus")) openDetail(Number(ctx.dataset.key));
+      });
+      $("detailClose").addEventListener("click", closeDetail);
+      $("detailPrev").addEventListener("click", () => stepResult(-1));
+      $("detailNext").addEventListener("click", () => stepResult(1));
+      document.addEventListener("keydown", (e) => {
+        if (!detail.key) return;
+        const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? "");
+        if (e.key === "Escape") { closeDetail(); return; }
+        if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); stepResult(1); }
+        if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); stepResult(-1); }
+      });
 
       function download() {
         if (!loaded) return toast("Load a source first.", true);
