@@ -18,6 +18,8 @@ export interface SavedLesson {
   createdAt: string;
   updatedAt: string;
   model: string;
+  target: string | null;
+  explain: string;
   usage: Record<string, number> | null;
   selection: string;
   sources: Array<{
@@ -44,13 +46,18 @@ export interface LessonSummary {
   english: string;
   sentenceCount: number;
   language: string;
+  explain: string;
   note: string;
   tags: string[];
   sourceAt: string | null;
 }
 
 export declare function recordIdentity(record: LessonSourceRecord): string;
-export declare function lessonId(records: LessonSourceRecord[], selection?: string): string;
+export declare function lessonId(
+  records: LessonSourceRecord[],
+  selection?: string,
+  langs?: { target: string; explain: string; isDefault: boolean } | null
+): string;
 export declare function summary(saved: SavedLesson): LessonSummary;
 export declare function newSavedLesson(input: {
   id: string;
@@ -59,6 +66,8 @@ export declare function newSavedLesson(input: {
   records: LessonSourceRecord[];
   selection?: string;
   usage?: Record<string, number> | null;
+  target?: string | null;
+  explain?: string;
 }): SavedLesson;
 
 export declare class LessonStore {

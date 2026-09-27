@@ -22,7 +22,14 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { dedupe, parseExport, summarise } from "./lib/records.mjs";
-import { LESSON_MODEL_DEFAULT, buildLessonPrompt, generateLesson } from "./lib/lesson.mjs";
+import {
+  LESSON_MODEL_DEFAULT,
+  buildLessonPrompt,
+  generateLesson,
+  languageName,
+  languagesIn,
+  targetSide
+} from "./lib/lesson.mjs";
 import { LessonStore, lessonId, newSavedLesson } from "./lib/lessonStore.mjs";
 import { assessPronunciation, azureLocale, describeScoring, speak } from "./lib/practice.mjs";
 import { TranslationIndex, buildMatchQuery, parseDateBound } from "./lib/index-db.mjs";
@@ -445,7 +452,24 @@ async function handleLesson(req, res) {
   if (!records.length) return sendJson(res, 400, { error: "Pick a message to make a lesson from." });
   const selection = String(body.selection ?? "").slice(0, 2000);
 
-  const id = lessonId(records, selection);
+  // Which language to learn and which to be taught in. Defaults keep the
+  // original behaviour: the non-English side, explained in English.
+  const code = (v) => (typeof v === "string" && /^[a-z]{2,3}$/.test(v) ? v : null);
+  const autoTarget = targetSide(records[0]).lang;
+  const target = code(body.target) ?? autoTarget;
+  const explain = code(body.explain) ?? "en";
+  if (target === explain) {
+    return sendJson(res, 400, { error: `Pick a different language to explain ${languageName(target)} in.` });
+  }
+  const missing = records.find((r) => !targetSide(r, target));
+  if (missing) {
+    const has = languagesIn([missing]).map(languageName).join(" and ");
+    return sendJson(res, 400, {
+      error: `This message has no ${languageName(target)} side (it's ${has || "unlabelled"}). Pick a message in ${languageName(target)}, or change "Learning".`
+    });
+  }
+
+  const id = lessonId(records, selection, { target, explain, isDefault: target === autoTarget && explain === "en" });
   const existing = await lessons.get(id);
   if (existing && !body.force) return sendJson(res, 200, { saved: withKey(existing), cached: true });
 
@@ -462,7 +486,7 @@ async function handleLesson(req, res) {
   const picked = new Set(records.map((r) => r.key));
   const context = (around?.rows ?? []).filter((r) => !picked.has(r.key));
 
-  const prompt = buildLessonPrompt({ selection, records, context });
+  const prompt = buildLessonPrompt({ selection, records, context, target, explain });
   const started = Date.now();
   let generated;
   try {
@@ -476,7 +500,8 @@ async function handleLesson(req, res) {
     `lesson ${id}: ${lesson.sentences.length} sentence(s), ${model}, ${Date.now() - started}ms` +
       (usage ? `, ${usage.prompt_tokens}+${usage.completion_tokens} tokens` : "")
   );
-  const saved = newSavedLesson({ id, lesson, model, records, selection, usage });
+  lesson.explain_language = explain;
+  const saved = newSavedLesson({ id, lesson, model, records, selection, usage, target, explain });
   if (existing) {
     // Regenerating replaces the lesson, not what Tom wrote about it.
     saved.createdAt = existing.createdAt;

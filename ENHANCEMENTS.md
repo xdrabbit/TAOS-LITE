@@ -538,6 +538,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     hago una pasta rapidita" scored 98.8 against that sentence and 13.2
     against a different one. Still to do: the substitution drill,
     recall-from-English, and a review queue built from saved attempts.
+  - LANGUAGES selectable (2026-09-27): "Learning" and "Explained in". Liz
+    can learn English from the same history, explained in Spanish, with
+    mistakes typical of a Spanish speaker ("I'll make to her a pasta quick").
+    Headings are localised for English and Spanish only; other explanation
+    languages get English headings.
   (added 2026-09-26 from Tom's idea)
 - Group chat — e.g. 1 Spanish + 3 English speakers, everyone reads the whole
   conversation in their own language. Schema (threads/members/messages) is

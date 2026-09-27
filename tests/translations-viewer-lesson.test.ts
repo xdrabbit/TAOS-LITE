@@ -50,19 +50,60 @@ const goodLesson = {
 
 describe("targetSide — which side is being learned", () => {
   it("is the Spanish side whichever way the record ran", () => {
-    expect(targetSide(record()).text).toBe("Ya te lo dije ayer");
+    expect(targetSide(record())?.text).toBe("Ya te lo dije ayer");
     const enToEs = record({
       source_lang: "en",
       target_lang: "es",
       original_text: "I already told you",
       translation_text: "Ya te lo dije"
     });
-    expect(targetSide(enToEs)).toMatchObject({ lang: "es", text: "Ya te lo dije", english: "I already told you" });
+    expect(targetSide(enToEs)).toMatchObject({ lang: "es", text: "Ya te lo dije", other: "I already told you" });
+  });
+
+  it("picks the side in a chosen language, and says null when the record has none", () => {
+    // Liz learning English from the same message Tom learns Spanish from.
+    expect(targetSide(record(), "en")).toMatchObject({
+      lang: "en",
+      text: "I already told you yesterday",
+      other: "Ya te lo dije ayer",
+      otherLang: "es"
+    });
+    expect(targetSide(record(), "it")).toBeNull();
   });
 
   it("falls back to Spanish in the translation when a record names no languages", () => {
     const bare = record({ source_lang: null, target_lang: null, original_text: "hi", translation_text: "hola" });
     expect(targetSide(bare)).toMatchObject({ lang: "es", text: "hola" });
+  });
+});
+
+describe("buildLessonPrompt — learning and explanation languages", () => {
+  it("defaults to teaching Spanish to an English speaker, in English", () => {
+    const { system, lang, explain } = buildLessonPrompt({ records: [record()] });
+    expect(lang).toBe("es");
+    expect(explain).toBe("en");
+    expect(system).toMatch(/Spanish teacher for an adult native English speaker/);
+    expect(system).toMatch(/WRITE THE LESSON IN ENGLISH/);
+    expect(system).toMatch(/dije te/);
+  });
+
+  it("teaches English to a Spanish speaker, written in Spanish, with a Spanish speaker's mistakes", () => {
+    const { system, user, lang } = buildLessonPrompt({ records: [record()], target: "en", explain: "es" });
+    expect(lang).toBe("en");
+    expect(system).toMatch(/English teacher for an adult native Spanish speaker/);
+    expect(system).toMatch(/WRITE THE LESSON IN SPANISH/);
+    expect(system).toMatch(/"Is raining"/);
+    expect(system).toMatch(/"I have 30 years"/);
+    expect(system).not.toMatch(/dije te/); // the English speaker's mistakes don't belong here
+    // The English side is what gets taught.
+    expect(user).toContain("English: I already told you yesterday");
+    expect(user).toContain("Spanish: Ya te lo dije ayer");
+  });
+
+  it("describes any other pair generically", () => {
+    const { system } = buildLessonPrompt({ records: [record()], target: "es", explain: "it" });
+    expect(system).toMatch(/native Italian speaker/);
+    expect(system).toMatch(/WRITE THE LESSON IN ITALIAN/);
   });
 });
 
@@ -84,7 +125,7 @@ describe("buildLessonPrompt", () => {
     expect(system).toMatch(/COLLOQUIAL speech is not an/);
     expect(system).toMatch(/or vulgar/);
     expect(system).toMatch(/capital letter or a final period alone is not worth reporting/);
-    expect(system).toMatch(/Only the sentence itself — no commentary/);
+    expect(system).toMatch(/Only the sentence itself — no\s+commentary/);
   });
 
   it("carries the selection, the record, and context marked as not-to-teach", () => {
