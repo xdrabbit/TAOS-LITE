@@ -112,7 +112,7 @@ press **Make a lesson from this**. The picked message and a few neighbours
 they're in that order (with the mistake an English speaker would make, struck
 through), what it means in context, and build-up chunks to say out loud.
 
-- **Learning / Explained in** (top of the context panel, remembered per
+- **Learning / Explained in** (the search area, next to Table; remembered per
   browser) set the language being taught and the language the lesson is
   written in, headings included (English and Spanish chrome; other
   languages get English headings). The same message makes a different lesson

@@ -130,9 +130,6 @@
         padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
       }
       .detail-head button { padding: 4px 10px; }
-      .lang-row { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
-      .lang-row label { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 12px; }
-      .lang-row select { padding: 3px 6px; }
       #detailBody { padding: 8px 12px 16px; }
       .ctx { padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }
       .ctx:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
@@ -244,6 +241,8 @@
           <label>To lang<select id="target_lang"></select></label>
           <label>Engine<select id="engine"></select></label>
           <label>Table<select id="table"></select></label>
+          <label title="The language lessons teach">Lessons: learning<select id="learnLang"></select></label>
+          <label title="The language lessons are written in">explained in<select id="explainLang"></select></label>
           <label style="flex-direction: row; align-items: center; gap: 6px; text-transform: none; font-size: 12px">
             <input id="raw" type="checkbox" style="width: 15px; height: 15px" />
             Raw FTS5 syntax
@@ -285,10 +284,6 @@
             <button id="detailPrev" class="ghost" title="Previous result (↑ or k)">↑</button>
             <button id="detailNext" class="ghost" title="Next result (↓ or j)">↓</button>
             <button id="detailClose" class="ghost" title="Close (Esc)">✕</button>
-          </div>
-          <div class="lang-row">
-            <label>Learning <select id="learnLang"></select></label>
-            <label>Explained in <select id="explainLang"></select></label>
           </div>
           <div id="detailBody"></div>
         </aside>
@@ -760,6 +755,9 @@
         showSheet("Lesson");
         shownLesson = null;
         $("lessonBody").innerHTML = WRITING;
+        if (body.target) {
+          $("lessonMeta").textContent = `${langName(body.target)}, explained in ${langName(body.explain || "en")}`;
+        }
         try {
           const res = await fetch("/api/lesson", {
             method: "POST",
