@@ -20,10 +20,18 @@ export function recordIdentity(r) {
   return `t${r.created_ms ?? r.created_at ?? ""}#${r.original_text ?? ""}#${r.translation_text ?? ""}`;
 }
 
-/** The id a lesson is saved under: its sources and its selection, hashed. */
-export function lessonId(records, selection = "") {
-  const basis = JSON.stringify([records.map(recordIdentity), String(selection).trim()]);
-  return createHash("sha256").update(basis).digest("hex").slice(0, 16);
+/**
+ * The id a lesson is saved under: its sources, its selection and — when they
+ * aren't the original default — its languages, hashed. The same message makes
+ * a different lesson in each direction (Spanish explained in English is not
+ * English explained in Spanish). `langs.isDefault` keeps lessons saved before
+ * languages were selectable (non-English side, explained in English) at the
+ * id they already have.
+ */
+export function lessonId(records, selection = "", langs = null) {
+  const parts = [records.map(recordIdentity), String(selection).trim()];
+  if (langs && !langs.isDefault) parts.push(`${langs.target}>${langs.explain}`);
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 16);
 }
 
 const VALID_ID = /^[0-9a-f]{16}$/;
@@ -121,7 +129,8 @@ export function summary(saved) {
     title: sentences[0]?.target ?? "",
     english: sentences[0]?.english ?? "",
     sentenceCount: sentences.length,
-    language: saved.lesson?.target_language ?? "",
+    language: saved.target ?? saved.lesson?.target_language ?? "",
+    explain: saved.explain ?? "en",
     note: saved.note ?? "",
     tags: saved.tags ?? [],
     sourceAt: saved.sources?.[0]?.created_at ?? null
@@ -129,7 +138,7 @@ export function summary(saved) {
 }
 
 /** Build the record to save from a fresh generation. */
-export function newSavedLesson({ id, lesson, model, records, selection, usage }) {
+export function newSavedLesson({ id, lesson, model, records, selection, usage, target = null, explain = "en" }) {
   const now = new Date().toISOString();
   return {
     id,
@@ -137,6 +146,8 @@ export function newSavedLesson({ id, lesson, model, records, selection, usage })
     createdAt: now,
     updatedAt: now,
     model,
+    target: target ?? lesson?.target_language ?? null,
+    explain,
     usage: usage ?? null,
     selection: String(selection ?? "").trim(),
     // Enough to find the message again and to show where the lesson came from,

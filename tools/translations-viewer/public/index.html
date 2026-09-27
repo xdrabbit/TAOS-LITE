@@ -130,6 +130,9 @@
         padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
       }
       .detail-head button { padding: 4px 10px; }
+      .lang-row { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+      .lang-row label { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 12px; }
+      .lang-row select { padding: 3px 6px; }
       #detailBody { padding: 8px 12px 16px; }
       .ctx { padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }
       .ctx:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
@@ -282,6 +285,10 @@
             <button id="detailPrev" class="ghost" title="Previous result (↑ or k)">↑</button>
             <button id="detailNext" class="ghost" title="Next result (↓ or j)">↓</button>
             <button id="detailClose" class="ghost" title="Close (Esc)">✕</button>
+          </div>
+          <div class="lang-row">
+            <label>Learning <select id="learnLang"></select></label>
+            <label>Explained in <select id="explainLang"></select></label>
           </div>
           <div id="detailBody"></div>
         </aside>
@@ -479,6 +486,7 @@
       }
 
       function applySummary(data) {
+        fillLanguageSelects(data.summary);
         const s = data.summary;
         $("sourceLabel").textContent =
           data.source.kind === "live"
@@ -768,7 +776,41 @@
           $("lessonBody").innerHTML = '<div class="empty danger">' + escapeHtml(err.message) + "</div>";
         }
       }
-      const openLesson = (keys, selection = "") => lessonRequest({ keys, selection });
+      // Learning / Explained in. Remembered per browser; a per-viewer
+      // convenience, so localStorage (guarded — it can throw or be empty).
+      const langName = (code) => {
+        try { return new Intl.DisplayNames(["en"], { type: "language" }).of(code) || code; } catch { return code; }
+      };
+      const store = {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
+      };
+      function fillLanguageSelects(summary) {
+        const inData = [...new Set([...(summary?.sourceLangs || []), ...(summary?.targetLangs || [])].map((t) => t.value))];
+        const learn = [...new Set(["es", "en", ...inData])];
+        const explain = [...new Set(["en", "es", ...inData])];
+        const fill = (id, codes, saved, fallback) => {
+          const sel = $(id);
+          sel.innerHTML = codes.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(langName(c))}</option>`).join("");
+          sel.value = codes.includes(saved) ? saved : fallback;
+        };
+        fill("learnLang", learn, store.get("learnLang"), "es");
+        fill("explainLang", explain, store.get("explainLang"), "en");
+      }
+      for (const id of ["learnLang", "explainLang"]) {
+        $(id).addEventListener("change", () => {
+          if ($("learnLang").value === $("explainLang").value) {
+            // Learning Spanish explained in Spanish isn't a lesson; swap the other one.
+            const other = id === "learnLang" ? "explainLang" : "learnLang";
+            $(other).value = $(id).value === "en" ? "es" : "en";
+          }
+          store.set("learnLang", $("learnLang").value);
+          store.set("explainLang", $("explainLang").value);
+        });
+      }
+      fillLanguageSelects(null);
+      const chosenLangs = () => ({ target: $("learnLang").value, explain: $("explainLang").value });
+      const openLesson = (keys, selection = "") => lessonRequest({ keys, selection, ...chosenLangs() });
 
       async function openSavedLesson(id) {
         const seq = ++lessonSeq;
@@ -846,7 +888,7 @@
             <div class="lib-item" data-id="${e(l.id)}" data-text="${e((l.title + " " + l.english + " " + l.note).toLowerCase())}">
               <div class="lib-title">${e(l.title)}</div>
               <div class="lib-en">${e(l.english)}${l.sentenceCount > 1 ? ` <span class="muted">+${l.sentenceCount - 1} more</span>` : ""}</div>
-              <div class="lib-meta">${e(shortDate(l.createdAt))}${l.note ? ` · ${e(l.note.slice(0, 80))}` : ""}</div>
+              <div class="lib-meta">${e(langName(l.language || "es"))} · explained in ${e(langName(l.explain || "en"))} · ${e(shortDate(l.createdAt))}${l.note ? ` · ${e(l.note.slice(0, 80))}` : ""}</div>
             </div>`).join("") +
           "</div>";
         $("libFilter").addEventListener("input", (ev) => {
@@ -886,7 +928,13 @@
           if (!keys.length || keys.some((k) => k == null)) {
             return toast("Load data that contains this message to regenerate it.", true);
           }
-          return lessonRequest({ keys, selection: shownLesson.selection, force: true });
+          return lessonRequest({
+            keys,
+            selection: shownLesson.selection,
+            force: true,
+            target: shownLesson.target || shownLesson.lesson.target_language,
+            explain: shownLesson.explain || "en"
+          });
         }
         if (act === "delete") {
           const btn = ev.target.closest("[data-act]");
@@ -1115,12 +1163,31 @@
         }
       });
 
+      // Lesson headings follow "Explained in". Other languages fall back to English.
+      const LESSON_LABELS = {
+        en: {
+          words: "The words", why: "Why this order", literal: "Word for word",
+          trap: (x) => `${x} order ✗`, right: (t) => `${t} order ✓`,
+          context: "In context", build: "Build it up — say each one out loud"
+        },
+        es: {
+          words: "Las palabras", why: "Por qué este orden", literal: "Palabra por palabra",
+          trap: (x) => `Orden del ${x} ✗`, right: (t) => `Orden del ${t} ✓`,
+          context: "En contexto", build: "Constrúyelo — di cada una en voz alta"
+        }
+      };
+
       function renderLesson(lesson, saved = null) {
         const e = escapeHtml;
-        let langName = lesson.target_language || "Spanish";
-        try {
-          langName = new Intl.DisplayNames(["en"], { type: "language" }).of(lesson.target_language) || langName;
-        } catch { /* not a code Intl knows */ }
+        const target = saved?.target || lesson.target_language || "es";
+        const explain = saved?.explain || lesson.explain_language || "en";
+        // Language names in the lesson's own language: "inglés", not "English".
+        const nameIn = (code) => {
+          try { return new Intl.DisplayNames([explain], { type: "language" }).of(code) || code; } catch { return langName(code); }
+        };
+        const tName = nameIn(target);
+        const xName = nameIn(explain);
+        const L = LESSON_LABELS[explain] || LESSON_LABELS.en;
         const sections = lesson.sentences.map((s) => {
           const words = s.words
             .map((w) => `<div class="w" title="${e(w.lemma && w.lemma !== w.text ? "from " + w.lemma : "")}">
@@ -1137,22 +1204,22 @@
               <div class="sentence-say">${sayControls(s.target, lesson.target_language, saved)}</div>
               ${s.as_said ? `<div class="hint">Captured as: “${e(s.as_said)}” — cleaned up above.</div>` : ""}
 
-              <h4>The words</h4>
+              <h4>${e(L.words)}</h4>
               <div class="words">${words}</div>
               ${notes ? `<ul class="notes">${notes}</ul>` : ""}
 
-              <h4>Why this order</h4>
+              <h4>${e(L.why)}</h4>
               <div class="order">
-                ${s.literal ? `<span class="lbl">Word for word</span><span>${e(s.literal)}</span>` : ""}
-                ${s.english_order_trap ? `<span class="lbl">English order ✗</span><span class="trap">${e(s.english_order_trap)}</span>` : ""}
-                <span class="lbl">${e(langName)} order ✓</span><span class="right">${e(s.target)}</span>
+                ${s.literal ? `<span class="lbl">${e(L.literal)}</span><span>${e(s.literal)}</span>` : ""}
+                ${s.english_order_trap ? `<span class="lbl">${e(L.trap(xName))}</span><span class="trap">${e(s.english_order_trap)}</span>` : ""}
+                <span class="lbl">${e(L.right(tName))}</span><span class="right">${e(s.target)}</span>
               </div>
               ${rules ? `<ul class="rules">${rules}</ul>` : ""}
 
-              <h4>In context</h4>
+              <h4>${e(L.context)}</h4>
               <div>${e(s.context_meaning)} ${s.register ? `<span class="pill">${e(s.register)}</span>` : ""}</div>
 
-              ${s.chunks.length ? `<h4>Build it up — say each one out loud</h4>
+              ${s.chunks.length ? `<h4>${e(L.build)}</h4>
               <ol class="chunks">${s.chunks.map((c) => `<li><div>${e(c)}</div>${sayControls(c, lesson.target_language, saved)}</li>`).join("")}</ol>` : ""}
             </section>`;
         });

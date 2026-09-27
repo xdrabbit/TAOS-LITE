@@ -112,6 +112,14 @@ press **Make a lesson from this**. The picked message and a few neighbours
 they're in that order (with the mistake an English speaker would make, struck
 through), what it means in context, and build-up chunks to say out loud.
 
+- **Learning / Explained in** (top of the context panel, remembered per
+  browser) set the language being taught and the language the lesson is
+  written in, headings included (English and Spanish chrome; other
+  languages get English headings). The same message makes a different lesson
+  per direction: Tom learns Spanish from it, and Liz can learn English from
+  it explained in Spanish, with a Spanish speaker's mistakes ("I have there
+  some ravioli"). A message without the chosen language says so instead of
+  guessing. Lessons made before this keep their ids.
 - Model: `gpt-5.5` by default, or `TRANSLATIONS_LESSON_MODEL`. `gpt-4.1` was
   tried first and marked correct, flexible word orders as mistakes.
 - It's slow: about 15 seconds a sentence.

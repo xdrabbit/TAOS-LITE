@@ -45,6 +45,15 @@ describe("lesson identity", () => {
     expect(lessonId([rec()])).not.toBe(lessonId([rec({ id: "t2" })]));
   });
 
+  it("keeps pre-existing lessons at their id, and gives each other direction its own", () => {
+    const old = lessonId([rec()]);
+    // Spanish explained in English was the only direction before; same id.
+    expect(lessonId([rec()], "", { target: "es", explain: "en", isDefault: true })).toBe(old);
+    const lizDirection = lessonId([rec()], "", { target: "en", explain: "es", isDefault: false });
+    expect(lizDirection).not.toBe(old);
+    expect(lessonId([rec()], "", { target: "es", explain: "it", isDefault: false })).not.toBe(lizDirection);
+  });
+
   it("uses time + text for id-less rows from old exports", () => {
     const a = rec({ id: null });
     expect(recordIdentity(a)).toContain("Ya te lo dije");
