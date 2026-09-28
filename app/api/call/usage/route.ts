@@ -37,6 +37,8 @@ interface UsageBody {
   transport?: string;
   /** How many VAD speech segments this phone's interpreter heard. */
   speechStarted?: number;
+  /** `openai` | `gemini` — which interpreter spent it (the 9/28 bake-off). */
+  engine?: string;
 }
 
 function num(value: unknown, max: number): number {
@@ -70,8 +72,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // log line that Tom reads as fact, so a phone with a bad clock or a bad
   // build cannot write "usd=99999" into it. The ceilings are absurd-call
   // sized — an hour is the API's own session limit.
+  const engine = body.engine === "gemini" ? "gemini" : "openai";
+  const ttsEngine =
+    incoming.ttsEngine === "openai" || incoming.ttsEngine === "none"
+      ? incoming.ttsEngine
+      : "elevenlabs";
   const spend: CallSpend = {
-    ...emptySpend(incoming.ttsEngine === "openai" ? "openai" : "elevenlabs"),
+    ...emptySpend(ttsEngine, engine),
     responses: num(incoming.responses, 5000),
     textInTokens: num(incoming.textInTokens, 5_000_000),
     cachedTextInTokens: num(incoming.cachedTextInTokens, 5_000_000),
@@ -86,7 +93,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   console.info(
     costLogLine({
       room: safeLabel(body.room),
-      mode: body.mode === "instant" ? "instant" : "clone",
+      // "native" is the Gemini arm: the model speaks in its own voice.
+      mode: body.mode === "instant" || body.mode === "native" ? body.mode : "clone",
       direction: safeLabel(body.direction),
       seconds: num(body.seconds, 4 * 3600),
       spend,

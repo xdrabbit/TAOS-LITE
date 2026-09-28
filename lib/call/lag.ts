@@ -43,6 +43,25 @@
 //
 // audio_arrival_ms climbing = bridge. audio_arrival_ms flat while wait_ms
 // climbs (and gate_ms does not) = history. heard_ms late = bridge.
+//
+// ── engine=gemini lines ────────────────────────────────────────────────────
+// Same fields, same clock, one anchor moved. Gemini streams: there is no VAD
+// event, no transcription-completed event and no response to request. So
+// lib/call/interpreterGemini.ts marks a turn itself, from quiet gaps in the
+// stream, and the anchors become:
+//
+//   speech end        the last voiced 100ms chunk this phone SENT, on the
+//                     session's sent-audio clock (OpenAI: audio_end_ms).
+//   vad_lag_ms        speech end → the last input-transcript piece arrived.
+//   transcription_ms  0. The transcript going quiet IS the stop signal.
+//   gate_ms           0. Nothing is held back; there is no gate.
+//   wait_ms           last input-transcript piece → first translated word.
+//                     NEGATIVE is normal: Gemini starts translating before
+//                     the speaker stops, which is its whole pitch.
+//   generation_ms     first translated word → last translated word.
+//
+// heard_ms and audio_arrival_ms mean exactly what they mean for OpenAI, and
+// heard_ms is the number to put side by side.
 
 /** What a line is about. */
 export type LagKind = "turn" | "session_reset" | "manual_resync";
@@ -59,6 +78,13 @@ export type LagReason =
   | "auto_end_max_duration";
 
 export const LAG_TAG = "[taos-call-lag]";
+
+/**
+ * Which interpreter produced a line. Tom's Gemini bake-off (2026-09-28) runs
+ * both engines on the same screen, so every line says which one it measured.
+ */
+export type LagEngine = "openai" | "gemini";
+const LAG_ENGINES: readonly LagEngine[] = ["openai", "gemini"];
 
 const LAG_KINDS: readonly LagKind[] = ["turn", "session_reset", "manual_resync"];
 const LAG_REASONS: readonly LagReason[] = [
@@ -96,6 +122,8 @@ export interface LagRecord {
   kind: LagKind;
   /** "es->en" — which phone's interpreter this is, without naming anyone. */
   pair: string;
+  /** Absent on lines from a build that predates the Gemini arm: openai. */
+  engine?: LagEngine;
   reason?: LagReason;
   values: Partial<Record<LagField, number | null>>;
 }
@@ -117,7 +145,13 @@ export function lagLabel(value: unknown, max = 12): string {
  * missing `heard_ms` is itself information.
  */
 export function lagLogLine(record: LagRecord, room: string): string {
-  const parts = [LAG_TAG, record.kind, `room=${lagLabel(room)}`, `pair=${lagLabel(record.pair)}`];
+  const parts = [
+    LAG_TAG,
+    record.kind,
+    `room=${lagLabel(room)}`,
+    `pair=${lagLabel(record.pair)}`,
+    `engine=${record.engine ?? "openai"}`
+  ];
   if (record.kind === "session_reset") parts.push(`reason=${record.reason ?? "?"}`);
   for (const field of KIND_FIELDS[record.kind]) {
     const v = record.values[field];
@@ -146,7 +180,8 @@ export function sanitizeLagRecord(raw: unknown): LagRecord | null {
         ? Math.min(Math.max(Math.round(v), -LAG_MAX_MS), LAG_MAX_MS)
         : null;
   }
-  return { kind, pair: lagLabel(r.pair), ...(reason ? { reason } : {}), values };
+  const engine = LAG_ENGINES.find((e) => e === r.engine) ?? "openai";
+  return { kind, pair: lagLabel(r.pair), engine, ...(reason ? { reason } : {}), values };
 }
 
 // ── The phone's side ───────────────────────────────────────────────────────
@@ -154,6 +189,13 @@ export function sanitizeLagRecord(raw: unknown): LagRecord | null {
 /**
  * One interpreter session's measurements. The interpreter feeds it events as
  * they arrive; it never reads a clock of its own.
+ *
+ * `at` is for an engine that learns WHEN something happened after the fact.
+ * Gemini's interpreter has no turn events at all — it streams — so it
+ * decides where a turn began and ended once the stream goes quiet, and then
+ * replays the turn here with the `performance.now()` times it recorded as
+ * each piece arrived. Omitted, every event is stamped on arrival, which is
+ * what the OpenAI path does.
  */
 export interface LagSession {
   /** The session's peer connection reached `connected`. */
@@ -162,15 +204,20 @@ export interface LagSession {
    * VAD closed a segment. `audioEndMs` is the event's `audio_end_ms` (OpenAI's
    * audio clock); `audioArrivalMs` is the bridge's drift at this moment.
    */
-  speechStopped: (itemId: string | null, audioEndMs: number | null, audioArrivalMs: number | null) => void;
+  speechStopped: (
+    itemId: string | null,
+    audioEndMs: number | null,
+    audioArrivalMs: number | null,
+    at?: number
+  ) => void;
   /** A transcription with real words — the ones that become turns. */
-  transcribed: (itemId: string | null) => void;
+  transcribed: (itemId: string | null, at?: number) => void;
   /** `response.create` went out. */
-  requested: () => void;
+  requested: (at?: number) => void;
   /** A delta of the translation arrived. Only the first one counts. */
-  token: () => void;
+  token: (at?: number) => void;
   /** `response.done`. Emits the turn line. */
-  done: () => void;
+  done: (at?: number) => void;
   /** The session was stopped, for whatever reason. */
   closed: () => void;
 }
@@ -205,6 +252,8 @@ export interface CallLagLogOptions {
   room: string;
   /** Read at each line, because either phone can change language mid-call. */
   pair: () => string;
+  /** Which interpreter this call runs. Defaults to openai. */
+  engine?: () => LagEngine;
   /** Deliver a batch to the server. Rejections are counted as dropped. */
   send: (records: LagRecord[], dropped: number) => Promise<void>;
   now?: () => number;
@@ -286,7 +335,13 @@ export function createCallLagLog(options: CallLagLogOptions): CallLagLog {
 
   const record = (kind: LagKind, values: LagRecord["values"], why?: LagReason) => {
     if (ended) return;
-    const entry: LagRecord = { kind, pair: options.pair(), ...(why ? { reason: why } : {}), values };
+    const entry: LagRecord = {
+      kind,
+      pair: options.pair(),
+      engine: options.engine?.() ?? "openai",
+      ...(why ? { reason: why } : {}),
+      values
+    };
     echo(lagLogLine(entry, options.room));
     if (buffer.length >= maxBuffered) {
       buffer.shift();
@@ -345,11 +400,11 @@ export function createCallLagLog(options: CallLagLogOptions): CallLagLog {
         );
         reason = "restart";
       },
-      speechStopped: (itemId, audioEndMs, audioArrivalMs) => {
+      speechStopped: (itemId, audioEndMs, audioArrivalMs, at) => {
         if (!live()) return;
         const segment: Segment = {
           itemId,
-          stoppedAt: now(),
+          stoppedAt: at ?? now(),
           audioEndMs,
           audioArrivalMs,
           transcribedAt: null,
@@ -364,7 +419,7 @@ export function createCallLagLog(options: CallLagLogOptions): CallLagLog {
         }
         s.lastStopped = segment;
       },
-      transcribed: (itemId) => {
+      transcribed: (itemId, at) => {
         if (!live()) return;
         let segment = itemId ? s.stopped.get(itemId) : undefined;
         if (itemId && segment) s.stopped.delete(itemId);
@@ -380,11 +435,11 @@ export function createCallLagLog(options: CallLagLogOptions): CallLagLog {
           transcribedAt: null,
           heardAt: null
         };
-        found.transcribedAt = now();
+        found.transcribedAt = at ?? now();
         s.latest = found;
         s.pendingSegments += 1;
       },
-      requested: () => {
+      requested: (at) => {
         if (!live()) return;
         // One response covers every segment committed so far (the gate in
         // interpreter.ts), so it is timed against the newest of them — the
@@ -392,18 +447,18 @@ export function createCallLagLog(options: CallLagLogOptions): CallLagLog {
         s.inFlight = {
           segment: s.latest,
           segments: s.pendingSegments,
-          requestedAt: now(),
+          requestedAt: at ?? now(),
           firstTokenAt: null
         };
         s.pendingSegments = 0;
       },
-      token: () => {
+      token: (at) => {
         if (!live() || !s.inFlight || s.inFlight.firstTokenAt !== null) return;
-        s.inFlight.firstTokenAt = now();
+        s.inFlight.firstTokenAt = at ?? now();
       },
-      done: () => {
+      done: (doneAt) => {
         if (!live() || !s.inFlight || s.openedAt === null) return;
-        const at = now();
+        const at = doneAt ?? now();
         const flight = s.inFlight;
         s.inFlight = null;
         s.turns += 1;

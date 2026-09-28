@@ -27,6 +27,13 @@ import {
   type InterpreterInputStats,
   type InterpreterVoiceMode
 } from "@/lib/call/interpreter";
+import { startGeminiInterpreter } from "@/lib/call/interpreterGemini";
+import {
+  DEFAULT_INTERPRETER_ENGINE,
+  parseInterpreterEngine,
+  type InterpreterEngine,
+  type InterpreterSessionReport
+} from "@/lib/call/interpreterEngine";
 import { resolveCallDirection, type CallDirection } from "@/lib/call/instructions";
 import { ensureCallAudioContext } from "@/lib/call/audioBridge";
 import { createCallLagLog, type CallLagLog, type LagRecord } from "@/lib/call/lag";
@@ -44,6 +51,8 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { isTextOnlyLanguage, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { jsonAuthHeaders } from "@/lib/authClient";
 import { keepWake, onWakeLog } from "@/lib/wakeLock";
+import { isFounder } from "@/lib/release";
+import { supabase } from "@/lib/supabase";
 
 // ── /call: translated 1:1 calls ─────────────────────────────────────────────
 // Use case: Tom and Liz call each other over wifi or cellular — video or
@@ -178,11 +187,56 @@ function flowLine(name: string, total: number, previous: number | null, seconds:
   return `${name} ${moving ? "✓" : "✗"} ${total} pkt${rate === null ? "" : ` · ${rate}/s`}`;
 }
 
+/**
+ * Post one `[taos-call-cost]` record. Best-effort: the phone is hanging up
+ * and nothing on screen depends on the answer.
+ */
+async function postUsage(
+  room: string,
+  finalSpend: CallSpend,
+  seconds: number,
+  mode: string,
+  dir: CallDirection,
+  captions: number,
+  stats: InterpreterInputStats | null,
+  transportUsed: CallTransport | null,
+  keepalive = false
+): Promise<void> {
+  try {
+    await fetch("/api/call/usage", {
+      method: "POST",
+      headers: await jsonAuthHeaders(),
+      body: JSON.stringify({
+        room,
+        mode,
+        engine: finalSpend.engine,
+        direction: `${dir.source}->${dir.target}`,
+        seconds,
+        spend: finalSpend,
+        captions,
+        transport: transportUsed ?? "unknown",
+        speechStarted: stats?.speechStarted ?? 0
+      }),
+      // The Gemini arm reports from a session stopping, which can be the tab
+      // closing — keepalive lets that request outlive the page.
+      keepalive
+    });
+  } catch {
+    /* the meter on screen already said it */
+  }
+}
+
 export function CallShell(): JSX.Element {
   const [phase, setPhase] = useState<"lobby" | "call">("lobby");
   const [room, setRoom] = useState("");
   const [withVideo, setWithVideo] = useState(true);
   const [voiceMode, setVoiceMode] = useState<InterpreterVoiceMode>("clone");
+  // Which interpreter the next call runs — Tom's 2026-09-28 Gemini bake-off.
+  // Chosen in the lobby, per call, so Tom and Liz can make one call on each
+  // engine minutes apart with no redeploy between them. Founders only: the
+  // picker is not drawn for anyone else, and POST /api/call/gemini 404s them.
+  const [engine, setEngine] = useState<InterpreterEngine>(DEFAULT_INTERPRETER_ENGINE);
+  const [founder, setFounder] = useState(false);
   const [callState, setCallState] = useState<CallState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -244,6 +298,10 @@ export function CallShell(): JSX.Element {
   const cameraOnRef = useRef(true);
   const volumeStepRef = useRef(1);
   const voiceModeRef = useRef<InterpreterVoiceMode>("clone");
+  const engineRef = useRef<InterpreterEngine>(DEFAULT_INTERPRETER_ENGINE);
+  // Captions already on screen when the current interpreter session began, so
+  // a Gemini session's own report counts only its own captions.
+  const sessionCaptionBaseRef = useRef(0);
   const remoteTrackRef = useRef<MediaStreamTrack | null>(null);
   const nextIdRef = useRef(1);
   // How many captions this screen actually put up, for the hang-up report.
@@ -308,6 +366,24 @@ export function CallShell(): JSX.Element {
   useEffect(() => {
     voiceModeRef.current = voiceMode;
   }, [voiceMode]);
+  useEffect(() => {
+    engineRef.current = engine;
+  }, [engine]);
+
+  // Whether to draw the engine picker. A courtesy, not the fence — the mint
+  // route re-asks isFounder() against a validated token.
+  useEffect(() => {
+    let cancelled = false;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) setFounder(isFounder(data.session?.user?.email));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!founder) setEngine(DEFAULT_INTERPRETER_ENGINE);
+  }, [founder]);
   useEffect(() => {
     elapsedRef.current = elapsed;
   }, [elapsed]);
@@ -447,27 +523,40 @@ export function CallShell(): JSX.Element {
       if (finalSpend.responses === 0 && finalSpend.transcribedSeconds === 0 && !heardNothing) {
         return;
       }
-      try {
-        await fetch("/api/call/usage", {
-          method: "POST",
-          headers: await jsonAuthHeaders(),
-          body: JSON.stringify({
-            room: roomRef.current,
-            mode,
-            direction: `${dir.source}->${dir.target}`,
-            seconds,
-            spend: finalSpend,
-            captions,
-            transport: transportUsed ?? "unknown",
-            speechStarted: stats?.speechStarted ?? 0
-          })
-        });
-      } catch {
-        /* the meter on screen already said it */
-      }
+      await postUsage(
+        roomRef.current,
+        finalSpend,
+        seconds,
+        mode,
+        dir,
+        captions,
+        stats,
+        transportUsed
+      );
     },
     []
   );
+
+  /**
+   * The Gemini arm's report: one line per session that connected, with NONE
+   * of reportSpend's gates. Fired by the engine itself when the session stops
+   * (InterpreterSessionReport), so a session that auto-ended, lost its
+   * partner or was replaced by a Resync still reaches the log. endCall skips
+   * reportSpend for this engine — the engine has already reported.
+   */
+  const reportGeminiSession = useCallback((report: InterpreterSessionReport) => {
+    void postUsage(
+      roomRef.current,
+      report.spend,
+      report.seconds,
+      "native",
+      directionRef.current,
+      feedCountRef.current - sessionCaptionBaseRef.current,
+      report.inputStats,
+      transportRef.current,
+      true
+    );
+  }, []);
 
   const startInterpreterFor = useCallback(
     (track: MediaStreamTrack) => {
@@ -491,7 +580,10 @@ export function CallShell(): JSX.Element {
       startingRef.current = true;
       setInterpreterStatus("starting");
       setInterpreterReason(null);
-      startCallInterpreter(
+      sessionCaptionBaseRef.current = feedCountRef.current;
+      const start =
+        engineRef.current === "gemini" ? startGeminiInterpreter : startCallInterpreter;
+      start(
         {
           direction: dir,
           inputTrack: track,
@@ -522,6 +614,7 @@ export function CallShell(): JSX.Element {
           // state so their phone can show the hold-on indicator.
           onSpeaking: (speaking) => callRef.current?.sendInterpreterSpeaking(speaking),
           onSpend: (next) => setSpend(next),
+          onSessionReport: reportGeminiSession,
           onDiagnostic: (line) => pushTrail(line),
           // Connected, and hearing nothing. Deliberately worded apart from the
           // idle message: idle means nobody spoke, this means the audio never
@@ -585,7 +678,7 @@ export function CallShell(): JSX.Element {
           startingRef.current = false;
         });
     },
-    [stopInterpreter, pushTrail]
+    [stopInterpreter, pushTrail, reportGeminiSession]
   );
 
   /**
@@ -694,7 +787,8 @@ export function CallShell(): JSX.Element {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    if (finalSpend) {
+    // The Gemini engine reported its own session as it stopped, just above.
+    if (finalSpend && finalSpend.engine !== "gemini") {
       void reportSpend(
         finalSpend,
         elapsedRef.current,
@@ -740,7 +834,9 @@ export function CallShell(): JSX.Element {
     setFeed([]);
     feedCountRef.current = 0;
     setElapsed(0);
-    setSpend(emptySpend("elevenlabs"));
+    setSpend(
+      engineRef.current === "gemini" ? emptySpend("none", "gemini") : emptySpend("elevenlabs")
+    );
     setPeerLanguage(null);
     setTransport(null);
     setRelayAvailable(null);
@@ -783,6 +879,7 @@ export function CallShell(): JSX.Element {
     lagLogRef.current = createCallLagLog({
       room: code,
       pair: () => `${directionRef.current.source}->${directionRef.current.target}`,
+      engine: () => engineRef.current,
       send: async (records: LagRecord[], dropped: number) => {
         const res = await fetch("/api/call/lag", {
           method: "POST",
@@ -1058,35 +1155,71 @@ export function CallShell(): JSX.Element {
               ))}
             </div>
 
+            {/* Which interpreter — founders only, the 2026-09-28 bake-off. One
+                call on each, minutes apart; [taos-call-cost] and
+                [taos-call-lag] both carry engine= so the two can be read side
+                by side. */}
+            {founder ? (
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-1">
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      ["openai", "OpenAI"],
+                      ["gemini", "Gemini (test)"]
+                    ] as [InterpreterEngine, string][]
+                  ).map(([e, label]) => (
+                    <button
+                      key={e}
+                      type="button"
+                      onClick={() => setEngine(parseInterpreterEngine(e))}
+                      className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                        engine === e ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="px-2 pb-1 pt-2 text-[11px] text-amber-100/50">
+                  {engine === "gemini"
+                    ? "Gemini Live Translate translates and speaks, in Google's voices — not Liz's. Founders only, for comparison."
+                    : "The interpreter /call has always used."}
+                </p>
+              </div>
+            ) : null}
+
             {/* Which voice reads the translation. See lib/call/interpreter.ts:
                 the clone is cheaper AND it is the partner's own voice, at the
                 price of about a second. */}
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-1">
-              <div className="grid grid-cols-2 gap-2">
-                {(
-                  [
-                    ["clone", "🎙️ Their voice"],
-                    ["instant", "⚡ Fastest"]
-                  ] as [InterpreterVoiceMode, string][]
-                ).map(([m, label]) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setVoiceMode(m)}
-                    className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                      voiceMode === m ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+            {/* OpenAI only: Gemini speaks in its own voice and has no toggle. */}
+            {engine === "openai" ? (
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-1">
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      ["clone", "🎙️ Their voice"],
+                      ["instant", "⚡ Fastest"]
+                    ] as [InterpreterVoiceMode, string][]
+                  ).map(([m, label]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setVoiceMode(m)}
+                      className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                        voiceMode === m ? "bg-amber-400 text-stone-950" : "text-amber-100/70"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="px-2 pb-1 pt-2 text-[11px] text-amber-100/50">
+                  {voiceMode === "clone"
+                    ? "The translation is read in their own voice — about a second behind."
+                    : "The model speaks it the moment it can. A stock voice, and the priciest way to run a call."}
+                </p>
               </div>
-              <p className="px-2 pb-1 pt-2 text-[11px] text-amber-100/50">
-                {voiceMode === "clone"
-                  ? "The translation is read in their own voice — about a second behind."
-                  : "The model speaks it the moment it can. A stock voice, and the priciest way to run a call."}
-              </p>
-            </div>
+            ) : null}
 
             {/* Room */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
@@ -1337,7 +1470,13 @@ export function CallShell(): JSX.Element {
                 {languageLabel(direction.source)} → {languageLabel(direction.target)}
                 {peerLanguage ? "" : " (assumed)"}
               </span>
-              <span>{voiceMode === "clone" ? "their voice" : "fastest voice"}</span>
+              <span>
+                {engine === "gemini"
+                  ? "Gemini voice"
+                  : voiceMode === "clone"
+                    ? "their voice"
+                    : "fastest voice"}
+              </span>
             </div>
 
             {idleSecondsLeft !== null ? (

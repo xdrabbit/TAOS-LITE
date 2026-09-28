@@ -1,0 +1,4 @@
+*.wav
+*.pcm
+*.log
+shipped-setup-check.test.ts

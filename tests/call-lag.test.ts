@@ -113,7 +113,7 @@ describe("a turn line", () => {
     });
 
     expect(turnLines(r.lines)).toEqual([
-      "[taos-call-lag] turn room=AB123 pair=es->en session=1 turn=1 session_age_ms=7400" +
+      "[taos-call-lag] turn room=AB123 pair=es->en engine=openai session=1 turn=1 session_age_ms=7400" +
         " call_age_ms=8400 audio_arrival_ms=3 vad_lag_ms=600 transcription_ms=400" +
         " heard_ms=1016 gate_ms=0 wait_ms=800 generation_ms=600 segments=1"
     ]);
@@ -249,7 +249,7 @@ describe("a rejoin is visible, not a silent reset", () => {
     r.at(100);
     first.opened();
     expect(r.lines[0]).toBe(
-      "[taos-call-lag] session_reset room=AB123 pair=es->en reason=start session=1" +
+      "[taos-call-lag] session_reset room=AB123 pair=es->en engine=openai reason=start session=1" +
         " prev_turns=0 prev_session_age_ms=0 call_age_ms=100"
     );
     for (let k = 0; k < 3; k++) {
@@ -307,7 +307,7 @@ describe("a rejoin is visible, not a silent reset", () => {
     r.at(900_000);
     r.log.manualResync();
     expect(r.lines.at(-1)).toBe(
-      "[taos-call-lag] manual_resync room=AB123 pair=es->en session=1 turn=1" +
+      "[taos-call-lag] manual_resync room=AB123 pair=es->en engine=openai session=1 turn=1" +
         " session_age_ms=900000 call_age_ms=900000"
     );
     s.closed();
@@ -470,7 +470,9 @@ describe("POST /api/call/lag", () => {
     expect(res.status).toBe(204);
     const lines = info.mock.calls.map((c) => String(c[0]));
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain("[taos-call-lag] session_reset room=AB123 pair=en->es reason=manual_resync");
+    expect(lines[0]).toContain(
+      "[taos-call-lag] session_reset room=AB123 pair=en->es engine=openai reason=manual_resync"
+    );
     expect(lines[1]).toContain("heard_ms=1016");
     expect(lines[2]).toBe("[taos-call-lag] dropped room=AB123 n=4");
   });

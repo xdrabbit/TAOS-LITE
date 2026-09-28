@@ -12,7 +12,26 @@ import {
 } from "./cost";
 import { requestSpeech } from "@/lib/tts/speech";
 import { bridgeInterpreterInput, type InterpreterInputBridge } from "./audioBridge";
-import type { LagSession } from "./lag";
+import type {
+  ActiveInterpreter,
+  InterpreterConfig,
+  InterpreterEvents,
+  InterpreterInputStats,
+  InterpreterState,
+  InterpreterVoiceMode
+} from "./interpreterEngine";
+
+// The engine-neutral contract lives in interpreterEngine.ts now; these are
+// re-exported so every existing import of them from here keeps working.
+export type {
+  ActiveInterpreter,
+  InterpreterConfig,
+  InterpreterEndReason,
+  InterpreterEvents,
+  InterpreterInputStats,
+  InterpreterState,
+  InterpreterVoiceMode
+} from "./interpreterEngine";
 
 // WebRTC client for the /call interpreter. Unlike lib/live/ambient.ts (which
 // streams the MIC), this streams the REMOTE call partner's audio track into a
@@ -45,127 +64,6 @@ import type { LagSession } from "./lag";
 // 22.7s billed, and the difference was the silence between utterances. A
 // gate would have added a way to clip the first syllable of a sentence in
 // exchange for nothing.
-
-export type InterpreterState =
-  | "idle"
-  | "minting"
-  | "connecting"
-  | "connected"
-  | "stopping"
-  | "error";
-
-/** How the translation reaches the listener's ear. See the note above. */
-export type InterpreterVoiceMode = "clone" | "instant";
-
-/** Why a session ended on its own, when it did. */
-export type InterpreterEndReason = "idle" | "max_duration";
-
-export interface InterpreterConfig {
-  /** Which language becomes which. `target` is what this phone's owner hears. */
-  direction: CallDirection;
-  /** The remote call partner's audio track (from the call peer connection). */
-  inputTrack: MediaStreamTrack;
-  /** Start with translated audio muted (captions only). */
-  muted?: boolean;
-  voiceMode?: InterpreterVoiceMode;
-  /** Hard session cap. Defaults to 60 min — the API's own ceiling. */
-  maxDurationMs?: number;
-  /** Hang up after this long with nothing said. Defaults to 2 min. */
-  idleTimeoutMs?: number;
-  /**
-   * Where this session's per-turn timings go (lib/call/lag.ts). Measurement
-   * only — nothing here changes what the interpreter does.
-   */
-  lag?: LagSession;
-}
-
-/**
- * What the session is actually HEARING, as numbers rather than as an absence.
- *
- * The 2026-09-03 field report was two connected interpreters that translated
- * nothing, and there was no way to tell "the audio is silent" from "the model
- * is quiet" from "the events are not arriving" — all three look like dead
- * air. These are the three measurements that separate them.
- */
-export interface InterpreterInputStats {
-  /** VAD segments the session started hearing. Zero is the whole symptom. */
-  speechStarted: number;
-  /** Segments VAD closed and committed for transcription. */
-  speechCommitted: number;
-  /** Latest instantaneous level on the outbound track, or null if unreported. */
-  level: number | null;
-  /** Cumulative audio energy on the outbound track, or null if unreported. */
-  energy: number | null;
-  /** Whether the track reached the session through the WebAudio bridge. */
-  bridged: boolean;
-}
-
-export interface InterpreterEvents {
-  onState?: (s: InterpreterState) => void;
-  onError?: (msg: string) => void;
-  /** Finalized transcription of what the remote partner said (source language). */
-  onHeard?: (text: string) => void;
-  /** Streaming chunk of the current translation. */
-  onTranslationDelta?: (delta: string) => void;
-  /** The translation finished; `text` is its full transcript. */
-  onTranslationDone?: (text: string) => void;
-  /**
-   * The interpreter's translated AUDIO started/stopped playing on THIS phone.
-   * Relay it to the partner: they are the one who can talk over it (they
-   * can't hear this side), so their phone shows the "hold on" indicator.
-   */
-  onSpeaking?: (speaking: boolean) => void;
-  /** The running bill for this phone, after every response and every readout. */
-  onSpend?: (spend: CallSpend) => void;
-  /**
-   * Nothing has been said for a while and the session will end soon unless
-   * someone speaks. `secondsLeft` counts down; null clears the warning.
-   */
-  onIdleWarning?: (secondsLeft: number | null) => void;
-  /** The session closed itself rather than being hung up. */
-  onAutoEnd?: (reason: InterpreterEndReason) => void;
-  /**
-   * Whether the partner's audio is actually REACHING the session.
-   *
-   * "Connected" is not the same question. The interpreter is fed the remote
-   * call partner's WebRTC track, forwarded out of the call's own peer
-   * connection into this one, and a forwarded track that carries silence
-   * looks identical to a healthy one from every angle the client can see:
-   * the peer connection is connected, the data channel is open, no error is
-   * ever raised, and nothing happens for the rest of the call. This flips
-   * true the first time server VAD reports speech, which is the only proof
-   * available that the far end's voice arrived — and it stays false, visibly,
-   * when it does not.
-   */
-  onHearing?: (hearing: boolean) => void;
-  /**
-   * One line of interpreter trail — the input level, the speech-segment count.
-   * Same surface as the call's own diagnostics, and for the same reason: the
-   * next silent interpreter should be readable, not guessable.
-   */
-  onDiagnostic?: (line: string) => void;
-  /**
-   * Connected for a while, hearing nothing, and the numbers agree. Distinct
-   * from the idle warning: idle means nobody spoke, this means somebody may
-   * well have and none of it reached the session.
-   */
-  onInputSilent?: () => void;
-}
-
-export interface ActiveInterpreter {
-  stop: () => Promise<void>;
-  setMuted: (muted: boolean) => void;
-  /**
-   * Re-point the interpreter without tearing the session down — either phone
-   * can change its language mid-call, and the partner's phone finds out over
-   * the call's signaling channel.
-   */
-  setDirection: (direction: CallDirection) => void;
-  /** The bill so far, for the hang-up report. */
-  spend: () => CallSpend;
-  /** What the session heard, for the hang-up report and the log line. */
-  inputStats: () => InterpreterInputStats;
-}
 
 /**
  * 60 minutes, which is also the Realtime API's own maximum session duration —

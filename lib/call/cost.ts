@@ -65,6 +65,25 @@ export const OPENAI_TTS_TOKENS_PER_SECOND = 25;
 /** Audio tokens per second, both directions: the API bills 1 token / 100 ms. */
 export const AUDIO_TOKENS_PER_SECOND = 10;
 
+/**
+ * gemini-3.5-live-translate-preview, dollars per 1M tokens (Tom's brief,
+ * 2026-09-28): audio in $3.50, audio out $21.00, at 25 tokens per second of
+ * audio each way — ≈ $0.0053/min in and $0.0315/min out.
+ *
+ * Measured the same day, and the thing that decides the comparison: Gemini
+ * bills the STREAM, not the speech. Its output runs continuously — silence
+ * included — and 60s of pure silence in came back as 1450 prompt + 1450
+ * response tokens. So one session is ≈ $0.0368 per minute of CALL whether
+ * anybody talks or not, against OpenAI's per-phone 3.88¢/min measured on the
+ * 2026-09-17 production call. The meter prices what usageMetadata reports,
+ * not this estimate.
+ */
+export const GEMINI_RATES_USD_PER_MTOK = {
+  audioIn: 3.5,
+  audioOut: 21
+} as const;
+export const GEMINI_AUDIO_TOKENS_PER_SECOND = 25;
+
 /** The raw `response.usage` shape, as gpt-realtime sends it. */
 export interface RealtimeUsage {
   input_tokens?: number;
@@ -91,10 +110,20 @@ export interface CallSpend {
   transcribedSeconds: number;
   /** Characters handed to the TTS engine, when the voice is not the model's. */
   ttsCharacters: number;
-  ttsEngine: "elevenlabs" | "openai";
+  /** "none" on the Gemini arm: the model speaks, nothing is synthesised. */
+  ttsEngine: "elevenlabs" | "openai" | "none";
+  /**
+   * Which interpreter spent this. On "gemini" the audio token fields hold
+   * Gemini's promptTokenCount / responseTokenCount sums and are priced at
+   * GEMINI_RATES_USD_PER_MTOK; every other field stays zero.
+   */
+  engine: "openai" | "gemini";
 }
 
-export function emptySpend(ttsEngine: CallSpend["ttsEngine"] = "elevenlabs"): CallSpend {
+export function emptySpend(
+  ttsEngine: CallSpend["ttsEngine"] = "elevenlabs",
+  engine: CallSpend["engine"] = "openai"
+): CallSpend {
   return {
     responses: 0,
     textInTokens: 0,
@@ -105,7 +134,8 @@ export function emptySpend(ttsEngine: CallSpend["ttsEngine"] = "elevenlabs"): Ca
     audioOutTokens: 0,
     transcribedSeconds: 0,
     ttsCharacters: 0,
-    ttsEngine
+    ttsEngine,
+    engine
   };
 }
 
@@ -147,8 +177,39 @@ export function addTtsCharacters(spend: CallSpend, characters: number): CallSpen
   return { ...spend, ttsCharacters: spend.ttsCharacters + Math.max(0, characters) };
 }
 
+/**
+ * Fold one Gemini `usageMetadata` into the running total.
+ *
+ * Measured: the server sends one every ~2s and each carries a DELTA (50/50
+ * tokens for 2s of stream), not a running total — so they are summed. Only
+ * promptTokenCount and responseTokenCount are counted: promptTokensDetails
+ * also lists ~700 TEXT tokens on every message that promptTokenCount does
+ * not include, and nothing on Google's price sheet says those are billed.
+ * If the invoice disagrees with the meter, that line is the first suspect.
+ */
+export function addGeminiUsage(
+  spend: CallSpend,
+  usage: { promptTokenCount?: unknown; responseTokenCount?: unknown } | null | undefined
+): CallSpend {
+  if (!usage) return spend;
+  return {
+    ...spend,
+    audioInTokens: spend.audioInTokens + num(usage.promptTokenCount),
+    audioOutTokens: spend.audioOutTokens + num(usage.responseTokenCount)
+  };
+}
+
+/** A caption finished on the Gemini arm — its `responses`, for the log line. */
+export function addGeminiTurn(spend: CallSpend): CallSpend {
+  return { ...spend, responses: spend.responses + 1 };
+}
+
 /** Dollars spent so far by THIS phone. The partner's phone spends its own. */
 export function spendUsd(spend: CallSpend): number {
+  if (spend.engine === "gemini") {
+    const G = GEMINI_RATES_USD_PER_MTOK;
+    return (spend.audioInTokens * G.audioIn + spend.audioOutTokens * G.audioOut) / 1e6;
+  }
   const R = REALTIME_RATES_USD_PER_MTOK;
   const uncachedText = Math.max(0, spend.textInTokens - spend.cachedTextInTokens);
   const uncachedAudio = Math.max(0, spend.audioInTokens - spend.cachedAudioInTokens);
@@ -165,11 +226,14 @@ export function spendUsd(spend: CallSpend): number {
   const transcription = (spend.transcribedSeconds / 60) * TRANSCRIBE_USD_PER_MINUTE;
 
   const tts =
-    spend.ttsEngine === "elevenlabs"
-      ? (spend.ttsCharacters / 1000) * ELEVENLABS_USD_PER_1K_CHARS
-      : // OpenAI bills TTS by audio token, so characters are converted through
-        // a speaking rate: ~14 characters per second of speech at a normal pace.
-        ((spend.ttsCharacters / 14) * OPENAI_TTS_TOKENS_PER_SECOND * OPENAI_TTS_USD_PER_MTOK) / 1e6;
+    spend.ttsEngine === "none"
+      ? 0
+      : spend.ttsEngine === "elevenlabs"
+        ? (spend.ttsCharacters / 1000) * ELEVENLABS_USD_PER_1K_CHARS
+        : // OpenAI bills TTS by audio token, so characters are converted through
+          // a speaking rate: ~14 characters per second of speech at a normal pace.
+          ((spend.ttsCharacters / 14) * OPENAI_TTS_TOKENS_PER_SECOND * OPENAI_TTS_USD_PER_MTOK) /
+          1e6;
 
   return model + transcription + tts;
 }
@@ -230,6 +294,7 @@ export function costLogLine(fields: {
   return [
     "[taos-call-cost]",
     `room=${room}`,
+    `engine=${spend.engine}`,
     `mode=${mode}`,
     `pair=${direction}`,
     `seconds=${Math.round(seconds)}`,

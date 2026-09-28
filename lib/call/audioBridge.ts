@@ -1,5 +1,7 @@
 "use client";
 
+import { createPcmDownsampler, peakOfS16 } from "./pcm";
+
 // One AudioContext for a call, and the bridge the interpreter listens through.
 //
 // ── The 2026-09-03 field report ────────────────────────────────────────────
@@ -82,6 +84,40 @@ export function closeCallAudioContext(): void {
   });
 }
 
+/**
+ * How far a graph's clock has fallen behind wall time, as a reader.
+ *
+ * The graph's own timeline — `currentTime` advances by rendered sample
+ * frames — against `performance.now()`. A context that stalls, glitches or
+ * gets suspended by iOS stops advancing while wall time does not, and the
+ * gap between the two is audio the bridge is holding rather than sending.
+ * Baselined at the first reading taken while the context is RUNNING, so a
+ * context still waking up from the Join tap does not start the call owing.
+ *
+ * What this cannot see: a queue building inside the source node without
+ * the render clock slowing down. `vad_lag_ms` and `heard_ms` (lib/call/
+ * lag.ts) are end-to-end and do see that, which is why they ride along.
+ *
+ * Shared by both bridges below so that `audio_arrival_ms` means the same
+ * thing on an OpenAI line and a Gemini line.
+ */
+function graphClockDrift(ctx: AudioContext): () => number | null {
+  let baseline: { ctxMs: number; wallMs: number } | null = null;
+  const read = (): number | null => {
+    if (typeof ctx.currentTime !== "number" || typeof performance === "undefined") return null;
+    const ctxMs = ctx.currentTime * 1000;
+    const wallMs = performance.now();
+    if (!baseline) {
+      if (ctx.state !== "running") return null;
+      baseline = { ctxMs, wallMs };
+      return 0;
+    }
+    return wallMs - baseline.wallMs - (ctxMs - baseline.ctxMs);
+  };
+  read();
+  return read;
+}
+
 export interface InterpreterInputBridge {
   /** The stream to hand to `addTrack` — locally generated, so Safari sends it. */
   stream: MediaStream;
@@ -125,29 +161,7 @@ export function bridgeInterpreterInput(
       return null;
     }
 
-    // The graph's own timeline — `currentTime` advances by rendered sample
-    // frames — against `performance.now()`. A context that stalls, glitches or
-    // gets suspended by iOS stops advancing while wall time does not, and the
-    // gap between the two is audio the bridge is holding rather than sending.
-    // Baselined at the first reading taken while the context is RUNNING, so a
-    // context still waking up from the Join tap does not start the call owing.
-    //
-    // What this cannot see: a queue building inside the source node without
-    // the render clock slowing down. `vad_lag_ms` and `heard_ms` (lib/call/
-    // lag.ts) are end-to-end and do see that, which is why they ride along.
-    let baseline: { ctxMs: number; wallMs: number } | null = null;
-    const clockDriftMs = (): number | null => {
-      if (typeof ctx.currentTime !== "number" || typeof performance === "undefined") return null;
-      const ctxMs = ctx.currentTime * 1000;
-      const wallMs = performance.now();
-      if (!baseline) {
-        if (ctx.state !== "running") return null;
-        baseline = { ctxMs, wallMs };
-        return 0;
-      }
-      return wallMs - baseline.wallMs - (ctxMs - baseline.ctxMs);
-    };
-    clockDriftMs();
+    const clockDriftMs = graphClockDrift(ctx);
 
     return {
       stream: destination.stream,
@@ -167,6 +181,89 @@ export function bridgeInterpreterInput(
         // This track was minted here, so stopping it stops nothing the human
         // listener needs — unlike the partner's track, which must keep going.
         destination.stream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── The Gemini arm: the same audio, as PCM ─────────────────────────────────
+// Gemini's Live API is a WebSocket, not a second peer connection, so there
+// is no `addTrack` to hand a track to — it wants raw 16-bit PCM at 16 kHz in
+// 100 ms chunks. This is the same bridge as above, on the same shared
+// context and from the same partner track: source → a processor that reads
+// the samples, instead of source → a destination that re-sends them. There
+// is no second capture path; the difference is only where the samples go.
+//
+// A ScriptProcessorNode rather than an AudioWorklet, deliberately. It is
+// deprecated but present in every browser /call runs in, including the
+// WebKit this file exists for, and it needs no module fetched from a URL at
+// the moment a call connects. The worklet is the upgrade if the main thread
+// ever turns out to be too busy to keep up — `audio_arrival_ms` is what
+// would say so.
+
+export interface InterpreterPcmBridge {
+  /** Same reader as InterpreterInputBridge's — `audio_arrival_ms`. */
+  clockDriftMs: () => number | null;
+  /** Peak of the most recent chunk, 0..1. The input level on the trail. */
+  level: () => number;
+  /** Drop the nodes. Never touches the partner's own track. */
+  release: () => void;
+}
+
+/** Frames per processor callback: ~43 ms at 48 kHz. */
+const PCM_TAP_FRAMES = 2048;
+
+/**
+ * Tap the partner's track as 16 kHz mono s16le chunks of 100 ms.
+ *
+ * `onChunk` receives each chunk as it fills. Returns null where there is no
+ * WebAudio to do it with — unlike the WebRTC bridge there is no raw-track
+ * fallback for a WebSocket, so no WebAudio means no Gemini interpreter.
+ */
+export function bridgeInterpreterPcm(
+  track: MediaStreamTrack,
+  onChunk: (pcm: Int16Array) => void
+): InterpreterPcmBridge | null {
+  const ctx = ensureCallAudioContext();
+  if (
+    !ctx ||
+    typeof ctx.createMediaStreamSource !== "function" ||
+    typeof ctx.createScriptProcessor !== "function"
+  ) {
+    return null;
+  }
+  try {
+    const source = ctx.createMediaStreamSource(new MediaStream([track]));
+    const tap = ctx.createScriptProcessor(PCM_TAP_FRAMES, 1, 1);
+    // A processor only runs while it is connected to the destination, so it
+    // is — through a gain of zero, because it is here to read the partner,
+    // not to play them a second time. Their real voice already has its own
+    // element and its own volume control.
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    let lastPeak = 0;
+    const downsampler = createPcmDownsampler(ctx.sampleRate, (chunk) => {
+      lastPeak = peakOfS16(chunk);
+      onChunk(chunk);
+    });
+    tap.onaudioprocess = (ev) => downsampler.push(ev.inputBuffer.getChannelData(0));
+    source.connect(tap);
+    tap.connect(sink);
+    sink.connect(ctx.destination);
+    return {
+      clockDriftMs: graphClockDrift(ctx),
+      level: () => lastPeak,
+      release: () => {
+        tap.onaudioprocess = null;
+        for (const node of [source, tap, sink]) {
+          try {
+            node.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }
       }
     };
   } catch {

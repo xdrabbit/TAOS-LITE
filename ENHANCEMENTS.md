@@ -512,6 +512,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   reads only the current interpreter's spend, so `[taos-call-cost]`
   under-reports every call over 60 minutes, and every Resync press makes it
   worse. (added 2026-09-14)
+- Samoan — a woman asked whether her grandfather could use TAOS in Samoan.
+  It is in neither our catalog nor Gemini Live Translate's published list.
+  Measured 2026-09-28 (spike/gate-zero/RESULTS.md): Gemini accepts `sm` as a
+  TARGET and produces plausible Samoan, but misheard synthetic Samoan INPUT
+  as Tongan/Hawaiian — and his case is Samoan in. Needs a real Samoan
+  speaker before anyone says yes. (added 2026-09-28)
 
 ## Languages: the two tiers, and adding one
 
