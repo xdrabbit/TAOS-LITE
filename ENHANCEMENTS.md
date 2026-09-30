@@ -596,6 +596,102 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   archive at rest, and keeping merged exports out of `local_exports/`.
   (added 2026-09-26)
 
+- **Conversations need participants — who was there, not just whose phone it
+  was** — a row in `taos_lite_translations` carries one `user_id`, and that is
+  the *device*, not the speaker and not the counterpart. Both voices go into
+  one handset on the home screen, so the account on a row says only whose phone
+  was on the table: **1,275 rows on Liz's account are somebody else speaking
+  English into it, and 1,335 on Tom's are somebody speaking Spanish into his.**
+  Who the second person was is nowhere, so "give Liz her conversations" cannot
+  be answered — it returns every conversation her phone witnessed with anyone,
+  and still misses the ones with Tom that happened on his phone. Only `/chat`
+  knows pairs today (49 translated messages between them).
+  - **Decided: sticky by default, one button to forget.** Remembering is the
+    default because Tom and Liz are the common case; a single "don't remember
+    this" press covers the waiter and the walk-up. It should be pressable
+    *after* the conversation, not only before — foresight is what makes toggles
+    fail, and the worst case then is a few minutes of existing rather than a
+    permanent mislabel.
+  - **The general model is many-to-many, not a "Liz bit".** Teachers and
+    students, a household, anyone with a roster. Separate the *label* from the
+    *identity*: a label is what your phone calls someone ("Maria", "Period 3")
+    and costs them nothing; an identity is an account, needed only when they
+    must *receive* something, or when two devices must agree they mean the same
+    human. Identity is established once, out of band — never at translation
+    time, which is what keeps the login out of walking up to a stranger.
+  - Shape: `person(id, owner_id, display_name, linked_user_id?)`,
+    `conversation(id, device_user_id, started_at, remember)`,
+    `participant(conversation_id, person_id)`, and a `conversation_id` on each
+    translation row. The label is the durable thing and the account binds to it
+    later, so months of "Maria" become hers the day she accepts an invite.
+  - **`/chat` already has this shape** — `taos_lite_chat_threads` +
+    `taos_lite_chat_members` (many-to-many already) + `taos_lite_chat_invites`
+    (out-of-band linking). The home screen simply never got it. The one
+    extension needed: a participant must be allowed to be a roster entry with
+    no account, not only a `user_id`.
+  - **The permission rule falls out: you can see a conversation you were in.**
+    That answers the original question exactly — Liz gets what she participated
+    in, not everything her phone recorded, and not Tom's conversations with
+    other people.
+  - **Payoff: speaker names for free.** With two known participants and two
+    known languages, direction *is* the speaker (on Tom's phone `en→es` is Tom,
+    `es→en` is Liz). One bit turns orphan rows into a named transcript — the
+    difference between a data dump and source material for Love in Translation.
+    Three or more participants breaks this and needs real speaker ID.
+  - **Friction at scale:** sticky stays on whoever was picked; most-recent
+    first; groups ("Period 3") so a teacher picks once per class, not once per
+    student. Groups also make a forgotten switch expensive — a whole afternoon
+    lands on thirty people — so a visible indicator matters more with groups
+    than without.
+  - Turns already clump: a 10-minute gap splits Tom and Liz's combined history
+    into **1,089 sessions averaging 6.7 turns**, so sessions are recoverable for
+    the existing archive even though counterparts are not. Retroactive
+    labelling is finite if it is ever wanted — Tom's call was that it is not a
+    priority.
+  - **Open:** does "don't remember this" *delete* or merely *exclude*? Delete
+    is the only version where the button's promise matches what happens, and it
+    removes the leak class rather than shrinking it — but it has no undo.
+  (added 2026-09-30 from Tom's many-to-many conversation)
+
+- **Disclosure needs joint consent — a conversation is jointly owned** —
+  participation lets you *read* a conversation; it does not let you hand it to
+  a third party, because that exposes the other person too. Raised by wanting
+  to use an AI as a marriage counselor over Tom and Liz's history, some of
+  which is very intimate. Neither party can disclose alone. Model it as
+  *grants* rather than permissions: `grant(id, purpose, scope, created_by,
+  revoked_at)` and `grant_approval(grant_id, person_id, decision, decided_at)`,
+  where purposes look like `ai_counselor`, `podcast_episode`, `export_to_liz`.
+  A disclosure proceeds only when **every participant of every conversation in
+  the set has approved that grant**, computed at send time over the actual set
+  rather than assumed from a past yes. The counselor case is a *standing* grant
+  — the AI wants the history continuously — which makes it the most
+  consequential kind and the one most worth making easy to revoke.
+  - **This depends on the participant model above.** You cannot ask "did
+    everyone agree" until you know who was there. Today the question is not
+    expressible.
+  - **Revocation does not un-send.** Once it is at a provider it is out, and a
+    revoke button afterwards is theatre. Consent has to be real before the
+    first send, and the UI must not imply otherwise — this is the one place
+    where a tidy "both agreed ✓" creates false comfort.
+  - **The content names third parties.** These conversations discuss family and
+    friends by name, including their health and their marriages. Tom and Liz
+    consenting does not cover those people, and no mechanism can. Worth
+    deciding knowingly rather than discovering later.
+  - **A blanket retroactive grant would leak strangers**, because the existing
+    rows have unknown participants and the walk-ups are mixed in unlabelled.
+    Giving an AI the back-history honestly means labelling sessions first.
+  - **Design for a quiet no.** One partner will want this more than the other.
+    If a decline is reported — "Liz denied your request" — the mechanism
+    becomes pressure, and consent under pressure is not consent. A grant should
+    simply not activate, without naming who withheld it.
+  - Practical: use an API path with zero data retention (AI Gateway ZDR, or the
+    Claude API) rather than consumer ChatGPT, where the transcript sits in a
+    history that cannot be audited.
+  - **Open:** when someone links their account they gain access to months of
+    transcripts they were present for but never expected to read. Defensible —
+    they were there — but it should be a deliberate moment, not a side effect.
+  (added 2026-09-30 from Tom's AI-counselor conversation)
+
 ## Languages: the two tiers, and adding one
 
 TAOS speaks **100 languages** as of 2026-08-17 — the whole list lives in
