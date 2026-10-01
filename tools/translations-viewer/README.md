@@ -147,14 +147,27 @@ through), what it means in context, and build-up chunks to say out loud.
 
 ## Exporting
 
-- **Export JSON ↓** downloads the current filtered set.
-- **Save to local_exports** writes the same thing next to the other exports,
-  where this viewer can load it straight back.
+**Export as** picks the format; both buttons follow it, so a download and a
+save of the same view always hold the same records.
 
-Both write `{manifest, summary, records}`. The manifest records which source
-the rows came from, the filters in force, and the exact FTS5 expression that
-produced them — so an export can be explained later, and the file round-trips
-back into the viewer.
+- **Export JSON ↓** / **Export Markdown ↓** downloads the current filtered set.
+- **Save to local_exports** writes the same thing next to the other exports.
+
+**JSON — reloadable** writes `{manifest, summary, records}`. The manifest
+records which source the rows came from, the filters in force, and the exact
+FTS5 expression that produced them — so an export can be explained later, and
+the file round-trips back into the viewer.
+
+**Markdown — readable** writes a transcript to read, not a file to reload:
+YAML front matter carrying the same manifest facts, then the records grouped
+by day (oldest first, Mountain time, the same day the headings and the From/To
+filters use), each one quoting the original with the translation beneath it.
+`.md` is deliberately absent from the loader's picker — it is a document, not a
+source.
+
+Every record is user speech, so it is escaped on the way in: a translation
+starting with `#` cannot become a heading, and a line of dashes cannot promote
+the line above it into one. A hyphen mid-sentence is left alone.
 
 ## The SQLite dependency
 

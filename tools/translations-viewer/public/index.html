@@ -248,6 +248,12 @@
             Raw FTS5 syntax
           </label>
           <span class="grow"></span>
+          <label title="JSON loads back into this viewer; Markdown is a transcript to read">Export as
+            <select id="exportFormat">
+              <option value="json">JSON — reloadable</option>
+              <option value="md">Markdown — readable</option>
+            </select>
+          </label>
           <button id="downloadBtn" class="ghost">Export JSON ↓</button>
           <button id="saveBtn" class="ghost">Save to local_exports</button>
         </div>
@@ -1294,9 +1300,22 @@
         if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); stepResult(-1); }
       });
 
+      // The format rides along on the same filter query, so a download and a
+      // save of the same view always contain exactly the same records.
+      function exportQuery() {
+        const params = queryString();
+        params.set("format", $("exportFormat").value);
+        return params;
+      }
+
+      function syncExportLabel() {
+        const md = $("exportFormat").value === "md";
+        $("downloadBtn").textContent = md ? "Export Markdown ↓" : "Export JSON ↓";
+      }
+
       function download() {
         if (!loaded) return toast("Load a source first.", true);
-        window.location = "/api/export?" + queryString().toString();
+        window.location = "/api/export?" + exportQuery().toString();
       }
 
       async function saveExport() {
@@ -1306,7 +1325,7 @@
           const res = await fetch("/api/export/save", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ query: queryString().toString() })
+            body: JSON.stringify({ query: exportQuery().toString() })
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "save failed");
@@ -1343,6 +1362,8 @@
       $("nextBtn").addEventListener("click", () => {
         if (offset + PAGE < lastTotal) { offset += PAGE; search(); }
       });
+      $("exportFormat").addEventListener("change", syncExportLabel);
+      syncExportLabel();
       $("downloadBtn").addEventListener("click", download);
       $("saveBtn").addEventListener("click", saveExport);
 
