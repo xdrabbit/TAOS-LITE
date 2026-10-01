@@ -59,23 +59,35 @@ function yamlString(value) {
   return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+// Name the zone rather than leaning on the process's. server.mjs pins
+// TZ=America/Denver, but this module is also imported directly — by the tests,
+// and by anything else that wants a transcript — and ambient TZ silently
+// regroups every day boundary when it differs (CI runs in UTC, which moved a
+// 21:52 record onto the following day). This is the same zone public/index.html
+// names, and the one the From/To filters are read in.
+const ZONE = "America/Denver";
+
 const DAY = new Intl.DateTimeFormat("en-US", {
+  timeZone: ZONE,
   weekday: "long",
   year: "numeric",
   month: "long",
   day: "numeric"
 });
 const TIME = new Intl.DateTimeFormat("en-US", {
+  timeZone: ZONE,
   hour: "2-digit",
   minute: "2-digit",
   hourCycle: "h23"
 });
-// The server pins TZ to America/Denver, so "local" here is the same zone the
-// page shows and the From/To filters are read in.
-const dayKey = (ms) => {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// en-CA renders ISO-shaped YYYY-MM-DD, which is what the day key needs.
+const YMD = new Intl.DateTimeFormat("en-CA", {
+  timeZone: ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit"
+});
+const dayKey = (ms) => YMD.format(new Date(ms));
 
 /**
  * Render an export payload ({ manifest, summary, records }) as Markdown.

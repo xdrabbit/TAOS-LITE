@@ -547,6 +547,10 @@ describe("renderMarkdown", () => {
   it("groups by LOCAL day, not the UTC date on the timestamp", () => {
     const md = renderMarkdown(payload([record("hola", "hi", EVENING)]));
     // 2026-09-02T03:52Z is Tuesday 1 September, 21:52, in Mountain time.
+    // This is also the fence against renderMarkdown drifting back to the
+    // AMBIENT process timezone: it once did, which passed on a Mountain-time
+    // laptop and failed in CI, where it regrouped onto Wednesday the 2nd. CI
+    // runs in UTC, so this assertion only holds while the zone stays named.
     expect(md).toContain("## Tuesday, September 1, 2026");
     expect(md).not.toContain("September 2, 2026");
     expect(md).toContain("**21:52**");
