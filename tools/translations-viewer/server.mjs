@@ -22,6 +22,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { dedupe, parseExport, summarise } from "./lib/records.mjs";
+import { renderMarkdown } from "./lib/markdown.mjs";
 import {
   LESSON_MODEL_DEFAULT,
   buildLessonPrompt,
@@ -693,6 +694,34 @@ function exportPayload(index, options) {
   };
 }
 
+/**
+ * Serialise an export. JSON round-trips back into the viewer; Markdown is a
+ * readable transcript and deliberately does NOT (the picker ignores .md).
+ */
+function serialiseExport(payload, format) {
+  if (format === "md") {
+    return {
+      body: renderMarkdown(payload),
+      extension: "md",
+      contentType: "text/markdown; charset=utf-8"
+    };
+  }
+  return {
+    body: JSON.stringify(payload, null, 2),
+    extension: "json",
+    contentType: "application/json; charset=utf-8"
+  };
+}
+
+/** `format=md` asks for Markdown; anything else is JSON. */
+function formatFromQuery(params) {
+  return params.get("format") === "md" ? "md" : "json";
+}
+
+function exportStamp() {
+  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+}
+
 function handleExport(res, params) {
   const index = requireIndex(res);
   if (!index) return;
@@ -704,11 +733,11 @@ function handleExport(res, params) {
     return sendJson(res, 400, { error: err.message });
   }
 
-  const body = JSON.stringify(payload, null, 2);
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const { body, extension, contentType } = serialiseExport(payload, formatFromQuery(params));
+  const name = `taos-lite-translations-${exportStamp()}.${extension}`;
   res.writeHead(200, {
-    "content-type": "application/json; charset=utf-8",
-    "content-disposition": `attachment; filename="taos-lite-translations-${stamp}.json"`,
+    "content-type": contentType,
+    "content-disposition": `attachment; filename="${name}"`,
     "content-length": Buffer.byteLength(body)
   });
   res.end(body);
@@ -722,18 +751,19 @@ async function handleSave(req, res) {
   const params = new URLSearchParams(body.query ?? "");
   const payload = exportPayload(index, optionsFromQuery(params));
 
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
-  const name = `taos-lite-translations-${stamp}.json`;
+  const serialised = serialiseExport(payload, formatFromQuery(params));
+  const name = `taos-lite-translations-${exportStamp()}.${serialised.extension}`;
   await mkdir(EXPORT_DIR, { recursive: true });
   const full = path.join(EXPORT_DIR, name);
   // Every user's translations: owner-only, like the other exports.
-  await writeFile(full, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+  await writeFile(full, serialised.body, { encoding: "utf8", mode: 0o600 });
   log(`wrote ${payload.records.length} records to local_exports/${name}`);
 
   sendJson(res, 200, {
     file: name,
     path: path.relative(REPO_ROOT, full),
-    records: payload.records.length
+    records: payload.records.length,
+    format: serialised.extension
   });
 }
 

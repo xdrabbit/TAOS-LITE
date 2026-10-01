@@ -27,6 +27,10 @@ import {
   dedupe,
   summarise
 } from "@/tools/translations-viewer/lib/records.mjs";
+import {
+  escapeMarkdown,
+  renderMarkdown
+} from "@/tools/translations-viewer/lib/markdown.mjs";
 
 const VENDORED = existsSync(
   path.join(
@@ -446,3 +450,169 @@ describe.skipIf(!VENDORED)("FTS5 index", () => {
     });
   });
 });
+
+// The Markdown export is a document people read, not a file the viewer reloads.
+// Everything in it is user speech, so what is pinned here is that no record can
+// restructure the document that contains it — a translation starting with "#"
+// must not become a heading, and a line of dashes must not silently promote the
+// line above it into one.
+describe("escapeMarkdown", () => {
+  it("defuses block markers at the start of a line", () => {
+    expect(escapeMarkdown("# Not a heading")).toBe("\\# Not a heading");
+    expect(escapeMarkdown("> not a quote")).toBe("\\> not a quote");
+    expect(escapeMarkdown("- not a bullet")).toBe("\\- not a bullet");
+    expect(escapeMarkdown("1. not a list")).toBe("\\1. not a list");
+    expect(escapeMarkdown("| not | a | table")).toBe("\\| not | a | table");
+  });
+
+  it("defuses a run of dashes, which is a rule AND a setext heading", () => {
+    // "---" under a line of text promotes that line to an H2. A transcript of
+    // speech can contain it, and the corruption is invisible until rendered.
+    expect(escapeMarkdown("---")).toBe("\\---");
+    expect(escapeMarkdown("--- not a rule")).toBe("\\--- not a rule");
+    expect(escapeMarkdown("===")).toBe("\\===");
+  });
+
+  it("leaves mid-sentence punctuation alone", () => {
+    expect(escapeMarkdown("well-known")).toBe("well-known");
+    expect(escapeMarkdown("5 - 3 = 2")).toBe("5 - 3 = 2");
+    expect(escapeMarkdown("¿cómo estás?")).toBe("¿cómo estás?");
+  });
+
+  it("defuses inline markup and raw HTML anywhere in the line", () => {
+    expect(escapeMarkdown("*hi* _there_")).toBe("\\*hi\\* \\_there\\_");
+    expect(escapeMarkdown("<script>x</script>")).toBe("\\<script\\>x\\</script\\>");
+    expect(escapeMarkdown("a `b` c")).toBe("a \\`b\\` c");
+  });
+
+  it("escapes each line of a multi-line field", () => {
+    expect(escapeMarkdown("ok\n# no")).toBe("ok\n\\# no");
+  });
+});
+
+describe("renderMarkdown", () => {
+  const at = (iso: string) => Date.parse(iso);
+  const record = (
+    original: string,
+    translation: string,
+    iso: string
+  ): TranslationRecordish => ({
+    id: "x",
+    source_table: "public.taos_lite_translations",
+    created_at: iso,
+    created_ms: at(iso),
+    user_id: "u1",
+    source_lang: "es",
+    target_lang: "en",
+    tone: "detailed",
+    engine: "openai",
+    original_text: original,
+    translation_text: translation,
+    extra: {}
+  });
+
+  // 03:52Z is 21:52 the PREVIOUS day in Mountain time, which the server pins.
+  const EVENING = "2026-09-02T03:52:00.000Z";
+  const NEXT_DAY = "2026-09-03T16:00:00.000Z";
+
+  const payload = (records: TranslationRecordish[]) => ({
+    manifest: {
+      tool: "tools/translations-viewer",
+      exported_at: "2026-09-30T18:00:00.000Z",
+      source: { kind: "live" },
+      filters: ["text: camino", "from 2026-09-01"],
+      fts5_match: '"camino"'
+    },
+    summary: {
+      total: records.length,
+      users: 1,
+      firstAt: EVENING,
+      lastAt: NEXT_DAY,
+      sourceLangs: [],
+      targetLangs: [],
+      engines: [],
+      tables: []
+    },
+    records
+  });
+
+  it("records the filters and the exact FTS5 match in front matter", () => {
+    const md = renderMarkdown(payload([record("hola", "hi", EVENING)]));
+    expect(md.startsWith("---\n")).toBe(true);
+    expect(md).toContain('fts5_match: "\\"camino\\""');
+    expect(md).toContain('  - "text: camino"');
+    expect(md).toContain("record_count: 1");
+  });
+
+  it("groups by LOCAL day, not the UTC date on the timestamp", () => {
+    const md = renderMarkdown(payload([record("hola", "hi", EVENING)]));
+    // 2026-09-02T03:52Z is Tuesday 1 September, 21:52, in Mountain time.
+    expect(md).toContain("## Tuesday, September 1, 2026");
+    expect(md).not.toContain("September 2, 2026");
+    expect(md).toContain("**21:52**");
+    // The headline span must agree with the headings it sits above.
+    expect(md).toContain("2026-09-01 → 2026-09-03");
+  });
+
+  it("puts the original in a blockquote and the translation beneath it", () => {
+    const md = renderMarkdown(payload([record("Voy en camino.", "I'm on my way.", EVENING)]));
+    expect(md).toContain("> Voy en camino.");
+    expect(md).toContain("\nI'm on my way.");
+  });
+
+  it("quotes every line of a multi-line original", () => {
+    const md = renderMarkdown(payload([record("one\ntwo", "uno", EVENING)]));
+    expect(md).toContain("> one\n> two");
+  });
+
+  it("does not let a record's text restructure the document", () => {
+    const md = renderMarkdown(payload([record("# fake heading", "---", EVENING)]));
+    expect(md).toContain("> \\# fake heading");
+    expect(md).toContain("\\---");
+    // Exactly one H1 (the title) and one H2 (the day) survive.
+    expect(md.split("\n").filter((l) => /^# /.test(l))).toHaveLength(1);
+    expect(md.split("\n").filter((l) => /^## /.test(l))).toHaveLength(1);
+  });
+
+  it("orders days oldest first and records forwards within a day", () => {
+    const md = renderMarkdown(
+      payload([
+        record("later", "b", NEXT_DAY),
+        record("earlier", "a", EVENING)
+      ])
+    );
+    expect(md.indexOf("earlier")).toBeLessThan(md.indexOf("later"));
+    expect(md.indexOf("September 1")).toBeLessThan(md.indexOf("September 3"));
+  });
+
+  it("says so plainly when nothing matched", () => {
+    const md = renderMarkdown(payload([]));
+    expect(md).toContain("_Nothing matched these filters._");
+    expect(md).toContain("record_count: 0");
+  });
+
+  it("out-fences a search query that itself contains a backtick", () => {
+    const base = payload([record("hola", "hi", EVENING)]);
+    const md = renderMarkdown({
+      ...base,
+      manifest: { ...base.manifest, fts5_match: '"a`b"' }
+    });
+    // The recorded match is the one that ran — it is fenced, never rewritten.
+    expect(md).toContain('``"a`b"``');
+  });
+});
+
+type TranslationRecordish = {
+  id: string | null;
+  source_table: string | null;
+  created_at: string | null;
+  created_ms: number | null;
+  user_id: string | null;
+  source_lang: string | null;
+  target_lang: string | null;
+  tone: string | null;
+  engine: string | null;
+  original_text: string;
+  translation_text: string;
+  extra: Record<string, unknown>;
+};
