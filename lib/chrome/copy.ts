@@ -54,6 +54,36 @@ const EN = {
   noAudio: "No audio was captured. Check the mic and try again.",
   tooShort: "Too short — tap, say a full thought, then tap again.",
 
+  // ── The nav on the home header — pills, the nine-dot grid, the avatar ───
+  // In the language of the phone's OWNER (`mine`), the same rule /call uses,
+  // because the header belongs to whoever is holding the phone, not to
+  // whoever happens to be talking. These were "Table · Mesa", "Sign out ·
+  // Salir" and so on until they reached this table: doubling was the only way
+  // one string could serve both people, and it is exactly what the /call
+  // table removed. Each phone reads its own language now.
+  navAllScreens: "All screens",
+  navCloseMenu: "Close menu",
+  navAccount: "Account",
+  navScreens: "Screens",
+  navSpeak: "Speak",
+  navTranslate: "Translate",
+  navLive: "Live",
+  navTable: "Table",
+  // No navChat: "Chat" is the same word in Spanish, so there is nothing to
+  // translate and nothing that was ever doubled except "Chat · Chat" itself.
+  // A key whose Spanish equals its English fails tests/chrome-copy.test.ts
+  // (every Spanish key must really be Spanish), so the header prints it plain.
+  navCall: "Call",
+  navFast: "Quick translate",
+  navPhoto: "Photo translator",
+  navVideo: "Video captions",
+  navTutor: "Language tutor",
+  navStudy: "Study",
+  navHistory: "History",
+  navGuide: "How to use TAOS",
+  navAbout: "About TAOS",
+  navSignOut: "Sign out",
+
   // ── Table (/tabletop) — one phone flat between two people ───────────────
   // `tableListening` is prefixed and the rest are not, and that is the whole
   // of the difference between these screens' wording: /tabletop's listening
@@ -248,6 +278,28 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
     noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
     tooShort: "Muy corto — toca, di una idea completa y toca otra vez.",
+
+    // The Spanish half of each label the header used to double, unchanged.
+    // navAllScreens, navAccount, navScreens, navLive and navTutor are the
+    // nav restructure's own words (PR #55) and had no older Spanish to keep.
+    navAllScreens: "Pantallas",
+    navCloseMenu: "Cerrar menú",
+    navAccount: "Cuenta",
+    navScreens: "Pantallas",
+    navSpeak: "Hablar",
+    navTranslate: "Traducir",
+    navLive: "En vivo",
+    navTable: "Mesa",
+    navCall: "Llamada",
+    navFast: "Rápida",
+    navPhoto: "Fotos",
+    navVideo: "Subtítulos",
+    navTutor: "Tutor de idiomas",
+    navStudy: "Estudio",
+    navHistory: "Historial",
+    navGuide: "Cómo usar",
+    navAbout: "Acerca de TAOS",
+    navSignOut: "Salir",
 
     tapToTalk: "TOCA PARA HABLAR",
     tapDone: "TOCA AL TERMINAR",

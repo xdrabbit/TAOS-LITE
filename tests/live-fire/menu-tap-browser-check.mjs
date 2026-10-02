@@ -228,15 +228,16 @@ async function control(selector) {
 // are exactly two menu buttons in the header: the launcher, then the avatar.
 const GRID = `document.querySelectorAll('header button[aria-haspopup="menu"]')[0]`;
 const AVATAR = `document.querySelectorAll('header button[aria-haspopup="menu"]')[1]`;
-const GRID_CLOSED = `document.querySelector('header button[aria-label*="All screens"]')`;
-const AVATAR_CLOSED = `document.querySelector('header button[aria-label*="Account"]')`;
 const SHARE = `document.querySelector('button[aria-label*="Share"]')`;
 const pill = (href) => `document.querySelector('header nav a[href="${href}"]')`;
 const CALL_PILL = pill("/call");
-const item = (text) =>
-  `[...document.querySelectorAll('[role="menuitem"]')].find(a => a.textContent.includes(${JSON.stringify(text)}))`;
-const GRID_MENU = `document.querySelector('[role="menu"][aria-label="All screens · Pantallas"]')`;
-const ACCOUNT_MENU = `document.querySelector('[role="menu"][aria-label="Account · Cuenta"]')`;
+// Menus and items by STRUCTURE and href, never by label: since the nav reached
+// lib/chrome/copy.ts every label is in the phone owner's language, and a fresh
+// profile's pair is es-first (DEFAULT_PAIR), so an English selector would
+// match nothing on the very first run. Section 9 checks the words themselves.
+const item = (href) => `document.querySelector('[role="menuitem"][href="${href}"]')`;
+const GRID_MENU = `${GRID}.parentElement.querySelector('[role="menu"]')`;
+const ACCOUNT_MENU = `${AVATAR}.parentElement.querySelector('[role="menu"]')`;
 
 // ── 1. The page can never be panned, and nothing sits off the glass ────────
 // 44 for everything, 8/31. The pills used to be passed `min: 0` while the icon
@@ -267,8 +268,8 @@ for (const width of WIDTHS) {
     ["Chat", pill("/chat")],
     ["Call pill", CALL_PILL],
     ["Share", SHARE],
-    ["All screens", GRID_CLOSED],
-    ["Account", AVATAR_CLOSED]
+    ["All screens", GRID],
+    ["Account", AVATAR]
   ]) {
     const c = await control(sel);
     if (!c) {
@@ -345,14 +346,14 @@ check(
 // ── 4. Two touches to anything in the launcher, and to anything in the
 //      account menu. One to open, one to select. ────────────────────────────
 const JOURNEYS = [
-  ["launcher → Photo translator", FOUNDER, GRID, item("Photo"), "/vision"],
-  ["launcher → Table", FOUNDER, GRID, item("Table"), "/tabletop"],
-  ["launcher → Quick translate", FOUNDER, GRID, item("Quick translate"), "/fast"],
-  ["launcher → Video captions", FOUNDER, GRID, item("Video captions"), "/video"],
-  ["avatar → How to use", FOUNDER, AVATAR, item("How to use"), "/guide"],
-  ["avatar → About", FOUNDER, AVATAR, item("About TAOS"), "/about"],
-  ["launcher → Photo (customer)", CUSTOMER, GRID, item("Photo"), "/vision"],
-  ["avatar → About (customer)", CUSTOMER, AVATAR, item("About TAOS"), "/about"]
+  ["launcher → Photo translator", FOUNDER, GRID, item("/vision"), "/vision"],
+  ["launcher → Table", FOUNDER, GRID, item("/tabletop"), "/tabletop"],
+  ["launcher → Quick translate", FOUNDER, GRID, item("/fast"), "/fast"],
+  ["launcher → Video captions", FOUNDER, GRID, item("/video"), "/video"],
+  ["avatar → How to use", FOUNDER, AVATAR, item("/guide"), "/guide"],
+  ["avatar → About", FOUNDER, AVATAR, item("/about"), "/about"],
+  ["launcher → Photo (customer)", CUSTOMER, GRID, item("/vision"), "/vision"],
+  ["avatar → About (customer)", CUSTOMER, AVATAR, item("/about"), "/about"]
 ];
 console.log(`\n== two touches: one to open, one to select (390 px) ==`);
 for (const [label, url, opener, menuItem, expected] of JOURNEYS) {
@@ -396,7 +397,7 @@ check(
 check(founderTiles.includes("/"), "including the screen you are standing on");
 // The current-page mark cannot be positively demonstrated from a probe route:
 // /menu-probe is not one of the tiles, so nothing should be marked, and that
-// is exactly what is asserted. tests/nav-tap-targets.test.ts pins that all ten
+// is exactly what is asserted. tests/nav-tap-targets.test.ts pins that all eleven
 // tiles derive aria-current from usePathname(); this is the half a browser can
 // see, which is that nothing claims to be current when nothing is.
 check(
@@ -427,6 +428,12 @@ check(
   founderTiles.includes("/tutor") === customerTiles.includes("/tutor"),
   `Tutor is all-or-nothing, not founders-only (flag is ${founderTiles.includes("/tutor") ? "ON" : "off"} in this build)`
 );
+// /study is the same shape — studyEnabled() is a plain flag (lib/release.ts),
+// and its tile arrived after this launcher was designed.
+check(
+  founderTiles.includes("/study") === customerTiles.includes("/study"),
+  `Study is all-or-nothing, not founders-only (flag is ${founderTiles.includes("/study") ? "ON" : "off"} in this build)`
+);
 
 // ── 6. An OPEN launcher does not cover the pills ──────────────────────────
 // The trap this header walked into the first time it was split into two rows:
@@ -451,7 +458,7 @@ check(!(await evaluate(`!!${CALL_PILL}`)), "a stranger sees no Call pill");
 const sg = await control(GRID);
 await tap(sg.cx, sg.cy);
 check(
-  !(await evaluate(`!!${item("Call")}`)) &&
+  !(await evaluate(`!!${item("/call")}`)) &&
     !(await evaluate(`!!document.querySelector('[href="/call"]')`)),
   "and no Call tile in the launcher either"
 );
@@ -481,6 +488,58 @@ check(
   !(await evaluate(`!!${ACCOUNT_MENU}`)) && (await evaluate(`!!${GRID_MENU}`)),
   "and one touch back the other way"
 );
+
+// ── 9. One language per phone ──────────────────────────────────────────────
+// The header used to print "Table · Mesa", "Sign out · Salir" — both people's
+// words on one control. It reads in the phone OWNER's language now (`mine`,
+// lib/chrome/copy.ts), the rule #68 set for /call. Walk the whole header —
+// pills, every launcher tile, every account row, both triggers — with the
+// phone set to English and then to Spanish, and read what is actually drawn.
+// Share is the one exception: its label predates this change and is pinned
+// as a literal by tests/nav-completeness.test.ts.
+const WORDS = {
+  en: { "/translate": "Translate", "/live": "Live", "/tabletop": "Table", "/chat": "Chat", "/vision": "Photo translator", "/guide": "How to use TAOS", grid: "All screens", avatar: "Account" },
+  es: { "/translate": "Traducir", "/live": "En vivo", "/tabletop": "Mesa", "/chat": "Chat", "/vision": "Fotos", "/guide": "Cómo usar", grid: "Pantallas", avatar: "Cuenta" }
+};
+for (const lang of ["en", "es"]) {
+  console.log(`\n== one language per phone: ${lang} (390 px) ==`);
+  await open(FOUNDER, 390);
+  await evaluate(`localStorage.setItem("taos.translate.languages", ${JSON.stringify(JSON.stringify(lang === "en" ? ["en", "es"] : ["es", "en"]))})`);
+  await open(FOUNDER, 390);
+  const closed = await evaluate(`({
+    grid: ${GRID}.getAttribute('aria-label'),
+    avatar: ${AVATAR}.getAttribute('aria-label'),
+    pills: Object.fromEntries([...document.querySelectorAll('header nav a')].map(a => [a.getAttribute('href'), a.textContent.trim()]))
+  })`);
+  const w = WORDS[lang];
+  check(closed.grid === w.grid && closed.avatar === w.avatar,
+    `the two triggers say "${w.grid}" and "${w.avatar}"`, `${closed.grid} / ${closed.avatar}`);
+  for (const href of ["/translate", "/live", "/tabletop", "/chat"]) {
+    check(closed.pills[href] === w[href], `pill ${href} reads "${w[href]}"`, closed.pills[href]);
+  }
+  const og9 = await control(GRID);
+  await tap(og9.cx, og9.cy);
+  const tiles = await evaluate(
+    `[...${GRID_MENU}.querySelectorAll('[role="menuitem"]')].map(a => [a.getAttribute('href'), a.textContent.trim(), a.getAttribute('aria-label')])`
+  );
+  const photo = tiles.find(([h]) => h === "/vision");
+  check(photo && photo[1] === w["/vision"], `launcher tile /vision reads "${w["/vision"]}"`, photo?.[1]);
+  const av9 = await control(AVATAR);
+  await tap(av9.cx, av9.cy);
+  const rows = await evaluate(
+    `[...${ACCOUNT_MENU}.querySelectorAll('[role="menuitem"]')].map(a => [a.getAttribute('href'), a.textContent.trim(), a.getAttribute('aria-label')])`
+  );
+  const guide = rows.find(([h]) => h === "/guide");
+  check(guide && guide[1] === w["/guide"], `account row /guide reads "${w["/guide"]}"`, guide?.[1]);
+  const drawn = await evaluate(`[...document.querySelectorAll('header [aria-label], header [title]')]
+    .flatMap(el => [el.getAttribute('aria-label'), el.getAttribute('title')])
+    .concat([...document.querySelectorAll('header nav a')].map(a => a.textContent))
+    .filter(Boolean)`);
+  const doubled = [...drawn, ...tiles.flat(), ...rows.flat()]
+    .filter((t) => t && t.includes(" · ") && !t.includes("Share TAOS"));
+  check(doubled.length === 0, "no control in the header carries two languages",
+    doubled.length ? doubled.join(" | ") : `${tiles.length} tiles, ${rows.length} account rows, all single-language`);
+}
 
 console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
 ws.close();

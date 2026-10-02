@@ -287,11 +287,15 @@ describe("the nav is three tiers, and each holds its own kind of thing", () => {
       expect(hrefs(t.pills)).not.toContain(account);
       expect(hrefs(t.grid)).not.toContain(account);
     }
-    // Sign out and History are buttons, not hrefs — assert them by label.
-    expect(t.avatar).toContain("Sign out · Salir");
-    expect(t.avatar).toContain("History · Historial");
-    expect(t.pills).not.toContain("Sign out");
-    expect(t.grid).not.toContain("Sign out");
+    // Sign out and History are buttons, not hrefs — assert them by label. The
+    // label is a lib/chrome/copy.ts key now, in the phone owner's language,
+    // so the key is what the source holds.
+    expect(t.avatar).toContain("{nav.navSignOut}");
+    expect(t.avatar).toContain("{nav.navHistory}");
+    expect(t.pills).not.toContain("navSignOut");
+    expect(t.grid).not.toContain("navSignOut");
+    expect(t.pills).not.toContain("navHistory");
+    expect(t.grid).not.toContain("navHistory");
   });
 
   it("shows a stranger no gated screen in any tier", () => {

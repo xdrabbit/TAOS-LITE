@@ -24,6 +24,7 @@
 // and it never swaps to an X. The last describe block pins that split.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { copyFor, ENGLISH } from "@/lib/chrome/copy";
 
 const SHELL = "components/TranslatorShell.tsx";
 
@@ -112,20 +113,44 @@ describe("the launcher trigger invites rather than dismisses", () => {
   });
 });
 
+// "In both languages" used to mean ONE string carrying both ("All screens ·
+// Pantallas"). Since the nav reached lib/chrome/copy.ts it means each phone
+// reads its owner's language, and BOTH languages are in the table — which is
+// what the last case here checks, so the claim is still pinned, not dropped.
 describe("the trigger says what it does, in both languages", () => {
-  it("offers All screens · Pantallas while closed and Close · Cerrar while open", () => {
+  it("offers All screens while closed and Close menu while open", () => {
     const t = trigger();
-    expect(t).toContain('gridMenuOpen ? "Close menu · Cerrar menú" : "All screens · Pantallas"');
+    expect(t).toContain("gridMenuOpen ? nav.navCloseMenu : nav.navAllScreens");
     // Both the screen reader and the tooltip, not one or the other.
-    expect(t.match(/gridMenuOpen \? "Close menu · Cerrar menú" : "All screens · Pantallas"/g) ?? [])
-      .toHaveLength(2);
+    expect(t.match(/gridMenuOpen \? nav\.navCloseMenu : nav\.navAllScreens/g) ?? []).toHaveLength(2);
     expect(t).toContain("aria-label=");
     expect(t).toContain("title=");
   });
 
-  it("keeps the menu itself labelled, and bilingual", () => {
-    expect(code(SHELL)).toContain('aria-label="All screens · Pantallas"');
-    expect(code(SHELL)).toContain('aria-label="Account · Cuenta"');
+  it("keeps the menu itself labelled", () => {
+    expect(code(SHELL)).toContain("aria-label={nav.navAllScreens}");
+    expect(code(SHELL)).toContain("aria-label={nav.navAccount}");
+  });
+
+  it("has every header label in English AND Spanish, one language per string", () => {
+    const es = copyFor("es");
+    const keys = (Object.keys(ENGLISH) as Array<keyof typeof ENGLISH>).filter((k) => k.startsWith("nav"));
+    expect(keys.length).toBeGreaterThan(0);
+    for (const k of keys) {
+      expect(code(SHELL), `${k} is in the table but not on the header`).toContain(`nav.${k}`);
+      expect(ENGLISH[k]).not.toContain(" · ");
+      expect(es[k]).not.toContain(" · ");
+    }
+    // Spanish is really there, not English falling through. ("Chat" is the
+    // one word the two languages share, so it has no key — see copy.ts.)
+    for (const k of keys) expect(es[k], k).not.toBe(ENGLISH[k]);
+    // And the header no longer hard-codes a doubled label anywhere in it.
+    const src = code(SHELL);
+    const header = src.slice(src.indexOf("<header"), src.indexOf("</header>"));
+    const doubled = (header.match(/(aria-label|title)="[^"]* · [^"]*"/g) ?? []).filter(
+      (m) => !m.includes("Share TAOS")
+    );
+    expect(doubled).toEqual([]);
   });
 
   it("still announces itself as a menu button", () => {
@@ -144,8 +169,9 @@ describe("the menu still says who is signed in", () => {
     // rendered at all. Sign out lives in this menu; the account it signs out
     // of has to be visible in it.
     const menu = code(SHELL);
-    const start = menu.indexOf('aria-label="Account · Cuenta"');
-    const body = menu.slice(start, menu.indexOf("Sign out", start));
+    const start = menu.indexOf("aria-label={nav.navAccount}");
+    expect(start).toBeGreaterThan(-1);
+    const body = menu.slice(start, menu.indexOf("nav.navSignOut", start));
     expect(body).toContain("{email}");
   });
 });
@@ -171,7 +197,7 @@ describe("the avatar is identity, and is never asked to mean close", () => {
 
   it("says what it is, in both languages, and announces itself as a menu", () => {
     const a = avatar();
-    expect(a).toContain('accountMenuOpen ? "Close menu · Cerrar menú" : "Account · Cuenta"');
+    expect(a).toContain("accountMenuOpen ? nav.navCloseMenu : nav.navAccount");
     expect(a).toContain('aria-haspopup="menu"');
     expect(a).toContain("aria-expanded={accountMenuOpen}");
   });
@@ -181,12 +207,13 @@ describe("the avatar is identity, and is never asked to mean close", () => {
     // live in here, which is why /guide had to tell readers that the photo
     // translator was in "the account menu".
     const src = code(SHELL);
-    const start = src.indexOf('aria-label="Account · Cuenta"', src.indexOf('role="menu"'));
+    const start = src.indexOf("aria-label={nav.navAccount}", src.indexOf('role="menu"'));
+    expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, src.indexOf("<nav", start));
-    for (const account of ["History · Historial", "How to use TAOS", "About TAOS", "Sign out · Salir"]) {
+    for (const account of ["{nav.navHistory}", "{nav.navGuide}", "{nav.navAbout}", "{nav.navSignOut}"]) {
       expect(body).toContain(account);
     }
-    for (const screen of ["/vision", "/live", "/chat", "/tabletop", "/translate", "/call", "/fast", "/video", "/tutor"]) {
+    for (const screen of ["/vision", "/live", "/chat", "/tabletop", "/translate", "/call", "/fast", "/video", "/tutor", "/study"]) {
       expect(body).not.toContain(`href="${screen}"`);
     }
   });

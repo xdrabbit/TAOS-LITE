@@ -1259,6 +1259,14 @@ blank.
   guide now names the launcher and no longer tells anyone to look for "the
   round button with your initial in it", which had already been false since
   #45.
+  → **Lost and recovered.** #55 was live for about seven minutes: #56 merged
+  on a stale base the same day and silently overwrote it (470 lines out of
+  `TranslatorShell.tsx`), and nothing was rebuilt in its place. Recovered
+  2026-10-02 from `feat/nav-ia` (46b3d85) on Tom's re-approval, with two
+  changes #55 could not have known about: every nav label goes through
+  `lib/chrome/copy.ts` in the phone owner's language (no more doubled
+  `English · Español`, the rule #68 set for /call), and `/study` (#74) gets a
+  launcher tile. (PR #TBD)
 
 - **The header that ate touches, 2026-08-31** — PR #53. Tom, on the Droid:
   reaching Call through Together ▾ took two or three touches, reliably. The

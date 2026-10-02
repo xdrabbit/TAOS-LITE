@@ -10,6 +10,7 @@ import {
   LANGUAGE_COUNT
 } from "@/lib/guide";
 import { QUOTAS } from "@/lib/supabase";
+import { copyFor, ENGLISH, type ChromeKey } from "@/lib/chrome/copy";
 
 // /guide is the quick start handed to a group of travellers by QR code. Three
 // things about it are worth fencing, and they are the three things that rot:
@@ -165,14 +166,12 @@ describe("the labels it quotes are the labels on the screen", () => {
     ["START LISTENING", "components/LiveShell.tsx"],
     ["TAP TO TALK", "lib/chrome/copy.ts"],
     ["TAP WHEN DONE", "lib/chrome/copy.ts"],
-    ["Table · Mesa", "components/TranslatorShell.tsx"],
-    ["Chat · Chat", "components/TranslatorShell.tsx"],
     // "Together ▾" was here until the nav restructure removed it. The guide
     // pointed readers at a disclosure that no longer exists; the fence caught
-    // it, which is the fence working. Its replacement is the launcher's own
-    // label — the string a reader is told to look for in the top right corner.
-    ["All screens · Pantallas", "components/TranslatorShell.tsx"],
-    ["Photo translator · Fotos", "components/TranslatorShell.tsx"],
+    // it, which is the fence working. The header labels it was replaced by
+    // ("Table · Mesa", "All screens · Pantallas", "Photo translator · Fotos")
+    // are one language per phone now, so they are checked per language in
+    // the case below this loop rather than as doubled literals.
     ["+ More · Más", "components/LanguagePicker.tsx"],
     ["Text only · Solo texto", "components/TextOnly.tsx"],
     ["Translate into · Traducir a", "components/TranslatorShell.tsx"],
@@ -187,6 +186,28 @@ describe("the labels it quotes are the labels on the screen", () => {
       expect(read(source)).toContain(label);
     });
   }
+
+  it("names each header control by the word on THAT reader's phone", () => {
+    // The header reads in the phone owner's language (lib/chrome/copy.ts), so
+    // an English paragraph must quote the English label and a Spanish one the
+    // Spanish label — "Toca Table arriba" sends a Spanish reader looking for a
+    // word her phone does not show. Exact strings, both sides, both languages.
+    const inLang = (lang: "en" | "es") =>
+      GUIDE_SECTIONS.flatMap((s) => [
+        s.intro?.[lang] ?? "",
+        s.footnote?.[lang] ?? "",
+        ...s.entries.flatMap((e) => [e.body[lang], e.example?.[lang] ?? ""])
+      ]).join("\n");
+    const en = inLang("en");
+    const es = inLang("es");
+    const shell = read("components/TranslatorShell.tsx");
+    const QUOTED_NAV: ChromeKey[] = ["navTranslate", "navLive", "navTable", "navAllScreens", "navPhoto"];
+    for (const key of QUOTED_NAV) {
+      expect(shell, `${key} is not on the header`).toContain(`nav.${key}`);
+      expect(en, `English guide does not quote ${ENGLISH[key]}`).toContain(ENGLISH[key]);
+      expect(es, `Spanish guide does not quote ${copyFor("es")[key]}`).toContain(copyFor("es")[key]);
+    }
+  });
 
   it("does not call the microphone screen 'Translate'", () => {
     // The trap this guide had to walk around: the header pill labelled

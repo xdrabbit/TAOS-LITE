@@ -163,10 +163,10 @@ function fileNameFor(mime: string): string {
  * One 24x24 line icon for the launcher grid, in the stroke style every other
  * icon in this app already uses (see components/fast/FastMicDock.tsx and the
  * Share button below): fill none, currentColor, 2px round caps. Decorative —
- * every tile carries its own bilingual aria-label, so these are aria-hidden and
- * never the thing a screen reader announces.
+ * every tile carries its own aria-label from lib/chrome/copy.ts, so these are
+ * aria-hidden and never the thing a screen reader announces.
  *
- * One component rather than ten inline SVGs so the sizing cannot drift tile to
+ * One component rather than eleven inline SVGs so the sizing cannot drift tile to
  * tile, which is the only way a grid of icons stops reading as a grid.
  */
 function NavIcon({ name }: { name: NavIconName }): JSX.Element {
@@ -207,7 +207,9 @@ const NAV_ICON_PATHS = {
   fast: ["M13 2L4 14h7l-1 8 9-12h-7l1-8z"],
   photo: ["M3 8.5A2 2 0 015 6.5h2.2L8.5 4.5h7l1.3 2H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z", "M15.5 13a3.5 3.5 0 11-7 0 3.5 3.5 0 017 0z"],
   video: ["M3 7a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z", "M15 10.5l6-3.5v10l-6-3.5"],
-  tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"]
+  tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"],
+  // /study: an open book — your own conversations, read back as lessons.
+  study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"]
 } as const;
 
 export function TranslatorShell({
@@ -333,6 +335,10 @@ export function TranslatorShell({
   const speaker = speakerFor(source);
   const listener = speakerFor(target);
   const s = copyFor(source); // speaker-facing copy (active speaker's language)
+  // The header is the phone OWNER's, not the speaker's: it must not change
+  // language every time auto-detect hands the turn across. `mine` is the side
+  // this phone keeps as its own — the same choice /call makes (CallShell).
+  const nav = copyFor(mine);
   // Tier 2 (lib/languages/catalog.ts): translated, never spoken. The screen has
   // to say so up front — an audio control that silently does nothing reads as a
   // bug, and this is a known limit of the language, not of the app.
@@ -934,10 +940,10 @@ export function TranslatorShell({
                     setAccountMenuOpen(false);
                     setGridMenuOpen((o) => !o);
                   }}
-                  aria-label={gridMenuOpen ? "Close menu · Cerrar menú" : "All screens · Pantallas"}
+                  aria-label={gridMenuOpen ? nav.navCloseMenu : nav.navAllScreens}
                   aria-haspopup="menu"
                   aria-expanded={gridMenuOpen}
-                  title={gridMenuOpen ? "Close menu · Cerrar menú" : "All screens · Pantallas"}
+                  title={gridMenuOpen ? nav.navCloseMenu : nav.navAllScreens}
                   className="flex h-11 w-11 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 text-amber-200 transition active:scale-95"
                 >
                   <span className="relative block h-4 w-4">
@@ -980,7 +986,7 @@ export function TranslatorShell({
                 {gridMenuOpen ? (
                   <div
                     role="menu"
-                    aria-label="All screens · Pantallas"
+                    aria-label={nav.navAllScreens}
                     className="absolute right-0 top-full z-20 mt-2 w-[17rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                   >
                     {/* Two columns on a phone, and every tile the same size —
@@ -990,7 +996,7 @@ export function TranslatorShell({
                         79.5px for Quick translate/Photo translator. Two tile
                         sizes in one grid is the thing that stops a grid of
                         icons reading as a grid.
-                        max-h + scroll is the backstop for a founder's ten
+                        max-h + scroll is the backstop for a founder's eleven
                         entries on a short screen — a launcher that runs off
                         the bottom is the same bug as one that runs off the
                         right, and this one has been made twice. */}
@@ -1002,7 +1008,7 @@ export function TranslatorShell({
                       <a
                         href="/"
                         role="menuitem"
-                        aria-label="Speak · Hablar"
+                        aria-label={nav.navSpeak}
                         aria-current={pathname === "/" ? "page" : undefined}
                         className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                           pathname === "/"
@@ -1011,12 +1017,12 @@ export function TranslatorShell({
                         }`}
                       >
                         <NavIcon name="speak" />
-                        Speak · Hablar
+                        {nav.navSpeak}
                       </a>
                       <a
                         href="/translate"
                         role="menuitem"
-                        aria-label="Translate · Traducir"
+                        aria-label={nav.navTranslate}
                         aria-current={pathname === "/translate" ? "page" : undefined}
                         className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                           pathname === "/translate"
@@ -1025,12 +1031,12 @@ export function TranslatorShell({
                         }`}
                       >
                         <NavIcon name="translate" />
-                        Translate · Traducir
+                        {nav.navTranslate}
                       </a>
                       <a
                         href="/live"
                         role="menuitem"
-                        aria-label="Live · En vivo"
+                        aria-label={nav.navLive}
                         aria-current={pathname === "/live" ? "page" : undefined}
                         className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                           pathname === "/live"
@@ -1039,12 +1045,12 @@ export function TranslatorShell({
                         }`}
                       >
                         <NavIcon name="live" />
-                        Live · En vivo
+                        {nav.navLive}
                       </a>
                       <a
                         href="/tabletop"
                         role="menuitem"
-                        aria-label="Table · Mesa"
+                        aria-label={nav.navTable}
                         aria-current={pathname === "/tabletop" ? "page" : undefined}
                         className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                           pathname === "/tabletop"
@@ -1053,12 +1059,12 @@ export function TranslatorShell({
                         }`}
                       >
                         <NavIcon name="table" />
-                        Table · Mesa
+                        {nav.navTable}
                       </a>
                       <a
                         href="/chat"
                         role="menuitem"
-                        aria-label="Chat · Chat"
+                        aria-label="Chat"
                         aria-current={pathname === "/chat" ? "page" : undefined}
                         className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                           pathname === "/chat"
@@ -1067,11 +1073,11 @@ export function TranslatorShell({
                         }`}
                       >
                         <NavIcon name="chat" />
-                        Chat · Chat
+                        Chat
                       </a>
                       {/* Gated tiles carry the SAME guard as their pill and
                           their page — callVisibleTo(), fastVisibleTo(),
-                          isFounder(), tutorEnabled() (lib/release.ts). The
+                          isFounder(), tutorEnabled(), studyEnabled() (lib/release.ts). The
                           redundancy between grid and pills is per-screen, so a
                           screen cannot half-appear: strip these blocks and what
                           is left is exactly a stranger's launcher.
@@ -1080,7 +1086,7 @@ export function TranslatorShell({
                         <a
                           href="/call"
                           role="menuitem"
-                          aria-label="Call · Llamada"
+                          aria-label={nav.navCall}
                           aria-current={pathname === "/call" ? "page" : undefined}
                           className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                             pathname === "/call"
@@ -1089,14 +1095,14 @@ export function TranslatorShell({
                           }`}
                         >
                           <NavIcon name="call" />
-                          Call · Llamada
+                          {nav.navCall}
                         </a>
                       ) : null}
                       {fastVisible ? (
                         <a
                           href="/fast"
                           role="menuitem"
-                          aria-label="Quick translate · Rápida"
+                          aria-label={nav.navFast}
                           aria-current={pathname === "/fast" ? "page" : undefined}
                           className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                             pathname === "/fast"
@@ -1105,13 +1111,13 @@ export function TranslatorShell({
                           }`}
                         >
                           <NavIcon name="fast" />
-                          Quick translate · Rápida
+                          {nav.navFast}
                         </a>
                       ) : null}
                       <a
                         href="/vision"
                         role="menuitem"
-                        aria-label="Photo translator · Fotos"
+                        aria-label={nav.navPhoto}
                         aria-current={pathname === "/vision" ? "page" : undefined}
                         className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                           pathname === "/vision"
@@ -1120,13 +1126,13 @@ export function TranslatorShell({
                         }`}
                       >
                         <NavIcon name="photo" />
-                        Photo translator · Fotos
+                        {nav.navPhoto}
                       </a>
                       {founder ? (
                         <a
                           href="/video"
                           role="menuitem"
-                          aria-label="Video captions · Subtítulos"
+                          aria-label={nav.navVideo}
                           aria-current={pathname === "/video" ? "page" : undefined}
                           className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                             pathname === "/video"
@@ -1135,14 +1141,14 @@ export function TranslatorShell({
                           }`}
                         >
                           <NavIcon name="video" />
-                          Video captions · Subtítulos
+                          {nav.navVideo}
                         </a>
                       ) : null}
                       {tutorEnabled() ? (
                         <a
                           href="/tutor"
                           role="menuitem"
-                          aria-label="Language tutor · Tutor de idiomas"
+                          aria-label={nav.navTutor}
                           aria-current={pathname === "/tutor" ? "page" : undefined}
                           className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
                             pathname === "/tutor"
@@ -1151,7 +1157,27 @@ export function TranslatorShell({
                           }`}
                         >
                           <NavIcon name="tutor" />
-                          Language tutor · Tutor
+                          {nav.navTutor}
+                        </a>
+                      ) : null}
+                      {/* Study is you and your own material, not a class — so it
+                          is deliberately not the tutor and not behind the tutor's
+                          flag (lib/release.ts). It arrived (#74) after this grid
+                          was designed; nav-completeness caught the missing tile. */}
+                      {studyEnabled() ? (
+                        <a
+                          href="/study"
+                          role="menuitem"
+                          aria-label={nav.navStudy}
+                          aria-current={pathname === "/study" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/study"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="study" />
+                          {nav.navStudy}
                         </a>
                       ) : null}
                     </div>
@@ -1184,10 +1210,10 @@ export function TranslatorShell({
                     setGridMenuOpen(false);
                     setAccountMenuOpen((o) => !o);
                   }}
-                  aria-label={accountMenuOpen ? "Close menu · Cerrar menú" : "Account · Cuenta"}
+                  aria-label={accountMenuOpen ? nav.navCloseMenu : nav.navAccount}
                   aria-haspopup="menu"
                   aria-expanded={accountMenuOpen}
-                  title={accountMenuOpen ? "Close menu · Cerrar menú" : "Account · Cuenta"}
+                  title={accountMenuOpen ? nav.navCloseMenu : nav.navAccount}
                   className={`flex h-11 w-11 items-center justify-center rounded-full transition active:scale-95 ${
                     accountMenuOpen ? "ring-2 ring-amber-300/60" : ""
                   }`}
@@ -1223,7 +1249,7 @@ export function TranslatorShell({
                 {accountMenuOpen ? (
                   <div
                     role="menu"
-                    aria-label="Account · Cuenta"
+                    aria-label={nav.navAccount}
                     className="absolute right-0 top-full z-20 mt-2 w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-amber-300/20 bg-[rgba(20,16,14,0.97)] shadow-[0_10px_34px_rgba(0,0,0,0.55)] backdrop-blur"
                   >
                     {/* Who you are signed in as. This used to be the trigger's
@@ -1237,14 +1263,14 @@ export function TranslatorShell({
                     <button
                       type="button"
                       role="menuitem"
-                      aria-label="History · Historial"
+                      aria-label={nav.navHistory}
                       onClick={() => {
                         setAccountMenuOpen(false);
                         setHistoryOpen(true);
                       }}
                       className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
-                      History · Historial
+                      {nav.navHistory}
                     </button>
                     {/* The quick start, for the person who installed TAOS at a
                         table and now wants to know what the other pills do. The
@@ -1253,10 +1279,10 @@ export function TranslatorShell({
                     <a
                       href="/guide"
                       role="menuitem"
-                      aria-label="How to use TAOS · Cómo usar"
+                      aria-label={nav.navGuide}
                       className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
-                      How to use TAOS · Cómo usar
+                      {nav.navGuide}
                     </a>
                     {/* /about is the product page a stranger reads after
                         scanning the QR — Landing.tsx links it, but Landing is
@@ -1265,22 +1291,22 @@ export function TranslatorShell({
                     <a
                       href="/about"
                       role="menuitem"
-                      aria-label="About TAOS · Acerca de TAOS"
+                      aria-label={nav.navAbout}
                       className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                     >
-                      About TAOS · Acerca de TAOS
+                      {nav.navAbout}
                     </a>
                     <button
                       type="button"
                       role="menuitem"
-                      aria-label="Sign out · Salir"
+                      aria-label={nav.navSignOut}
                       onClick={() => {
                         setAccountMenuOpen(false);
                         onSignOut();
                       }}
                       className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100/70 transition hover:bg-amber-400/10"
                     >
-                      Sign out · Salir
+                      {nav.navSignOut}
                     </button>
                   </div>
                 ) : null}
@@ -1305,31 +1331,31 @@ export function TranslatorShell({
               min-h-[44px] with inline-flex, not padding: min-height does
               nothing to an inline element. These were 48x30 until #54 — the row
               a thumb reaches for most, 14px under the floor. */}
-          <nav aria-label="Screens · Pantallas" className="flex flex-wrap items-center justify-end gap-2">
+          <nav aria-label={nav.navScreens} className="flex flex-wrap items-center justify-end gap-2">
             <a
               href="/translate"
-              aria-label="Translate · Traducir"
+              aria-label={nav.navTranslate}
               className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
-              Translate
+              {nav.navTranslate}
             </a>
             <a
               href="/live"
-              aria-label="Live · En vivo"
+              aria-label={nav.navLive}
               className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
-              Live
+              {nav.navLive}
             </a>
             <a
               href="/tabletop"
-              aria-label="Table · Mesa"
+              aria-label={nav.navTable}
               className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
-              Table
+              {nav.navTable}
             </a>
             <a
               href="/chat"
-              aria-label="Chat · Chat"
+              aria-label="Chat"
               className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
             >
               Chat
@@ -1337,10 +1363,10 @@ export function TranslatorShell({
             {callVisible ? (
               <a
                 href="/call"
-                aria-label="Call · Llamada"
+                aria-label={nav.navCall}
                 className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
               >
-                Call
+                {nav.navCall}
               </a>
             ) : null}
           </nav>
