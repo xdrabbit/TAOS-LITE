@@ -61,6 +61,7 @@ const LABELS: Record<string, Record<string, string>> = {
     noMic: "Microphone not available. Use HTTPS and allow mic access.",
     denied: "Microphone permission denied.",
     unsupported: "Pronunciation scoring isn't available for this language yet.",
+    empty: "Nothing was recorded — tap ● Say it, speak, then tap ■ Stop.",
     failed: "Scoring failed."
   },
   es: {
@@ -75,6 +76,7 @@ const LABELS: Record<string, Record<string, string>> = {
     noMic: "Micrófono no disponible. Usa HTTPS y permite el acceso al micrófono.",
     denied: "Permiso de micrófono denegado.",
     unsupported: "La calificación de pronunciación aún no está disponible para este idioma.",
+    empty: "No se grabó nada — toca ● Dilo, habla y luego toca ■ Parar.",
     failed: "No se pudo calificar."
   }
 };
@@ -129,6 +131,16 @@ export function SayIt({
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       setStatus("scoring");
+      // Ask for the buffered audio BEFORE stopping: WebKit has delivered the
+      // final dataavailable after onstop in the past, which leaves onstop
+      // building a blob from an empty chunk list.
+      if (recorder.state === "recording") {
+        try {
+          recorder.requestData();
+        } catch {
+          /* not every implementation allows it mid-state; stop still flushes */
+        }
+      }
       recorder.stop();
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -142,6 +154,10 @@ export function SayIt({
     const blob = new Blob(chunksRef.current, { type: mimeRef.current || "audio/webm" });
     recorderRef.current = null;
     if (blob.size === 0) {
+      // A dead button is worse than a message. Zero bytes means the recorder
+      // produced nothing — a tap-tap too quick for it, or a track that ended
+      // before the first chunk — and the learner should hear that, not idle.
+      setNote(L.empty);
       setStatus("idle");
       return;
     }
