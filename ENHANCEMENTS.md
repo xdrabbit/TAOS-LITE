@@ -693,6 +693,8 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   (added 2026-09-30 from Tom's AI-counselor conversation)
 
 - **`/study` — lessons from your own conversations, as a screen in the app** —
+  **→ SHIPPED 2026-10-02 as PR #74 (dark; see Shipped). Kept here for the open
+  "Say it" billing decision below.** —
   the viewer's lesson prototype (tools/translations-viewer) is the most
   valuable thing built this year and it lives in the worst possible place: a
   loopback server on blackbird, reachable only over Tailscale, only while the
@@ -804,6 +806,19 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **`/study` — lessons from your own conversations, in the app** — the viewer's
+  lesson prototype moved to a route behind Liz's own account: pick a line (history
+  grouped into conversations by `session_id`), get the breakdown, hear it in the
+  speaker's cloned voice, keep a library. Its own flag `NEXT_PUBLIC_ENABLE_STUDY`,
+  never `tutorEnabled()`. Shipped DARK: the flag is on Preview only; production
+  redirects `/study` home and the route 404s. "Say it" scoring deliberately left
+  out — a billing decision, see the Ideas entry. (shipped 2026-10-02, PR #74,
+  c76c369; migration `20261001_study_lessons.sql` applied)
+- **`session_id` on every saved translation** — the client mints a uuid per
+  conversation and a new one after ten minutes of silence, measured from the
+  last turn; old rows stay null on purpose. The one fact that is cheap at the
+  moment of speaking and unrecoverable later. (shipped 2026-10-02, PR #73,
+  db9a07b; migration `20261001_translation_sessions.sql` applied)
 - **The default register is tú, not usted, 2026-09-11** — PR #65. Liz
   field-tested #64 on production: talking with Tom, TAOS had him address her as
   *usted* — "es como que si estuviéramos en el principio... me siento
