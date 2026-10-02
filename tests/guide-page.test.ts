@@ -155,12 +155,16 @@ describe("the labels it quotes are the labels on the screen", () => {
   // Each pair is [what /guide tells the reader to look for, where that string
   // has to exist]. When one of these fails, the label moved — fix the guide,
   // do not loosen the test.
+  // The five chrome labels below say lib/chrome/copy.ts rather than a shell.
+  // They did not change a character — the TABLE moved out of the two shells
+  // that each kept one, so /tabletop and /call could share it. The assertion
+  // is still exact-string and still two-sided; only the file it reads moved.
   const QUOTED: Array<[string, string]> = [
     ["Continue with Google", "components/SignIn.tsx"],
     ["Add to Home Screen", "components/InstallPrompt.tsx"],
     ["START LISTENING", "components/LiveShell.tsx"],
-    ["TAP TO TALK", "components/TabletopShell.tsx"],
-    ["TAP WHEN DONE", "components/TabletopShell.tsx"],
+    ["TAP TO TALK", "lib/chrome/copy.ts"],
+    ["TAP WHEN DONE", "lib/chrome/copy.ts"],
     ["Table · Mesa", "components/TranslatorShell.tsx"],
     ["Chat · Chat", "components/TranslatorShell.tsx"],
     ["Together ▾", "components/TranslatorShell.tsx"],
@@ -168,9 +172,9 @@ describe("the labels it quotes are the labels on the screen", () => {
     ["+ More · Más", "components/LanguagePicker.tsx"],
     ["Text only · Solo texto", "components/TextOnly.tsx"],
     ["Translate into · Traducir a", "components/TranslatorShell.tsx"],
-    ["Tap the mic, speak a full thought, tap again.", "components/TranslatorShell.tsx"],
-    ["Lay the phone flat between you", "components/TabletopShell.tsx"],
-    ["Pon el teléfono entre ustedes", "components/TabletopShell.tsx"]
+    ["Tap the mic, speak a full thought, tap again.", "lib/chrome/copy.ts"],
+    ["Lay the phone flat between you", "lib/chrome/copy.ts"],
+    ["Pon el teléfono entre ustedes", "lib/chrome/copy.ts"]
   ];
 
   for (const [label, source] of QUOTED) {

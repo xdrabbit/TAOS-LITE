@@ -20,6 +20,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SHELL = "components/CallShell.tsx";
+/** Where the words themselves went when /call got a copy table. */
+const COPY = "lib/chrome/copy.ts";
 
 function read(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -43,20 +45,35 @@ function pillRows(): string[] {
 
 describe("the in-call row is captioned like the lobby's", () => {
   it("draws two rows, and BOTH of them say what the pills mean", () => {
+    // The captions are keys now, not literals — /call reads its chrome out of
+    // lib/chrome/copy.ts so the screen comes up in the language its owner
+    // HEARS, rather than in English with a Spanish half glued on. The rule
+    // being fenced is unchanged: both rows carry both captions.
     const rows = pillRows();
     expect(rows).toHaveLength(2);
     for (const row of rows) {
-      expect(row).toContain('caption="They speak · Ellos hablan"');
-      expect(row).toContain('pairedTitle="You hear this · Tú escuchas esto"');
+      expect(row).toContain("caption={c.callTheySpeak}");
+      expect(row).toContain("pairedTitle={c.callYouHearThis}");
     }
+    const copy = read(COPY);
+    expect(copy).toContain('callTheySpeak: "They speak"');
+    expect(copy).toContain('callTheySpeak: "Ellos hablan"');
   });
 
   it("says which language you hear in words, not in a pill colour", () => {
     // The tooltip was the whole of it mid-call, and a tooltip on a phone is
     // nothing at all. Both rows are followed by a sentence naming the side.
+    // Still a sentence under each row, and the language name in it is still
+    // amber. What changed is that the sentence is a TEMPLATE with a slot, so
+    // the language name can sit wherever the translation puts it — which is
+    // why the assertion is the styled value plus the split that feeds it,
+    // rather than an English word order.
     const src = code(SHELL);
-    expect(src.match(/You hear <span className="text-amber-200">\{languageLabel\(mine\)\}<\/span>/g))
-      .toHaveLength(2);
+    expect(
+      src.match(/<span className="text-amber-200">\{languageLabel\(mine\)\}<\/span>/g)
+    ).toHaveLength(2);
+    expect(src.match(/splitAround\(c\.callYouHear, "language"\)/g)).toHaveLength(2);
+    expect(src.match(/splitAround\(c\.callMidCallPair, "language"\)/g)).toHaveLength(2);
   });
 });
 
@@ -80,7 +97,13 @@ describe("your own side is inert for the duration of a call", () => {
 describe("Rejoin exists, and only where it does something", () => {
   it("draws the button the notice has been promising", () => {
     const src = code(SHELL);
-    expect(src).toContain("↻ Rejoin · Reanudar");
+    // Was the literal "↻ Rejoin · Reanudar". Doubled English and Spanish made
+    // sense when its neighbours were English; under a Spanish notice, in a
+    // Spanish row of buttons, it read as the one control that missed the memo.
+    expect(src).toContain("{c.callRejoin}");
+    const copy = read(COPY);
+    expect(copy).toContain('callRejoin: "↻ Rejoin"');
+    expect(copy).toContain('callRejoin: "↻ Reanudar"');
     expect(src).toContain("onClick={rejoinInterpreter}");
     // A fingertip, like everything else added since #54.
     const button = src.slice(src.indexOf("onClick={rejoinInterpreter}"));
@@ -122,7 +145,15 @@ describe("Rejoin exists, and only where it does something", () => {
   it("stops telling people they are off the call when they are not", () => {
     // Both auto-end notices now say so, because "the interpreter stopped" and
     // "the call dropped" looked identical from the chair.
+    // The sentence lives in the copy table now, so it is counted there — in
+    // BOTH languages, because a Spanish notice that drops it puts Liz exactly
+    // where this rule was written to stop Tom being.
+    const copy = read(COPY);
+    expect((copy.match(/You are still on the call\./g) ?? [])).toHaveLength(2);
+    expect((copy.match(/Sigues en la llamada\./g) ?? [])).toHaveLength(2);
+    // And the shell still raises exactly those two notices.
     const src = code(SHELL);
-    expect((src.match(/You are still on the call\./g) ?? [])).toHaveLength(2);
+    expect(src).toContain("copyRef.current.callIdleEnded");
+    expect(src).toContain("copyRef.current.callLimitEnded");
   });
 });

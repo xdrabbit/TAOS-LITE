@@ -129,9 +129,9 @@ function fakeTrack(): MediaStreamTrack {
 
 /** Join a room and walk the call to `connected` with the partner's audio in hand. */
 async function joinAndConnect(): Promise<void> {
-  fireEvent.change(screen.getByPlaceholderText("Room code"), { target: { value: "AMOR" } });
+  fireEvent.change(screen.getByPlaceholderText("Código de sala"), { target: { value: "AMOR" } });
   await act(async () => {
-    fireEvent.click(screen.getByText("Join call"));
+    fireEvent.click(screen.getByText("Entrar a la llamada"));
   });
   await act(async () => {
     callEvents?.onState?.("connected");
@@ -159,6 +159,13 @@ beforeEach(async () => {
   mintOutcome = "ok";
   window.localStorage.clear();
   // The pair has to be EN/ES or the doubled-side rule skips the session.
+  //
+  // It also decides what language the SCREEN is in, as of the chrome copy
+  // table. The default pair is ["es", "en"] (lib/translate/pair.ts), so this
+  // phone's owner HEARS Spanish and every button, status and banner below is
+  // in Spanish. That is not incidental to these tests — it is the thing the
+  // table was built for. tests/call-chrome-language.test.ts walks the other
+  // direction.
   ({ CallShell } = await import("@/components/CallShell"));
 });
 
@@ -227,19 +234,19 @@ describe("/call says why there are no captions", () => {
 
     // Connected. The partner's forwarded audio track may still be carrying
     // nothing at all, and no error is ever raised for that.
-    expect(screen.getByText("Intérprete: activo · on")).toBeTruthy();
+    expect(screen.getByText("Intérprete: activo")).toBeTruthy();
 
     await act(async () => {
       interpreterEvents?.onHearing?.(true);
     });
-    expect(screen.getByText("Intérprete: ✓ activo · on")).toBeTruthy();
+    expect(screen.getByText("Intérprete: ✓ activo")).toBeTruthy();
   });
 
   it("says the interpreter is not needed when both sides share a language", async () => {
     render(createElement(CallShell));
-    fireEvent.change(screen.getByPlaceholderText("Room code"), { target: { value: "AMOR" } });
+    fireEvent.change(screen.getByPlaceholderText("Código de sala"), { target: { value: "AMOR" } });
     await act(async () => {
-      fireEvent.click(screen.getByText("Join call"));
+      fireEvent.click(screen.getByText("Entrar a la llamada"));
     });
     await act(async () => {
       callEvents?.onState?.("connected");
@@ -260,14 +267,14 @@ describe("/call captions toggle", () => {
     await translate("Hola.", "Hello.");
 
     await act(async () => {
-      fireEvent.click(screen.getByText("💬 Captions on"));
+      fireEvent.click(screen.getByText("💬 Subtítulos sí"));
     });
 
     // The old screen rendered NOTHING here, which is the same picture a
     // broken interpreter draws. Off has to look like a choice.
-    expect(screen.getByText(/Captions are OFF/)).toBeTruthy();
+    expect(screen.getByText(/Subtítulos APAGADOS/)).toBeTruthy();
     expect(screen.queryByText("Hello.")).toBeNull();
-    expect(screen.getByText("💬 Captions off")).toBeTruthy();
+    expect(screen.getByText("💬 Subtítulos no")).toBeTruthy();
   });
 
   it("comes back on when the mark is tapped", async () => {
@@ -275,10 +282,10 @@ describe("/call captions toggle", () => {
     await joinAndConnect();
     await translate("Hola.", "Hello.");
     await act(async () => {
-      fireEvent.click(screen.getByText("💬 Captions on"));
+      fireEvent.click(screen.getByText("💬 Subtítulos sí"));
     });
     await act(async () => {
-      fireEvent.click(screen.getByText(/Captions are OFF/));
+      fireEvent.click(screen.getByText(/Subtítulos APAGADOS/));
     });
 
     expect(screen.getByText("Hello.")).toBeTruthy();
@@ -291,10 +298,13 @@ describe("/call captions toggle", () => {
     // These two sat side by side reading "💬 Captions only" and "💬 Captions",
     // governing different things. Either one looked like the way to get
     // captions, and one of them turned them off.
-    const captions = screen.getByText("💬 Captions on").textContent ?? "";
-    const voice = screen.getByText("🗣️ Voice on").textContent ?? "";
-    expect(captions).toContain("Captions");
-    expect(voice).not.toContain("Caption");
+    const captions = screen.getByText("💬 Subtítulos sí").textContent ?? "";
+    const voice = screen.getByText("🗣️ Voz encendida").textContent ?? "";
+    // The rule is "no shared word and no shared icon", and it has to hold in
+    // whatever language the screen is in — a table that translated both of
+    // them to the same word would grow the bug back in Spanish.
+    expect(captions).toContain("Subtítulos");
+    expect(voice).not.toContain("Subtítulos");
     expect(voice).not.toContain("💬");
   });
 
@@ -302,15 +312,15 @@ describe("/call captions toggle", () => {
     render(createElement(CallShell));
     await joinAndConnect();
     await act(async () => {
-      fireEvent.click(screen.getByText("💬 Captions on"));
+      fireEvent.click(screen.getByText("💬 Subtítulos sí"));
     });
-    expect(screen.getByText(/Captions are OFF/)).toBeTruthy();
+    expect(screen.getByText(/Subtítulos APAGADOS/)).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Hang up"));
+      fireEvent.click(screen.getByText("Colgar"));
     });
     await joinAndConnect();
 
-    expect(screen.getByText("💬 Captions on")).toBeTruthy();
+    expect(screen.getByText("💬 Subtítulos sí")).toBeTruthy();
   });
 });

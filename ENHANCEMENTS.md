@@ -16,6 +16,26 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Chrome language should be its own setting, not the translation pair** —
+  The next step after PR #68, and named as out of scope there on purpose. Every
+  screen picks its chrome language off the shared pair today: home follows the
+  active speaker, `/call` follows `mine` (what the phone's owner hears). That
+  is right often enough to ship, and wrong in one visible way — the default
+  pair is `["es", "en"]`, so a fresh install opens `/call` in Spanish until you
+  tap your own pill. The fix is a UI-language setting of its own, defaulted
+  from the device locale and overridable, read by `copyFor()` instead of the
+  pair. `lib/chrome/copy.ts` is already shaped for it: one call site to change,
+  and no screen holds an opinion about its own language any more.
+  (added 2026-09-16)
+- **Samoan is not in the language catalog** — The ask that started the copy
+  table work was a woman who wants her grandfather to use TAOS in Samoan, and
+  `sm` is not in `lib/languages/catalog.ts` at all, so it cannot be picked on
+  any screen. PR #68 made the chrome side of it free — the day `sm` is in the
+  catalog it works with English buttons and no edit to the copy table — but
+  the catalog entry itself is still missing, which means the request is not
+  actually answered yet. Needs the tier check the Languages section below
+  describes (does ElevenLabs speak it?) before it is added.
+  (added 2026-09-16)
 - **Cap Study lesson generation per user per month** — `/study` went live in
   production on 2026-10-02 (Tom flipped `NEXT_PUBLIC_ENABLE_STUDY` to
   Production). Every lesson is a gpt-5.5 completion of ~4,500 tokens taking
@@ -832,11 +852,15 @@ That is the whole job — no second list, no flag table, no shell edit.
   which a listener has no way to recognize as broken.
 
 The app's own CHROME (buttons, status copy) is translated into six languages,
-which is a separate and much smaller list — `STRINGS` in `TranslatorShell`. A
-language without an entry there gets English buttons and a faithful translation
-in its own language, which is the trade that lets the catalog grow without a
-translator. Adding a seventh is a kindness to a language people keep using; it
-is not a prerequisite for using it.
+which is a separate and much smaller list — `lib/chrome/copy.ts` (it was
+`STRINGS` in `TranslatorShell` and a cut-down twin called `L` in
+`TabletopShell` until PR #68 made it one table). A language without an entry
+there gets English buttons and a faithful translation in its own language,
+which is the trade that lets the catalog grow without a translator. Adding a
+seventh is a kindness to a language people keep using; it is not a
+prerequisite for using it — and since #68 the fallback is per KEY, so a
+language can have six words written for it without the other hundred going
+blank.
 
 ## /call test pairs: granting and revoking access
 
@@ -848,6 +872,13 @@ is not a prerequisite for using it.
 
 ## Shipped
 
+- **`/call` speaks one language per phone** — every word of `/call`'s chrome
+  moved into `lib/chrome/copy.ts` (the home screen's and Table's tables lifted
+  into it too), resolved from `mine`, so Liz's phone reads Spanish and Tom's
+  reads English; no more `English · Español` on one control. Rebased onto #67,
+  the Resync button and the "hearing nothing" notice were reconciled to say
+  Resync / Resincronizar — approved by Tom 2026-10-02. Two-phone test cleared
+  by Tom and Liz 2026-10-02. (shipped 2026-10-02, PR #68)
 - **`/study` — lessons from your own conversations, in the app** — the viewer's
   lesson prototype moved to a route behind Liz's own account: pick a line (history
   grouped into conversations by `session_id`), get the breakdown, hear it in the
