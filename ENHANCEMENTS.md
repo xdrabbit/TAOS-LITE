@@ -692,6 +692,57 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     they were there — but it should be a deliberate moment, not a side effect.
   (added 2026-09-30 from Tom's AI-counselor conversation)
 
+- **`/study` — lessons from your own conversations, as a screen in the app** —
+  the viewer's lesson prototype (tools/translations-viewer) is the most
+  valuable thing built this year and it lives in the worst possible place: a
+  loopback server on blackbird, reachable only over Tailscale, only while the
+  laptop is awake and a dev server is running. An evening spent trying to get
+  it onto Liz's phone failed on iOS VPN prompts, MagicDNS and a missing
+  `:3019` — none of which are the feature's fault, and all of which stop
+  existing the moment it is a route in the app she already has installed.
+  - **Named Study · Estudio**, and it is deliberately NOT the tutor. **Tutor**
+    teaches you someone else's curriculum (Crawl/Walk/Run, a path through
+    material you did not choose). **Study** has no curriculum, because the
+    material is your own life. Tom had the word for this as a missionary
+    learning Chinese: 补习班 *bǔxíbān* — not 学习 "study" plainly, but
+    **supplementary** study, 补 meaning to supplement or make up. The work you
+    do in addition to the class. That is precisely the split.
+  - **Its own flag, not `tutorEnabled()`.** `/tutor` is held back because it is
+    unfinished; a finished Study screen must not be blocked behind it. A
+    separate gate also lets Study ship to Liz while tutor stays dark.
+  - **Most of it already ships.** Azure pronunciation scoring is
+    `app/api/tutor/assess` (already behind `guardSpend`); ElevenLabs TTS
+    including Liz's cloned voice is `app/api/tts`; per-user isolation is RLS on
+    `taos_lite_translations`. What is missing: a lesson-generation route
+    wrapping the hardened prompt in `tools/translations-viewer/lib/lesson.mjs`
+    (384 lines, money route, needs `guardSpend`), a `taos_lite_lessons` table
+    with RLS (no lessons table exists today — the tutor's lessons are course
+    content), and the screen. The expensive, fiddly legs are done. Note the
+    assess route is currently gated by `tutorEnabled()`; Study needs that path
+    reachable without turning the tutor on.
+  - **Needs no participant model.** Each person studies their own rows and RLS
+    already scopes them, so nobody sees anyone else's data. The who-was-there
+    work belongs to *sharing an archive*, not to teaching one person from their
+    own history — the two looked coupled and are not.
+  - **Does want `session_id`**, though: a lesson built from a whole exchange
+    beats one built from an orphan line, and which turns belonged to one
+    conversation is the one thing that cannot be reconstructed later.
+  - **Probably absorbs the Tutor notebook idea** above (saved words, notes, a
+    review queue, added 2026-08-06). That entry assumed the notebook hung off
+    the course; vocabulary saved from your OWN conversations belongs here, and
+    this is a better home than a course Liz may never take.
+  - **Rejected alternative: exposing the viewer publicly.** Putting
+    `tools/translations-viewer` behind a Cloudflare Tunnel + Access on
+    `ritualstack.io` (the machinery already runs there for mc/dash) would work
+    and would take an evening. It was turned down on purpose: it puts 16,000
+    intimate records on the public internet guarded by one Access policy, and
+    still depends on a laptop staying awake. It hardens a prototype instead of
+    shipping the product. The viewer stays local, single-user and Tom's — which
+    is also the honest answer to the "safeguard the viewer" entry above: not a
+    login, just nobody else uses it.
+  (added 2026-10-01 from the evening spent failing to get the viewer onto
+  Liz's phone)
+
 ## Languages: the two tiers, and adding one
 
 TAOS speaks **100 languages** as of 2026-08-17 — the whole list lives in
