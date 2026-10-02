@@ -1283,7 +1283,7 @@ blank.
   changes #55 could not have known about: every nav label goes through
   `lib/chrome/copy.ts` in the phone owner's language (no more doubled
   `English · Español`, the rule #68 set for /call), and `/study` (#74) gets a
-  launcher tile. (PR #TBD)
+  launcher tile. (PR #77)
 
 - **The header that ate touches, 2026-08-31** — PR #53. Tom, on the Droid:
   reaching Call through Together ▾ took two or three touches, reliably. The
