@@ -21,6 +21,7 @@ import { requestSpeech } from "@/lib/tts/speech";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { continueSession, type ConversationSession } from "@/lib/translate/session";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
@@ -332,6 +333,8 @@ export function TranslatorShell({
   // resolves (unless they already tapped the toggle themselves).
   const [engine, setEngine] = useState<Engine>("openai");
   const engineTouchedRef = useRef(false);
+  // The conversation the next saved turn belongs to; see lib/translate/session.ts.
+  const sessionRef = useRef<ConversationSession | null>(null);
   useEffect(() => {
     if (subscriber && !engineTouchedRef.current) setEngine("elevenlabs");
   }, [subscriber]);
@@ -795,7 +798,14 @@ export function TranslatorShell({
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
       setStatus("done");
       if (payload.translation) {
+        // Stamp the turn with its conversation: the same id while the turns
+        // keep coming, a fresh one after ten minutes of silence. Only turns
+        // that actually save can define a session — they are the only ones
+        // the table will ever contain.
+        const session = continueSession(sessionRef.current, Date.now());
+        sessionRef.current = session;
         void saveTranslation({
+          session_id: session.id,
           source_lang: resolvedSrc,
           target_lang: resolvedTgt,
           tone: TONE,

@@ -72,6 +72,7 @@ deliberate pattern here, not an oversight).
 | **Audio** | None. Audio is transcribed in-flight by `/api/translate` and never stored. |
 | **User ids** | `user_id` only, defaulted to `auth.uid()`. **One id per row.** |
 | **Second party** | **Not identified — at all.** Not account-linked, not pseudonymous. The only trace of the other person is `target_lang`. |
+| **Conversation** | `session_id` (uuid, nullable) since 2026-10-01 — `supabase/migrations/20261001_translation_sessions.sql`. A client-minted id shared by every turn of one conversation on one phone, a fresh id after 10 minutes of silence (`lib/translate/session.ts`). Null on every row written before that date. It groups turns; it still says **nothing** about who the second party was. |
 | **Retention** | Forever, until the user deletes. No TTL, no expiry job. |
 | **Deletion** | `taos_own_delete` (self), plus `clearHistory()` in the drawer. `ON DELETE CASCADE` from `auth.users`. |
 | **RLS** | `taos_own_select` / `taos_own_insert` / `taos_own_delete`, all `auth.uid() = user_id`. No UPDATE policy — rows are immutable once written. Correct and tight. |
