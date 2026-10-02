@@ -24,8 +24,11 @@
 //
 // ── Bilingual, but not inline ──────────────────────────────────────────────
 // The app's chrome convention is "English · Español" on one line, and this
-// file keeps it for short things — headings, and labels that are ALREADY
-// bilingual on screen ("Table · Mesa"). Paragraphs get the /about treatment
+// file keeps it for short things — headings, and labels whose screen shows
+// one half or the other ("Table · Mesa": the header reads in the phone
+// owner's language, lib/chrome/copy.ts, so an English phone says Table and a
+// Spanish one says Mesa). Inside an `es` paragraph, quote the Spanish half —
+// that is the word on a Spanish reader's phone. Paragraphs get the /about treatment
 // instead: an `en` and an `es` field rendered as two stacked blocks per
 // section. Two full sentences joined by a middot is unreadable on a phone,
 // and the point of this page is that half the group reads the Spanish first.
@@ -67,7 +70,8 @@ export interface Bilingual {
  *
  * `label` is deliberately a single string rather than a Bilingual — it is the
  * control's name AS PRINTED ON THE SCREEN, which is sometimes English-only
- * ("START LISTENING") and sometimes already bilingual ("Table · Mesa").
+ * ("START LISTENING") and sometimes one name per language ("Table · Mesa" —
+ * the header shows whichever half is the phone owner's language).
  * Translating it would send the reader looking for a button that is not there.
  */
 export interface GuideEntry {
@@ -147,7 +151,7 @@ const MODES: GuideSection = {
   heading: { en: "Four ways to talk", es: "Cuatro formas de hablar" },
   intro: {
     en: "TAOS opens on the first one. The rest are buttons along the top of that screen — Translate, Live, Table, Chat — one tap each. The nine dots in the top right corner open a grid with every screen TAOS has, if you would rather see them all at once.",
-    es: "TAOS abre en la primera. Las demás son botones arriba en esa misma pantalla — Translate, Live, Table, Chat — un toque cada uno. Los nueve puntos de la esquina superior derecha abren una cuadrícula con todas las pantallas, si prefieres verlas todas juntas."
+    es: "TAOS abre en la primera. Las demás son botones arriba en esa misma pantalla — Traducir, En vivo, Mesa, Chat — un toque cada uno. Los nueve puntos de la esquina superior derecha abren una cuadrícula con todas las pantallas, si prefieres verlas todas juntas."
   },
   entries: [
     {
@@ -179,7 +183,7 @@ const MODES: GuideSection = {
       label: "Table · Mesa",
       body: {
         en: "Tap Table along the top. Lay the phone flat between the two of you: the screen splits, and the far half is upside-down so it reads the right way up from their side. Each half is in that person's own language. TAP TO TALK, TAP WHEN DONE, and it is the other person's turn.",
-        es: "Toca Table arriba. Pon el teléfono plano entre los dos: la pantalla se divide, y la mitad de enfrente está al revés para que se lea bien desde su lado. Cada mitad está en el idioma de esa persona. TOCA PARA HABLAR, TOCA AL TERMINAR, y le toca a la otra persona."
+        es: "Toca Mesa arriba. Pon el teléfono plano entre los dos: la pantalla se divide, y la mitad de enfrente está al revés para que se lea bien desde su lado. Cada mitad está en el idioma de esa persona. TOCA PARA HABLAR, TOCA AL TERMINAR, y le toca a la otra persona."
       },
       example: {
         en: "Lay the phone flat between you.",
@@ -201,7 +205,7 @@ const MODES: GuideSection = {
   ],
   footnote: {
     en: "The Translate pill at the top is a fifth way in: type instead of talking, with suggestions from things you have said before.",
-    es: "El botón Translate de arriba es una quinta vía: escribe en vez de hablar, con sugerencias de cosas que ya has dicho."
+    es: "El botón Traducir de arriba es una quinta vía: escribe en vez de hablar, con sugerencias de cosas que ya has dicho."
   }
 };
 
@@ -220,8 +224,8 @@ const PHOTO: GuideSection = {
       icon: "📷",
       label: "Photo translator · Fotos",
       body: {
-        en: "Tap the nine dots in the top right corner — All screens · Pantallas — then Photo translator · Fotos. Point the camera at a menu, a sign, a label, a form — or choose a photo you already took — and the words come back in your language. Nothing is kept.",
-        es: "Toca los nueve puntos de la esquina superior derecha — All screens · Pantallas — y luego Photo translator · Fotos. Apunta la cámara a un menú, un letrero, una etiqueta, un formulario — o elige una foto que ya tomaste — y las palabras vuelven en tu idioma. No se guarda nada."
+        en: "Tap the nine dots in the top right corner — All screens — then Photo translator. Point the camera at a menu, a sign, a label, a form — or choose a photo you already took — and the words come back in your language. Nothing is kept.",
+        es: "Toca los nueve puntos de la esquina superior derecha — Pantallas — y luego Fotos. Apunta la cámara a un menú, un letrero, una etiqueta, un formulario — o elige una foto que ya tomaste — y las palabras vuelven en tu idioma. No se guarda nada."
       },
       example: {
         en: "There is no language to set: it reads whatever the photo turns out to be.",
@@ -263,7 +267,7 @@ const LANGUAGES_SECTION: GuideSection = {
   ],
   footnote: {
     en: "Whatever you pick carries across the app — the speaking screen, Live, Table and the photo translator all use the same two languages.",
-    es: "Lo que elijas se usa en toda la app — la pantalla de hablar, Live, Mesa y el traductor de fotos usan los mismos dos idiomas."
+    es: "Lo que elijas se usa en toda la app — la pantalla de hablar, En vivo, Mesa y el traductor de fotos usan los mismos dos idiomas."
   }
 };
 
