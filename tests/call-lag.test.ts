@@ -673,7 +673,13 @@ function shellCode(): string {
 describe("Resync, any time during a call", () => {
   it("is drawn whenever the interpreter could be rebuilt, not only after an auto-end", () => {
     const src = shellCode();
-    expect(src).toContain("↻ Resync · Resincronizar");
+    // Was the literal "↻ Resync · Resincronizar". Like Rejoin, it now comes
+    // out of the copy table in the phone owner's one language (PR #68).
+    expect(src).toContain("{c.callResync}");
+    expect(src).not.toContain("Resync · Resincronizar");
+    const copy = readFileSync(new URL("../lib/chrome/copy.ts", import.meta.url), "utf8");
+    expect(copy).toContain('callResync: "↻ Resync"');
+    expect(copy).toContain('callResync: "↻ Resincronizar"');
     expect(src).toContain('{!autoEnded && interpreterStatus !== "not_needed" ? (');
   });
 

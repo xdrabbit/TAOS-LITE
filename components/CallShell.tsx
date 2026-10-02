@@ -1518,8 +1518,7 @@ export function CallShell(): JSX.Element {
             {!autoEnded && interpreterStatus !== "not_needed" ? (
               <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] leading-snug text-amber-100/40">
-                  Translations falling behind? This restarts the interpreter only — the call stays
-                  up.
+                  {c.callResyncHint}
                 </span>
                 <button
                   type="button"
@@ -1527,7 +1526,7 @@ export function CallShell(): JSX.Element {
                   disabled={interpreterStatus === "starting"}
                   className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-xl border border-white/10 px-3 text-xs text-amber-100/60 transition active:scale-95 disabled:opacity-40"
                 >
-                  ↻ Resync · Resincronizar
+                  {c.callResync}
                 </button>
               </div>
             ) : null}

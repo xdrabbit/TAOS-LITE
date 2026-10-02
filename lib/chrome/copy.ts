@@ -168,6 +168,11 @@ const EN = {
   callCaptionsListening: "Listening… captions appear as they speak.",
   callCaptionsOffNotice: "Captions are OFF — tap to show them.",
   callRejoin: "↻ Rejoin",
+  // Resync (PR #67) is the same rebuild as Rejoin, offered while the
+  // interpreter is still running. Its own key so that, like Rejoin, it
+  // reads in one language rather than "↻ Resync · Resincronizar".
+  callResync: "↻ Resync",
+  callResyncHint: "Translations falling behind? This restarts the interpreter only — the call stays up.",
   callMicOn: "🎙️ Mic on",
   callMicOff: "🔇 Mic off",
   callCamOn: "📹 Cam on",
@@ -198,7 +203,7 @@ const EN = {
   callSameLanguage: "You and your partner are both on {language} — no interpreter needed.",
   callInterpreterError: "Interpreter: {reason}",
   callInterpreterDeaf:
-    "Interpreter is connected but hearing nothing — try Rejoin, and check the trail below.",
+    "Interpreter is connected but hearing nothing — try Resync, and check the trail below.",
   callIdleEnded:
     "The interpreter stopped after two minutes of quiet — tap Rejoin to bring it back. You are still on the call.",
   callLimitEnded:
@@ -326,6 +331,9 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     callCaptionsListening: "Escuchando… los subtítulos aparecen mientras habla.",
     callCaptionsOffNotice: "Subtítulos APAGADOS — toca para mostrarlos.",
     callRejoin: "↻ Reanudar",
+    callResync: "↻ Resincronizar",
+    callResyncHint:
+      "¿Las traducciones se están atrasando? Esto reinicia solo el intérprete — la llamada sigue.",
     callMicOn: "🎙️ Micro encendido",
     callMicOff: "🔇 Micro apagado",
     callCamOn: "📹 Cámara encendida",
@@ -356,7 +364,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     callSameLanguage: "Tú y la otra persona están en {language} — no hace falta intérprete.",
     callInterpreterError: "Intérprete: {reason}",
     callInterpreterDeaf:
-      "El intérprete está conectado pero no oye nada — prueba Reanudar y mira los detalles de abajo.",
+      "El intérprete está conectado pero no oye nada — prueba Resincronizar y mira los detalles de abajo.",
     callIdleEnded:
       "El intérprete se detuvo después de dos minutos de silencio — toca Reanudar para traerlo de vuelta. Sigues en la llamada.",
     callLimitEnded:
