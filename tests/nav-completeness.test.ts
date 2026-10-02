@@ -60,7 +60,10 @@ const GATED: Record<string, string> = {
   // flag is still off and still real — callVisibleTo() is `flag || founder`,
   // so stripping this block is what a CUSTOMER's nav looks like.
   call: "callVisible",
-  video: "founder"
+  video: "founder",
+  // /study is dark until NEXT_PUBLIC_ENABLE_STUDY — its own flag, not the
+  // tutor's (lib/release.ts). Stripping this block is what a customer sees.
+  study: "studyEnabled()"
 };
 
 function read(path: string): string {

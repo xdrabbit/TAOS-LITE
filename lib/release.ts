@@ -64,6 +64,18 @@ export function tutorEnabled(): boolean {
   return flag === "1" || flag === "true";
 }
 
+// /study — lessons from your own conversations — is deliberately NOT the
+// tutor and does not share its flag. Tutor is held back because it is
+// unfinished; a finished Study screen must not inherit that gate, and keeping
+// them apart is what lets Study ship to Liz while /tutor stays dark
+// (ENHANCEMENTS.md, 2026-10-01). Same shape as every flag above: dark until
+// NEXT_PUBLIC_ENABLE_STUDY=1 in Vercel and a redeploy; the screen redirects
+// home and every /api/study route answers 404 (tests/study-flag.test.ts).
+export function studyEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_STUDY ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
 // The pricing copy is the other half of that flag, and it was the open
 // objection to pulling tutor at all: the plans sell "15 / 45 / 200 tutor
 // minutes / month" and the add-on packs sell more of them, so with tutor dark

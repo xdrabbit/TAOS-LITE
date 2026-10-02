@@ -23,7 +23,7 @@ import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
-import { callVisibleTo, fastVisibleTo, isFounder, tutorEnabled } from "@/lib/release";
+import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
@@ -1067,6 +1067,18 @@ export function TranslatorShell({
                         className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
                       >
                         Tutor
+                      </a>
+                    ) : null}
+                    {/* Study is you and your own material, not a class — so it
+                        is deliberately not the tutor and not behind the tutor's
+                        flag (lib/release.ts). Dark until NEXT_PUBLIC_ENABLE_STUDY. */}
+                    {studyEnabled() ? (
+                      <a
+                        href="/study"
+                        role="menuitem"
+                        className="flex min-h-[44px] w-full items-center border-t border-white/10 px-4 py-2.5 text-left text-sm text-amber-100 transition hover:bg-amber-400/10"
+                      >
+                        Study · Estudio
                       </a>
                     ) : null}
                     {/* The word-for-word quickie box. In the menu rather than

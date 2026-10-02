@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import type { StudyLesson } from "@/lib/study/types";
 
 // The publishable key is PUBLIC by design — it ships in the browser bundle of
 // every Supabase app. Security comes from Row-Level Security on the table, not
@@ -103,6 +104,50 @@ export interface Profile {
   bonus_seconds: number | null;
   /** @deprecated 2026-08-28 — see bonus_seconds. */
   bonus_period: string | null;
+}
+
+// ── Study: lessons from your own conversations ───────────────────────────
+// Read, annotated and deleted here under RLS (study_own_*); never inserted —
+// generation costs money and happens in /api/study/lesson with the service
+// role, after the study flag and the spend guard (lib/study/lessonStore.ts).
+const STUDY_TABLE = "taos_lite_study_lessons";
+
+export interface StudyLessonRow {
+  id: string;
+  lesson_key: string;
+  session_id: string | null;
+  source_ids: string[];
+  selection: string;
+  target_lang: string;
+  explain_lang: string;
+  model: string | null;
+  lesson: StudyLesson;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listStudyLessons(limit = 200): Promise<StudyLessonRow[]> {
+  const { data, error } = await supabase
+    .from(STUDY_TABLE)
+    .select("id, lesson_key, session_id, source_ids, selection, target_lang, explain_lang, model, lesson, note, created_at, updated_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as StudyLessonRow[];
+}
+
+export async function deleteStudyLesson(id: string): Promise<void> {
+  const { error } = await supabase.from(STUDY_TABLE).delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function updateStudyLessonNote(id: string, note: string): Promise<void> {
+  const { error } = await supabase
+    .from(STUDY_TABLE)
+    .update({ note: note.slice(0, 5000), updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
 }
 
 export async function getProfile(): Promise<Profile | null> {

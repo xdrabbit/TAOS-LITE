@@ -7,6 +7,7 @@ import {
   HELD_BACK_V1,
   isFounder,
   onDeviceSttEnabled,
+  studyEnabled,
   tutorComingSoon,
   tutorEnabled
 } from "@/lib/release";
@@ -41,6 +42,7 @@ const ORIGINAL_ENV = process.env.NEXT_PUBLIC_FOUNDER_EMAILS;
 const ORIGINAL_TUTOR = process.env.NEXT_PUBLIC_ENABLE_TUTOR;
 const ORIGINAL_ONDEVICE = process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT;
 const ORIGINAL_CALL = process.env.NEXT_PUBLIC_ENABLE_CALL;
+const ORIGINAL_STUDY = process.env.NEXT_PUBLIC_ENABLE_STUDY;
 
 function restore(name: string, original: string | undefined): void {
   if (original === undefined) {
@@ -55,6 +57,7 @@ afterEach(() => {
   restore("NEXT_PUBLIC_ENABLE_TUTOR", ORIGINAL_TUTOR);
   restore("NEXT_PUBLIC_ENABLE_ONDEVICE_STT", ORIGINAL_ONDEVICE);
   restore("NEXT_PUBLIC_ENABLE_CALL", ORIGINAL_CALL);
+  restore("NEXT_PUBLIC_ENABLE_STUDY", ORIGINAL_STUDY);
 });
 
 function read(path: string): string {
@@ -90,6 +93,38 @@ describe("v1 held-back set", () => {
     // by adding it to HELD_BACK_V1 would hand it to Tom and Liz while leaving
     // it hidden from customers, which is the opposite of a premium feature.
     expect(new Set<string>(HELD_BACK_V1).has("tutor")).toBe(false);
+  });
+});
+
+describe("studyEnabled (dark until the flag is set)", () => {
+  // Study is not the tutor and must not inherit its gate (lib/release.ts).
+  it("is off when the flag is unset — what production ships", () => {
+    delete process.env.NEXT_PUBLIC_ENABLE_STUDY;
+    expect(studyEnabled()).toBe(false);
+  });
+
+  it("is off for every value that is not an explicit opt-in", () => {
+    for (const value of ["", " ", "0", "false", "no", "off", "undefined", "please"]) {
+      process.env.NEXT_PUBLIC_ENABLE_STUDY = value;
+      expect(studyEnabled()).toBe(false);
+    }
+  });
+
+  it("turns on with 1 or true, tolerating case and stray whitespace", () => {
+    for (const value of ["1", " 1 ", "true", "TRUE", " True "]) {
+      process.env.NEXT_PUBLIC_ENABLE_STUDY = value;
+      expect(studyEnabled()).toBe(true);
+    }
+  });
+
+  it("is independent of the tutor flag, in both directions", () => {
+    process.env.NEXT_PUBLIC_ENABLE_TUTOR = "1";
+    delete process.env.NEXT_PUBLIC_ENABLE_STUDY;
+    expect(studyEnabled()).toBe(false);
+    delete process.env.NEXT_PUBLIC_ENABLE_TUTOR;
+    process.env.NEXT_PUBLIC_ENABLE_STUDY = "1";
+    expect(studyEnabled()).toBe(true);
+    expect(tutorEnabled()).toBe(false);
   });
 });
 
