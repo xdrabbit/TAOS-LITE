@@ -756,6 +756,17 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   - Stacked on #73 (`session_id`). DEPLOY ORDER: apply
     `20261001_translation_sessions.sql`, then `20261001_study_lessons.sql`,
     before either reaches production; then `NEXT_PUBLIC_ENABLE_STUDY=1`.
+  - **"Say it" DECIDED and built (PR #75, 2026-10-02).** Study borrows
+    `/api/tutor/assess` rather than growing an unmetered copy: same Azure
+    spend, so the same meter and the same allowance rule. The route's gate is
+    now `tutorEnabled() || studyEnabled()`; Study attempts spend tutor minutes
+    like any other (founders unlimited). Attempts persist through the existing
+    `saveTutorAttempt` into `tutor_attempts` with `course: "study"` — no
+    schema change (checked: no CHECK on `course`, owner-only RLS). Ported from
+    the prototype: peak-level silence check before Azure, interrupted-mic
+    handling, and the hint that NAMES what cost the score. Verified on the
+    preview: assess answers 401 with only the study flag on. The one thing no
+    test can run is a real recording — that is a tap on a phone.
   (added 2026-10-01 from the evening spent failing to get the viewer onto
   Liz's phone)
 
