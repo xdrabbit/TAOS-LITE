@@ -18,6 +18,7 @@ import type { Session } from "@supabase/supabase-js";
 import {
   deleteStudyLesson,
   listHistory,
+  listStudyAttempts,
   listStudyLessons,
   supabase,
   type HistoryRow,
@@ -28,6 +29,7 @@ import { requestSpeech } from "@/lib/tts/speech";
 import { languageNative } from "@/lib/languages/catalog";
 import { conversationTitle, groupConversations, sideIn, type Conversation } from "@/lib/study/group";
 import type { StudyLessonResponse } from "@/lib/study/types";
+import { bestOf } from "@/lib/study/practice";
 import { StudyLessonCard } from "./study/StudyLessonCard";
 import { SignIn } from "./SignIn";
 
@@ -92,6 +94,8 @@ export function StudyShell(): JSX.Element {
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lesson, setLesson] = useState<StudyLessonResponse | null>(null);
+  /** Best score so far per line of the open lesson, from tutor_attempts. */
+  const [bests, setBests] = useState<Record<string, number>>({});
   const playing = useRef<HTMLAudioElement | null>(null);
 
   // ── auth ─────────────────────────────────────────────────────────────────
@@ -147,6 +151,30 @@ export function StudyShell(): JSX.Element {
   }, [present]);
 
   // ── actions ──────────────────────────────────────────────────────────────
+  const loadBests = useCallback(async (key: string) => {
+    try {
+      const rows = await listStudyAttempts(key);
+      const byText = new Map<string, Array<number | null>>();
+      for (const r of rows) {
+        const list = byText.get(r.target_phrase) ?? [];
+        list.push(r.pron_score);
+        byText.set(r.target_phrase, list);
+      }
+      const next: Record<string, number> = {};
+      for (const [text, scores] of byText) {
+        const b = bestOf(scores);
+        if (b !== null) next[text] = b;
+      }
+      setBests(next);
+    } catch {
+      setBests({});
+    }
+  }, []);
+
+  const onScored = useCallback((text: string, pron: number) => {
+    setBests((b) => ({ ...b, [text]: Math.max(b[text] ?? 0, Math.round(pron)) }));
+  }, []);
+
   const makeLesson = useCallback(
     async (id: string, force = false) => {
       setBusy(true);
@@ -161,6 +189,7 @@ export function StudyShell(): JSX.Element {
         if (!res.ok) throw new Error(data.error || "Could not make that lesson.");
         setLesson(data);
         setView("lesson");
+        void loadBests(data.key);
         void listStudyLessons().then(setLibrary).catch(() => undefined);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not make that lesson.");
@@ -168,7 +197,7 @@ export function StudyShell(): JSX.Element {
         setBusy(false);
       }
     },
-    [learn, explain]
+    [learn, explain, loadBests]
   );
 
   const openSaved = useCallback((row: StudyLessonRow) => {
@@ -183,7 +212,8 @@ export function StudyShell(): JSX.Element {
       sources: []
     });
     setView("lesson");
-  }, []);
+    void loadBests(row.lesson_key);
+  }, [loadBests]);
 
   const remove = useCallback(async (id: string) => {
     try {
@@ -314,7 +344,16 @@ export function StudyShell(): JSX.Element {
                 </button>
               ) : null}
             </div>
-            <StudyLessonCard lesson={lesson.lesson} target={lesson.target} explain={lesson.explain} onHear={hear} busy={speaking} />
+            <StudyLessonCard
+              lesson={lesson.lesson}
+              target={lesson.target}
+              explain={lesson.explain}
+              lessonKey={lesson.key}
+              bests={bests}
+              onHear={hear}
+              onScored={onScored}
+              busy={speaking}
+            />
           </section>
         ) : view === "library" ? (
           <section className="flex flex-col gap-2">

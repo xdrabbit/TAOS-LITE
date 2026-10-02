@@ -1,6 +1,19 @@
 // Azure Pronunciation Assessment wants 16 kHz mono 16-bit PCM WAV. MediaRecorder
 // gives us webm/opus or mp4, so we decode + resample + re-encode in the browser.
-export async function blobToWav16k(blob: Blob): Promise<Blob> {
+export interface Wav16k {
+  wav: Blob;
+  /** Loudest absolute sample, 0..1. Under lib/study/practice.ts SILENCE_PEAK it is silence. */
+  peak: number;
+  seconds: number;
+}
+
+/**
+ * The WAV plus what it is worth knowing before sending it anywhere: how loud
+ * it ever got, and how long it is. A live mic can deliver a recording of
+ * nothing (iOS leaves a graph silently suspended), and the only place that can
+ * be caught for free is here, before Azure is paid to score it.
+ */
+export async function blobToWav16kWithLevel(blob: Blob): Promise<Wav16k> {
   const arrayBuf = await blob.arrayBuffer();
   const AudioCtx =
     window.AudioContext ||
@@ -17,7 +30,17 @@ export async function blobToWav16k(blob: Blob): Promise<Blob> {
   src.connect(offline.destination);
   src.start();
   const rendered = await offline.startRendering();
-  return encodeWav(rendered.getChannelData(0), targetRate);
+  const samples = rendered.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const a = Math.abs(samples[i]);
+    if (a > peak) peak = a;
+  }
+  return { wav: encodeWav(samples, targetRate), peak, seconds: samples.length / targetRate };
+}
+
+export async function blobToWav16k(blob: Blob): Promise<Blob> {
+  return (await blobToWav16kWithLevel(blob)).wav;
 }
 
 function encodeWav(samples: Float32Array, sampleRate: number): Blob {

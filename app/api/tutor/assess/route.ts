@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { tutorEnabled } from "@/lib/release";
+import { studyEnabled, tutorEnabled } from "@/lib/release";
 import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 import { languageLabel } from "@/lib/languages/catalog";
 import { resolveAssessmentLocale } from "@/lib/tutor/pronunciation";
@@ -77,7 +77,13 @@ async function coach(reference: string, result: {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // RC1: tutor is off (lib/release.ts) — see /api/tutor/realtime. Azure
   // pronunciation scoring is billed per request too.
-  if (!tutorEnabled()) {
+  //
+  // Study (/study) borrows this route for its ● Say it button rather than
+  // growing an unmetered copy: it is the same Azure spend, so the same meter
+  // and the same allowance rule are the honest ones. Either flag opens it;
+  // Study attempts spend tutor minutes like any other (founders are
+  // unlimited). tests/study-flag.test.ts pins that both names stay here.
+  if (!tutorEnabled() && !studyEnabled()) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
