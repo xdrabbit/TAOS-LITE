@@ -1,0 +1,57 @@
+{
+  "show_slug": "love-in-translation",
+  "rss_podcast_id": "400282",
+  "title": "Love in Translation",
+  "episodes": [
+    {
+      "internal_id": "how-we-met-without-really-speaking",
+      "working_episode_number": null,
+      "title": "How We Met Without Really Speaking",
+      "short_summary": "How Tom and Liz began becoming important to each other despite barely sharing a language.",
+      "status": "planned",
+      "public_display": true,
+      "rss_episode_id": null,
+      "published_at": null
+    },
+    {
+      "internal_id": "falling-in-love-through-a-phone",
+      "working_episode_number": null,
+      "title": "Falling in Love Through a Phone",
+      "short_summary": "Translation technology as the bridge, and translating meaning rather than just words.",
+      "status": "planned",
+      "public_display": true,
+      "rss_episode_id": null,
+      "published_at": null
+    },
+    {
+      "internal_id": "the-first-trip",
+      "working_episode_number": null,
+      "title": "The First Trip",
+      "short_summary": "Travel as a stress test: one funny moment, one beautiful moment, and one difficult moment where language mattered.",
+      "status": "planned",
+      "public_display": true,
+      "rss_episode_id": null,
+      "published_at": null
+    },
+    {
+      "internal_id": "living-in-america-when-english-isnt-yours",
+      "working_episode_number": null,
+      "title": "Living in America When English Isn't Yours",
+      "short_summary": "A Liz-led look at ordinary American tasks becoming difficult without English.",
+      "status": "planned",
+      "public_display": true,
+      "rss_episode_id": null,
+      "published_at": null
+    },
+    {
+      "internal_id": "when-translation-isnt-enough",
+      "working_episode_number": null,
+      "title": "When Translation Isn't Enough",
+      "short_summary": "Tone, trust, jealousy, culture, and situations where every word can translate correctly while meaning still fails.",
+      "status": "planned",
+      "public_display": true,
+      "rss_episode_id": null,
+      "published_at": null
+    }
+  ]
+}

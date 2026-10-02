@@ -1,0 +1,1379 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TAOS-LITE translations</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --ink: #14161a;
+        --muted: #5d6673;
+        --line: #dfe3e9;
+        --accent: #1f6feb;
+        --mark: #ffe08a;
+        --mark-ink: #3d2c00;
+        --danger: #b4232c;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1115;
+          --panel: #171a21;
+          --ink: #e7eaf0;
+          --muted: #98a2b3;
+          --line: #262b35;
+          --accent: #6ea8ff;
+          --mark: #5c4a12;
+          --mark-ink: #ffe9a8;
+          --danger: #ff8a8a;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      header {
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+      h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+      main { padding: 16px 20px 60px; max-width: 1240px; margin: 0 auto; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+      label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+      input, select, button, textarea {
+        font: inherit;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 9px;
+      }
+      input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        border-color: transparent;
+        color: #fff;
+        font-weight: 600;
+        padding: 8px 13px;
+      }
+      button.ghost { background: transparent; color: var(--ink); border-color: var(--line); font-weight: 500; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .grow { flex: 1 1 280px; }
+      .muted { color: var(--muted); }
+      .danger { color: var(--danger); }
+      .pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+      tbody tr:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+      mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padding: 0 1px; }
+      .when { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
+      .text { max-width: 420px; overflow-wrap: anywhere; }
+      .meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+      .stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .empty { padding: 34px; text-align: center; color: var(--muted); }
+      .toast {
+        position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px 16px; box-shadow: 0 8px 26px rgba(0,0,0,.18); max-width: 82vw;
+      }
+      .hint { font-size: 11px; color: var(--muted); margin-top: 7px; }
+      code { background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+
+      /* Results + the in-context panel. Side by side when there's room; on a
+         phone the panel covers the screen and ✕ returns to the results. */
+      .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+      .left { min-width: 0; }
+      body.detail-open main { max-width: 1600px; }
+      @media (min-width: 1000px) {
+        body.detail-open .layout { grid-template-columns: minmax(0, 1fr) minmax(380px, 44%); }
+      }
+      #detail {
+        position: sticky; top: 72px; margin: 0;
+        max-height: calc(100vh - 88px); overflow: auto; padding: 0;
+      }
+      @media (max-width: 999px) {
+        #detail { position: fixed; inset: 0; z-index: 10; max-height: none; border-radius: 0; }
+      }
+      .detail-head {
+        position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center;
+        padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+      }
+      .detail-head button { padding: 4px 10px; }
+      #detailBody { padding: 8px 12px 16px; }
+      .ctx { padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }
+      .ctx:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+      .ctx + .ctx { margin-top: 4px; }
+      .ctx.focus { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); cursor: default; }
+      .ctx .full { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .ctx .full + .full { margin-top: 4px; color: var(--muted); }
+      .ctx.focus .full + .full { color: var(--ink); }
+      .ctx .when-line { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+      .ctx .when-line button { padding: 2px 8px; font-size: 11px; margin-left: auto; }
+      .ctx .when-line button + button { margin-left: 0; }
+      .gap { text-align: center; font-size: 11px; color: var(--muted); padding: 6px 0; }
+      .more { display: block; margin: 6px auto; }
+      /* Lesson prototype: a sheet over everything; closing it returns to the panel. */
+      #lessonFab { position: fixed; z-index: 30; padding: 6px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+      #lesson {
+        position: fixed; inset: 0; z-index: 20; overflow: auto;
+        background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(3px);
+      }
+      .lesson-sheet { max-width: 820px; margin: 24px auto 60px; padding: 0 16px; }
+      .lesson-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+      .lesson-head h2 { margin: 0; font-size: 16px; }
+      .lsn h4 { margin: 18px 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+      .lsn-target { font-size: 24px; line-height: 1.3; font-weight: 650; letter-spacing: -.01em; }
+      .lsn-en { font-size: 15px; color: var(--muted); margin-top: 4px; }
+      .words { display: flex; flex-wrap: wrap; gap: 6px; }
+      .w { border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; min-width: 64px; }
+      .w b { display: block; font-size: 16px; }
+      .w span { display: block; font-size: 12px; }
+      .w small { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+      .notes { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+      .order { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: baseline; }
+      .order .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+      .order .trap { text-decoration: line-through; text-decoration-color: var(--danger); color: var(--danger); }
+      .order .right { font-weight: 600; }
+      .rules { padding-left: 18px; margin: 10px 0 0; }
+      .rules li + li { margin-top: 8px; }
+      .rules .ex { color: var(--muted); font-style: italic; margin-top: 2px; }
+      .chunks { padding-left: 22px; margin: 0; }
+      .chunks li { font-size: 16px; padding: 3px 0; }
+      .lesson-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+      .lesson-tools button { padding: 5px 11px; }
+      .lesson-tools .danger { color: var(--danger); }
+      .lesson-note { text-transform: none; letter-spacing: 0; font-size: 12px; margin-bottom: 6px; }
+      .lesson-note textarea { width: 100%; resize: vertical; font-size: 14px; }
+      .lesson-tools + .lesson-note + .hint, .lesson-note + .hint { margin-bottom: 18px; }
+      .lib-item { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--panel); }
+      .lib-item + .lib-item { margin-top: 8px; }
+      .lib-item:hover { border-color: var(--accent); }
+      .lib-title { font-size: 16px; font-weight: 600; }
+      .lib-en { color: var(--muted); margin-top: 2px; }
+      .lib-meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+      /* Practice: hear it, say it, see the score. */
+      .say { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+      .say button { padding: 3px 9px; font-size: 13px; }
+      .say button.rec { border-color: var(--danger); color: var(--danger); }
+      .say button.rec.on { background: var(--danger); color: #fff; }
+      .say .best { font-size: 11px; color: var(--muted); }
+      .result { margin: 6px 0 2px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+      .score { font-weight: 700; font-size: 18px; min-width: 42px; }
+      .wscore { border-radius: 6px; padding: 1px 7px; font-size: 13px; border: 1px solid transparent; }
+      .good { color: #1a7f37; } .ok { color: #9a6700; } .poor { color: var(--danger); }
+      .wscore.good { background: color-mix(in srgb, #1a7f37 14%, transparent); }
+      .wscore.ok { background: color-mix(in srgb, #bf8700 18%, transparent); }
+      .wscore.poor { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+      .wscore.missed { text-decoration: line-through; }
+      .chunks li { display: block; }
+      .sentence-say { margin-top: 8px; }
+      .lsn + .lsn { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
+      tbody tr { cursor: pointer; scroll-margin-top: 80px; }
+      tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent) !important; }
+      tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>TAOS-LITE translations</h1>
+      <span id="sourceLabel" class="pill">nothing loaded</span>
+      <span class="grow"></span>
+      <label style="flex-direction: row; align-items: center; gap: 6px; text-transform: none">
+        <select id="sourcePicker" style="min-width: 260px"></select>
+      </label>
+      <button id="loadBtn">Load</button>
+      <button id="reloadBtn" class="ghost" title="Re-read the current source">↻</button>
+      <button id="lessonsBtn" class="ghost" title="Lessons you've made">Lessons</button>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="row">
+          <label class="grow">
+            Full-text search (FTS5)
+            <input id="q" placeholder="camino   ·   &quot;on my way&quot;   ·   doctor OR hospital   ·   ayud*" />
+          </label>
+          <label>From<input id="from" type="date" /></label>
+          <label>To<input id="to" type="date" /></label>
+          <label>Sort
+            <select id="order">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="relevance">Best match</option>
+            </select>
+          </label>
+          <button id="searchBtn">Search</button>
+          <button id="clearBtn" class="ghost">Clear</button>
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <label>From lang<select id="source_lang"></select></label>
+          <label>To lang<select id="target_lang"></select></label>
+          <label>Engine<select id="engine"></select></label>
+          <label>Table<select id="table"></select></label>
+          <label title="The language lessons teach">Lessons: learning<select id="learnLang"></select></label>
+          <label title="The language lessons are written in">explained in<select id="explainLang"></select></label>
+          <label style="flex-direction: row; align-items: center; gap: 6px; text-transform: none; font-size: 12px">
+            <input id="raw" type="checkbox" style="width: 15px; height: 15px" />
+            Raw FTS5 syntax
+          </label>
+          <span class="grow"></span>
+          <label title="JSON loads back into this viewer; Markdown is a transcript to read">Export as
+            <select id="exportFormat">
+              <option value="json">JSON — reloadable</option>
+              <option value="md">Markdown — readable</option>
+            </select>
+          </label>
+          <button id="downloadBtn" class="ghost">Export JSON ↓</button>
+          <button id="saveBtn" class="ghost">Save to local_exports</button>
+        </div>
+        <div class="hint">
+          Words are AND-ed and matched whole; <code>"a phrase"</code>, <code>OR</code>,
+          <code>NEAR</code> and a trailing <code>*</code> work. Accents and case are
+          ignored. Dates filter on <code>created_at</code> in Mountain time; <em>To</em> includes the whole day.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="stats" id="stats"><span class="muted">Load a source to begin.</span></div>
+      </section>
+
+      <div class="layout">
+        <div class="left">
+          <section class="panel" style="padding: 0; overflow: hidden">
+            <div id="results"><div class="empty">No data loaded.</div></div>
+          </section>
+
+          <div class="row" style="justify-content: center">
+            <button id="prevBtn" class="ghost">← Previous</button>
+            <span id="pageLabel" class="muted"></span>
+            <button id="nextBtn" class="ghost">Next →</button>
+          </div>
+        </div>
+
+        <!-- A clicked result, in its conversation. The results stay put. -->
+        <aside id="detail" class="panel" hidden>
+          <div class="detail-head">
+            <strong>In context</strong>
+            <span id="detailScope" class="muted"></span>
+            <span class="grow"></span>
+            <button id="detailPrev" class="ghost" title="Previous result (↑ or k)">↑</button>
+            <button id="detailNext" class="ghost" title="Next result (↓ or j)">↓</button>
+            <button id="detailClose" class="ghost" title="Close (Esc)">✕</button>
+          </div>
+          <div id="detailBody"></div>
+        </aside>
+      </div>
+    </main>
+
+    <button id="lessonFab" hidden>Make a lesson from this</button>
+    <div id="lesson" hidden>
+      <div class="lesson-sheet">
+        <div class="lesson-head">
+          <h2 id="lessonTitle">Lesson</h2>
+          <span id="lessonMeta" class="muted" style="font-size: 12px"></span>
+          <span class="grow"></span>
+          <button id="lessonClose" class="ghost" title="Back (Esc)">✕</button>
+        </div>
+        <div id="lessonBody"></div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const PAGE = 50;
+      let offset = 0;
+      let lastTotal = 0;
+      let loaded = null;
+      let pageRows = [];
+      // The in-context panel: which row it centres on, and how far it reaches.
+      const detail = { key: null, before: 15, after: 15 };
+
+      const escapeHtml = (value) =>
+        String(value ?? "").replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        })[c]);
+
+      // Snippets arrive with / around hits. Escape first, mark second:
+      // that way user text can never inject a tag.
+      const renderSnippet = (snippet, fallback) => {
+        if (snippet == null) return escapeHtml(fallback);
+        return escapeHtml(snippet)
+          .split("").join("<mark>")
+          .split("").join("</mark>");
+      };
+
+      const toast = (message, isError) => {
+        document.querySelectorAll(".toast").forEach((n) => n.remove());
+        const node = document.createElement("div");
+        node.className = "toast" + (isError ? " danger" : "");
+        node.textContent = message;
+        document.body.appendChild(node);
+        setTimeout(() => node.remove(), isError ? 9000 : 4000);
+      };
+
+      const queryString = () => {
+        const params = new URLSearchParams();
+        const set = (key, value) => { if (value) params.set(key, value); };
+        set("q", $("q").value.trim());
+        set("from", $("from").value);
+        set("to", $("to").value);
+        set("source_lang", $("source_lang").value);
+        set("target_lang", $("target_lang").value);
+        set("engine", $("engine").value);
+        set("table", $("table").value);
+        set("order", $("order").value);
+        if ($("raw").checked) params.set("raw", "1");
+        return params;
+      };
+
+      const fillSelect = (id, entries, label) => {
+        const select = $(id);
+        const previous = select.value;
+        select.innerHTML = "";
+        const any = document.createElement("option");
+        any.value = "";
+        any.textContent = label;
+        select.appendChild(any);
+        for (const entry of entries) {
+          const option = document.createElement("option");
+          option.value = entry.value;
+          option.textContent = `${entry.value} (${entry.count.toLocaleString()})`;
+          select.appendChild(option);
+        }
+        if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+      };
+
+      // Shown in Mountain time, the same zone the server reads From/To in.
+      // en-CA gives YYYY-MM-DD; parts keep it sortable-looking.
+      const ZONE = "America/Denver";
+      const parts = (iso, withTime) => {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return null;
+        const p = Object.fromEntries(
+          new Intl.DateTimeFormat("en-CA", {
+            timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+            ...(withTime ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short" } : {})
+          }).formatToParts(date).map((x) => [x.type, x.value])
+        );
+        const day = `${p.year}-${p.month}-${p.day}`;
+        return withTime ? `${day} ${p.hour}:${p.minute} ${p.timeZoneName}` : day;
+      };
+      const shortDate = (iso) => (iso && parts(iso, false)) || "—";
+      const mountainTime = (iso) => (iso && parts(iso, true)) || "";
+
+      async function refreshSources() {
+        const res = await fetch("/api/sources");
+        const data = await res.json();
+        const picker = $("sourcePicker");
+        picker.innerHTML = "";
+
+        const everything = document.createElement("option");
+        everything.value = "all";
+        everything.textContent = data.live.available
+          ? "Everything — live + every export, de-duplicated"
+          : "Everything — every export, de-duplicated";
+        picker.appendChild(everything);
+
+        const live = document.createElement("option");
+        live.value = "live";
+        live.textContent = data.live.available
+          ? "Live database (taos_lite_translations)"
+          : "Live database — unavailable";
+        live.disabled = !data.live.available;
+        picker.appendChild(live);
+        if (!data.live.available) picker.title = data.live.reason;
+
+        // One group per folder; a folder that can't be read says so.
+        const groups = new Map();
+        for (const file of data.exports) {
+          if (!groups.has(file.dir)) {
+            const group = document.createElement("optgroup");
+            group.label = file.dirLabel;
+            groups.set(file.dir, group);
+            picker.appendChild(group);
+          }
+          const option = document.createElement("option");
+          if (file.missing) {
+            option.disabled = true;
+            option.textContent = "folder not reachable: " + file.path;
+          } else {
+            option.value = "export:" + file.dir + ":" + file.name;
+            const kb = (file.bytes / 1024).toFixed(0);
+            const day = file.date
+              ? new Date(file.date + "T12:00:00Z").toLocaleDateString("en-US", {
+                  month: "short", day: "numeric", year: "numeric", timeZone: "UTC"
+                }) + "  ·  "
+              : "";
+            option.textContent = `${day}${file.name}  ·  ${kb} KB`;
+          }
+          groups.get(file.dir).appendChild(option);
+        }
+        if (!data.live.available) {
+          const first = [...picker.options].find((o) => !o.disabled);
+          if (first) picker.value = first.value;
+        }
+        if (!data.live.available) {
+          $("stats").innerHTML =
+            '<span class="danger">Live: ' + escapeHtml(data.live.reason) + "</span>";
+        }
+        return data;
+      }
+
+      async function load() {
+        const value = $("sourcePicker").value;
+        const body = value === "live" || value === "all"
+          ? { source: value }
+          : (() => {
+              // "export:<dir>:<name>" — the name may itself contain colons.
+              const rest = value.slice("export:".length);
+              const cut = rest.indexOf(":");
+              return { source: "export", dir: rest.slice(0, cut), file: rest.slice(cut + 1) };
+            })();
+
+        $("loadBtn").disabled = true;
+        $("loadBtn").textContent = "Loading…";
+        try {
+          const res = await fetch("/api/load", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "load failed");
+          loaded = data;
+          offset = 0;
+          closeDetail(); // row keys belong to the previous load
+          applySummary(data);
+          await search();
+          toast(`Loaded ${data.summary.total.toLocaleString()} records.`);
+        } catch (err) {
+          toast(err.message, true);
+          $("stats").innerHTML = '<span class="danger">' + escapeHtml(err.message) + "</span>";
+        } finally {
+          $("loadBtn").disabled = false;
+          $("loadBtn").textContent = "Load";
+        }
+      }
+
+      function applySummary(data) {
+        fillLanguageSelects(data.summary);
+        const s = data.summary;
+        $("sourceLabel").textContent =
+          data.source.kind === "live"
+            ? "live database"
+            : data.source.kind === "all"
+              ? "everything (merged)"
+              : (data.source.dir === "history" ? "history: " : "") + data.source.file;
+        fillSelect("source_lang", s.sourceLangs, "any");
+        fillSelect("target_lang", s.targetLangs, "any");
+        fillSelect("engine", s.engines, "any");
+        fillSelect("table", s.tables, "any");
+
+        const bits = [
+          `<span class="pill">${s.total.toLocaleString()} records</span>`,
+          `<span class="pill">${s.users.toLocaleString()} users</span>`,
+          `<span class="pill">${shortDate(s.firstAt)} → ${shortDate(s.lastAt)}</span>`,
+          `<span class="pill">${s.sourceLangs.length} source langs</span>`
+        ];
+        const merged = data.manifest && data.manifest.record_type === "merged" ? data.manifest : null;
+        if (merged) {
+          const ok = merged.parts.filter((p) => !p.error);
+          const failed = merged.parts.filter((p) => p.error);
+          bits.push(
+            `<span class="pill" title="${escapeHtml(
+              ok.map((p) => `${p.file ?? p.source}: ${p.records}`).join("\n")
+            )}">${ok.length} sources merged</span>`,
+            `<span class="pill">${merged.duplicates_dropped.toLocaleString()} duplicates removed</span>`
+          );
+          if (failed.length) {
+            bits.push(
+              `<span class="pill danger" title="${escapeHtml(
+                failed.map((p) => `${p.file ?? p.source}: ${p.error}`).join("\n")
+              )}">${failed.length} not loaded</span>`
+            );
+          }
+        }
+        if (data.skippedCount) {
+          bits.push(
+            `<span class="pill danger">${data.skippedCount} unparsable line(s) skipped</span>`
+          );
+        }
+        $("stats").innerHTML = bits.join(" ");
+      }
+
+      async function search() {
+        if (!loaded) return;
+        const params = queryString();
+        params.set("limit", String(PAGE));
+        params.set("offset", String(offset));
+
+        const res = await fetch("/api/search?" + params.toString());
+        const data = await res.json();
+        if (!res.ok) {
+          $("results").innerHTML =
+            '<div class="empty danger">' + escapeHtml(data.error) + "</div>";
+          $("pageLabel").textContent = "";
+          return;
+        }
+
+        lastTotal = data.total;
+        pageRows = data.rows;
+        renderRows(data);
+        const shown = data.rows.length;
+        $("pageLabel").textContent = data.total
+          ? `${(offset + 1).toLocaleString()}–${(offset + shown).toLocaleString()} of ${data.total.toLocaleString()}`
+          : "no matches";
+        $("prevBtn").disabled = offset === 0;
+        $("nextBtn").disabled = offset + shown >= data.total;
+      }
+
+      function renderRows(data) {
+        if (!data.rows.length) {
+          $("results").innerHTML =
+            '<div class="empty">Nothing matched' +
+            (data.match ? " <code>" + escapeHtml(data.match) + "</code>" : "") +
+            ".</div>";
+          return;
+        }
+        const body = data.rows
+          .map((row, i) => {
+            const meta = [row.source_lang, "→", row.target_lang]
+              .filter(Boolean)
+              .join(" ");
+            const tags = [row.tone, row.engine].filter(Boolean).join(" · ");
+            const chat = row.source_table && row.source_table.includes("chat_messages");
+            const selected = detail.key === row.key ? ' class="selected"' : "";
+            return `
+              <tr data-i="${i}"${selected}>
+                <td class="when">${escapeHtml(mountainTime(row.created_at))}
+                  <div class="meta">${escapeHtml(meta)}</div>
+                </td>
+                <td class="text">${renderSnippet(row.original_snippet, row.original_text)}</td>
+                <td class="text">${renderSnippet(row.translation_snippet, row.translation_text)}</td>
+                <td class="meta">${escapeHtml(tags)}${chat ? '<div><span class="pill">chat</span></div>' : ""}</td>
+              </tr>`;
+          })
+          .join("");
+        $("results").innerHTML = `
+          <table>
+            <thead><tr><th>When</th><th>Original</th><th>Translation</th><th>Engine</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>`;
+      }
+
+      // ------------------------------------------------ in-context panel
+
+      const shortId = (id) => (id ? String(id).slice(0, 8) : "");
+
+      // Clipboard API needs a secure context, which the Tailscale address
+      // (plain http) is not — fall back to the old textarea trick there.
+      async function copyText(text) {
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch { /* fall through */ }
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch { ok = false; }
+        area.remove();
+        return ok;
+      }
+
+      function markSelected() {
+        document.querySelectorAll("#results tr.selected").forEach((tr) => tr.classList.remove("selected"));
+        const i = pageRows.findIndex((r) => r.key === detail.key);
+        if (i < 0) return null;
+        const tr = document.querySelector(`#results tr[data-i="${i}"]`);
+        if (tr) {
+          tr.classList.add("selected");
+          tr.scrollIntoView({ block: "nearest" });
+        }
+        return i;
+      }
+
+      async function openDetail(key, { keepWindow = false } = {}) {
+        if (!keepWindow) { detail.before = 15; detail.after = 15; }
+        detail.key = key;
+        document.body.classList.add("detail-open");
+        $("detail").hidden = false;
+        markSelected();
+
+        const params = queryString();
+        params.set("key", String(key));
+        params.set("before", String(detail.before));
+        params.set("after", String(detail.after));
+        if (loaded && loaded.loadedAt) params.set("loaded", loaded.loadedAt);
+        const res = await fetch("/api/context?" + params.toString());
+        const data = await res.json();
+        if (detail.key !== key) return; // a newer click won
+        if (!res.ok) {
+          $("detailBody").innerHTML = '<div class="empty danger">' + escapeHtml(data.error) + "</div>";
+          return;
+        }
+        renderDetail(data);
+      }
+
+      function renderDetail(data) {
+        $("detailScope").textContent =
+          data.scope === "user"
+            ? `· this person's translations, in order`
+            : "· no user on this record — neighbours from everyone";
+        const items = data.rows.map((row) => {
+          const focus = row.key === data.key;
+          const langs = [row.source_lang, row.target_lang].filter(Boolean).join(" → ");
+          const tags = [langs, row.engine, row.source_table && row.source_table.includes("chat") ? "chat" : ""]
+            .filter(Boolean).join(" · ");
+          return `
+            <div class="ctx${focus ? " focus" : ""}" data-key="${row.key}">
+              <div class="when-line">
+                <span>${escapeHtml(mountainTime(row.created_at))}</span>
+                <span>${escapeHtml(tags)}</span>
+                ${focus && row.user_id ? `<span title="${escapeHtml(row.user_id)}">user ${escapeHtml(shortId(row.user_id))}</span>` : ""}
+                ${focus ? '<button class="ghost" data-copy>Copy</button>' : ""}
+                <button class="ghost" data-lesson title="Break this message down into a lesson">Lesson</button>
+              </div>
+              <div class="full">${renderSnippet(row.original_marked, row.original_text)}</div>
+              <div class="full">${renderSnippet(row.translation_marked, row.translation_text)}</div>
+            </div>`;
+        });
+        $("detailBody").innerHTML =
+          (data.truncatedBefore ? '<button class="ghost more" data-more="before">Show 20 earlier</button>' : '<div class="gap">start of their history</div>') +
+          items.join("") +
+          (data.truncatedAfter ? '<button class="ghost more" data-more="after">Show 20 later</button>' : '<div class="gap">end of their history</div>');
+
+        const focusEl = $("detailBody").querySelector(".ctx.focus");
+        const panel = $("detail");
+        if (focusEl) {
+          // Centre the hit inside the panel without scrolling the page. Again
+          // after the next frame: the first open reflows the results beside it
+          // (the grid gains a column), which moves the hit after we measured.
+          // A long message can be taller than the panel: then show its start,
+          // just under the sticky header, rather than its middle.
+          const centre = () => {
+            const head = panel.querySelector(".detail-head").offsetHeight;
+            const room = panel.clientHeight - head;
+            panel.scrollTop =
+              focusEl.offsetHeight > room * 0.8
+                ? focusEl.offsetTop - head - 8
+                : focusEl.offsetTop - head - (room - focusEl.offsetHeight) / 2;
+          };
+          centre();
+          requestAnimationFrame(() => requestAnimationFrame(centre));
+        }
+        const focusRow = data.rows.find((r) => r.key === data.key);
+        const copyBtn = $("detailBody").querySelector("[data-copy]");
+        if (copyBtn && focusRow) {
+          copyBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const ok = await copyText(`${focusRow.original_text}\n${focusRow.translation_text}`);
+            toast(ok ? "Copied." : "Couldn't copy — select the text instead.", !ok);
+          });
+        }
+      }
+
+      function closeDetail() {
+        detail.key = null;
+        $("detail").hidden = true;
+        document.body.classList.remove("detail-open");
+        document.querySelectorAll("#results tr.selected").forEach((tr) => tr.classList.remove("selected"));
+      }
+
+      // Step through the RESULTS (not the context), crossing pages if needed.
+      async function stepResult(delta) {
+        let i = pageRows.findIndex((r) => r.key === detail.key);
+        if (i < 0) i = delta > 0 ? -1 : pageRows.length;
+        let next = i + delta;
+        if (next >= pageRows.length) {
+          if (offset + PAGE >= lastTotal) return;
+          offset += PAGE;
+          await search();
+          next = 0;
+        } else if (next < 0) {
+          if (offset === 0) return;
+          offset = Math.max(0, offset - PAGE);
+          await search();
+          next = pageRows.length - 1;
+        }
+        if (pageRows[next]) openDetail(pageRows[next].key);
+      }
+
+      $("results").addEventListener("click", (e) => {
+        if (window.getSelection && String(window.getSelection()).length) return; // selecting text, not opening
+        const tr = e.target.closest("tr[data-i]");
+        if (!tr) return;
+        const row = pageRows[Number(tr.dataset.i)];
+        if (row) openDetail(row.key);
+      });
+      // ------------------------------------------------ lessons (saved)
+
+      let lessonSeq = 0;
+      let shownLesson = null; // the saved lesson on screen, if any
+      const WRITING =
+        '<div class="empty">Writing your lesson… about 15 seconds a sentence, so a long message can take a minute.</div>';
+
+      function showSheet(title) {
+        hideFab();
+        $("lesson").hidden = false;
+        $("lessonTitle").textContent = title;
+        $("lessonMeta").textContent = "";
+      }
+
+      async function lessonRequest(body) {
+        const seq = ++lessonSeq;
+        showSheet("Lesson");
+        shownLesson = null;
+        $("lessonBody").innerHTML = WRITING;
+        if (body.target) {
+          $("lessonMeta").textContent = `${langName(body.target)}, explained in ${langName(body.explain || "en")}`;
+        }
+        try {
+          const res = await fetch("/api/lesson", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ...body, loaded: loaded && loaded.loadedAt })
+          });
+          const data = await res.json();
+          if (seq !== lessonSeq) return; // closed or replaced meanwhile
+          if (!res.ok) throw new Error(data.error || "lesson failed");
+          showSaved(data.saved, data.cached);
+          refreshLessonCount();
+        } catch (err) {
+          if (seq !== lessonSeq) return;
+          $("lessonBody").innerHTML = '<div class="empty danger">' + escapeHtml(err.message) + "</div>";
+        }
+      }
+      // Learning / Explained in. Remembered per browser; a per-viewer
+      // convenience, so localStorage (guarded — it can throw or be empty).
+      const langName = (code) => {
+        try { return new Intl.DisplayNames(["en"], { type: "language" }).of(code) || code; } catch { return code; }
+      };
+      const store = {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
+      };
+      function fillLanguageSelects(summary) {
+        const inData = [...new Set([...(summary?.sourceLangs || []), ...(summary?.targetLangs || [])].map((t) => t.value))];
+        const learn = [...new Set(["es", "en", ...inData])];
+        const explain = [...new Set(["en", "es", ...inData])];
+        const fill = (id, codes, saved, fallback) => {
+          const sel = $(id);
+          sel.innerHTML = codes.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(langName(c))}</option>`).join("");
+          sel.value = codes.includes(saved) ? saved : fallback;
+        };
+        fill("learnLang", learn, store.get("learnLang"), "es");
+        fill("explainLang", explain, store.get("explainLang"), "en");
+      }
+      for (const id of ["learnLang", "explainLang"]) {
+        $(id).addEventListener("change", () => {
+          if ($("learnLang").value === $("explainLang").value) {
+            // Learning Spanish explained in Spanish isn't a lesson; swap the other one.
+            const other = id === "learnLang" ? "explainLang" : "learnLang";
+            $(other).value = $(id).value === "en" ? "es" : "en";
+          }
+          store.set("learnLang", $("learnLang").value);
+          store.set("explainLang", $("explainLang").value);
+        });
+      }
+      fillLanguageSelects(null);
+      const chosenLangs = () => ({ target: $("learnLang").value, explain: $("explainLang").value });
+      const openLesson = (keys, selection = "") => lessonRequest({ keys, selection, ...chosenLangs() });
+
+      async function openSavedLesson(id) {
+        const seq = ++lessonSeq;
+        showSheet("Lesson");
+        $("lessonBody").innerHTML = '<div class="empty">Opening…</div>';
+        const res = await fetch("/api/lessons/" + id);
+        const data = await res.json();
+        if (seq !== lessonSeq) return;
+        if (!res.ok) {
+          $("lessonBody").innerHTML = '<div class="empty danger">' + escapeHtml(data.error) + "</div>";
+          return;
+        }
+        showSaved(data.saved, true);
+      }
+
+      function showSaved(saved, fromLibrary) {
+        shownLesson = saved;
+        const e = escapeHtml;
+        const made = new Date(saved.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: ZONE });
+        $("lessonMeta").textContent = `${saved.model} · saved ${made}${fromLibrary ? "" : " · new"}`;
+        const where = saved.sources && saved.sources[0];
+        const tools = `
+          <div class="lesson-tools">
+            <button class="ghost" data-act="library">← All lessons</button>
+            ${saved.key != null ? '<button class="ghost" data-act="context" title="Show the message this came from, in its conversation">Open in context</button>' : ""}
+            <span class="grow"></span>
+            <button class="ghost" data-act="regen" title="Write this lesson again (your note is kept)">Regenerate</button>
+            <button class="ghost danger" data-act="delete">Delete</button>
+          </div>
+          <label class="lesson-note">Your note
+            <textarea id="lessonNote" rows="2" placeholder="A memory hook, where you heard it, what tripped you up…">${e(saved.note || "")}</textarea>
+          </label>
+          ${where ? `<div class="hint">From ${e(mountainTime(where.created_at))}${saved.selection ? ` · your selection: “${e(saved.selection.slice(0, 120))}${saved.selection.length > 120 ? "…" : ""}”` : ""}</div>` : ""}`;
+        $("lessonBody").innerHTML = tools + renderLesson(saved.lesson, saved);
+        $("lesson").scrollTop = 0;
+      }
+
+      async function saveNote() {
+        if (!shownLesson) return;
+        const note = $("lessonNote").value;
+        if (note === (shownLesson.note || "")) return;
+        const res = await fetch("/api/lessons/" + shownLesson.id, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ note })
+        });
+        if (res.ok) {
+          shownLesson.note = note;
+          toast("Note saved.");
+        } else {
+          toast("Couldn't save the note.", true);
+        }
+      }
+
+      async function showLibrary() {
+        const seq = ++lessonSeq;
+        shownLesson = null;
+        showSheet("Your lessons");
+        $("lessonBody").innerHTML = '<div class="empty">Loading…</div>';
+        const res = await fetch("/api/lessons");
+        const data = await res.json();
+        if (seq !== lessonSeq) return;
+        const list = data.lessons || [];
+        $("lessonMeta").textContent = `${list.length} saved`;
+        if (!list.length) {
+          $("lessonBody").innerHTML =
+            '<div class="empty">No lessons yet. Open a result, then press <b>Lesson</b> on a message — or select some text and press <b>Make a lesson from this</b>.</div>';
+          return;
+        }
+        const e = escapeHtml;
+        $("lessonBody").innerHTML =
+          '<input id="libFilter" placeholder="Filter your lessons…" style="width:100%;margin-bottom:10px" />' +
+          '<div class="lib">' +
+          list.map((l) => `
+            <div class="lib-item" data-id="${e(l.id)}" data-text="${e((l.title + " " + l.english + " " + l.note).toLowerCase())}">
+              <div class="lib-title">${e(l.title)}</div>
+              <div class="lib-en">${e(l.english)}${l.sentenceCount > 1 ? ` <span class="muted">+${l.sentenceCount - 1} more</span>` : ""}</div>
+              <div class="lib-meta">${e(langName(l.language || "es"))} · explained in ${e(langName(l.explain || "en"))} · ${e(shortDate(l.createdAt))}${l.note ? ` · ${e(l.note.slice(0, 80))}` : ""}</div>
+            </div>`).join("") +
+          "</div>";
+        $("libFilter").addEventListener("input", (ev) => {
+          const q = ev.target.value.trim().toLowerCase();
+          document.querySelectorAll(".lib-item").forEach((el) => { el.hidden = q && !el.dataset.text.includes(q); });
+        });
+      }
+
+      async function refreshLessonCount() {
+        try {
+          const res = await fetch("/api/lessons");
+          const data = await res.json();
+          const n = (data.lessons || []).length;
+          $("lessonsBtn").textContent = n ? `Lessons (${n})` : "Lessons";
+        } catch { /* the button just keeps its old label */ }
+      }
+
+      function closeLesson() {
+        lessonSeq += 1;
+        $("lesson").hidden = true;
+      }
+
+      $("lessonBody").addEventListener("click", async (ev) => {
+        const item = ev.target.closest(".lib-item");
+        if (item) return openSavedLesson(item.dataset.id);
+        const act = ev.target.closest("[data-act]")?.dataset.act;
+        if (act === "library") return showLibrary();
+        if (!act || !shownLesson) return;
+        if (act === "context") {
+          const key = shownLesson.key;
+          if (loaded && shownLesson.loaded !== loaded.loadedAt) return toast("The data was reloaded — reopen the lesson.", true);
+          closeLesson();
+          return openDetail(key);
+        }
+        if (act === "regen") {
+          const keys = shownLesson.keys || [];
+          if (!keys.length || keys.some((k) => k == null)) {
+            return toast("Load data that contains this message to regenerate it.", true);
+          }
+          return lessonRequest({
+            keys,
+            selection: shownLesson.selection,
+            force: true,
+            target: shownLesson.target || shownLesson.lesson.target_language,
+            explain: shownLesson.explain || "en"
+          });
+        }
+        if (act === "delete") {
+          const btn = ev.target.closest("[data-act]");
+          // Two taps, no browser dialog: first arms it, second deletes.
+          if (!btn.dataset.armed) {
+            btn.dataset.armed = "1";
+            btn.textContent = "Tap again to delete";
+            setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = "Delete"; } }, 4000);
+            return;
+          }
+          const res = await fetch("/api/lessons/" + shownLesson.id, { method: "DELETE" });
+          if (res.ok) {
+            toast("Lesson deleted.");
+            refreshLessonCount();
+            showLibrary();
+          } else {
+            toast("Couldn't delete it.", true);
+          }
+        }
+      });
+      $("lessonBody").addEventListener("focusout", (ev) => {
+        if (ev.target.id === "lessonNote") saveNote();
+      });
+
+      // ------------------------------------------------ practice
+
+      let practice = { speak: { available: false }, score: { available: false } };
+      fetch("/api/practice/status").then((r) => r.json()).then((d) => { practice = d; }).catch(() => {});
+
+      /** Best score so far for this exact text on this lesson, from saved attempts. */
+      function bestFor(saved, text) {
+        const scores = (saved?.practice || []).filter((a) => a.text === text).map((a) => a.pron ?? a.accuracy ?? 0);
+        return scores.length ? Math.round(Math.max(...scores)) : null;
+      }
+
+      function sayControls(text, lang, saved) {
+        const e = escapeHtml;
+        const best = bestFor(saved, text);
+        return `<div class="say" data-text="${e(text)}" data-lang="${e(lang || "es")}">
+            <button class="ghost" data-say="listen" title="Hear Liz say it">▶</button>
+            <button class="ghost" data-say="slow" title="Hear it slowly">🐢</button>
+            <button class="ghost rec" data-say="rec" title="Record yourself saying it (tap again to stop)">● Say it</button>
+            <button class="ghost" data-say="mine" title="Play back your last try" hidden>▶ Mine</button>
+            ${best != null ? `<span class="best">best ${best}</span>` : ""}
+          </div>
+          <div class="result" hidden></div>`;
+      }
+
+      // Liz's audio, fetched once per text+speed per page (the server caches too).
+      const audioUrls = new Map();
+      let playing = null;
+      async function listen(text, slow) {
+        const key = (slow ? "slow|" : "") + text;
+        if (playing) playing.pause();
+        const audio = new Audio(); // made inside the tap, so Safari lets it play
+        playing = audio;
+        let url = audioUrls.get(key);
+        if (!url) {
+          const res = await fetch("/api/speak", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text, slow })
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            return toast(data.error || "Couldn't get the audio.", true);
+          }
+          url = URL.createObjectURL(await res.blob());
+          audioUrls.set(key, url);
+        }
+        audio.src = url;
+        audio.play().catch(() => toast("Tap ▶ again to play.", true));
+      }
+
+      // 16 kHz mono 16-bit WAV, as Azure wants — same approach as lib/tutor/wav.ts.
+      async function blobToWav16k(blob) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx();
+        const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+        await ctx.close();
+        const rate = 16000;
+        const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+        const src = offline.createBufferSource();
+        src.buffer = decoded;
+        src.connect(offline.destination);
+        src.start();
+        const samples = (await offline.startRendering()).getChannelData(0);
+        // A live mic can deliver silence without any error (iOS does this);
+        // measure it rather than send Azure nothing and blame the learner.
+        let peak = 0;
+        for (let i = 0; i < samples.length; i += 1) peak = Math.max(peak, Math.abs(samples[i]));
+        const buffer = new ArrayBuffer(44 + samples.length * 2);
+        const v = new DataView(buffer);
+        const str = (o, s) => { for (let i = 0; i < s.length; i += 1) v.setUint8(o + i, s.charCodeAt(i)); };
+        str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); str(8, "WAVE"); str(12, "fmt ");
+        v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        str(36, "data"); v.setUint32(40, samples.length * 2, true);
+        for (let i = 0, o = 44; i < samples.length; i += 1, o += 2) {
+          const s = Math.max(-1, Math.min(1, samples[i]));
+          v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+        return { wav: new Blob([v], { type: "audio/wav" }), peak, seconds: decoded.duration };
+      }
+
+      let recording = null; // { recorder, stream, box, chunks, timer }
+
+      async function startRecording(box) {
+        if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+          return toast("Recording needs the https address: https://blackbird.tail42ac25.ts.net:3019", true);
+        }
+        if (recording) await stopRecording();
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          return toast("The browser didn't allow the microphone.", true);
+        }
+        const recorder = new MediaRecorder(stream);
+        const chunks = [];
+        recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
+        recorder.start();
+        const btn = box.querySelector('[data-say="rec"]');
+        btn.classList.add("on");
+        btn.textContent = "■ Stop";
+        recording = { recorder, stream, box, chunks, timer: setTimeout(() => stopRecording(), 20000) };
+      }
+
+      async function stopRecording() {
+        const r = recording;
+        if (!r) return;
+        recording = null;
+        clearTimeout(r.timer);
+        const stopped = new Promise((resolve) => { r.recorder.onstop = resolve; });
+        r.recorder.stop();
+        await stopped;
+        r.stream.getTracks().forEach((t) => t.stop());
+        const btn = r.box.querySelector('[data-say="rec"]');
+        btn.classList.remove("on");
+        btn.textContent = "● Say it";
+        const blob = new Blob(r.chunks, { type: r.recorder.mimeType || "audio/webm" });
+        const mine = r.box.querySelector('[data-say="mine"]');
+        if (mine.dataset.url) URL.revokeObjectURL(mine.dataset.url);
+        mine.dataset.url = URL.createObjectURL(blob);
+        mine.hidden = false;
+        await scoreAttempt(r.box, blob);
+      }
+
+      async function scoreAttempt(box, blob) {
+        const result = box.nextElementSibling;
+        result.hidden = false;
+        let converted;
+        try {
+          converted = await blobToWav16k(blob);
+        } catch {
+          result.innerHTML = "<span class=\"danger\">Couldn't read that recording.</span>";
+          return;
+        }
+        if (converted.peak < 0.01) {
+          result.innerHTML = '<span class="danger">The microphone recorded silence — check that it is the right mic and not muted.</span>';
+          return;
+        }
+        if (!practice.score.available) {
+          result.innerHTML = `<span class="muted">Recorded (${converted.seconds.toFixed(1)}s). Scoring is off: ${escapeHtml(practice.score.reason || "")}</span>`;
+          return;
+        }
+        result.innerHTML = '<span class="muted">Scoring…</span>';
+        const params = new URLSearchParams({ text: box.dataset.text, lang: box.dataset.lang });
+        if (shownLesson) params.set("lesson", shownLesson.id);
+        const res = await fetch("/api/assess?" + params, { method: "POST", headers: { "content-type": "audio/wav" }, body: converted.wav });
+        const data = await res.json();
+        if (!res.ok) {
+          result.innerHTML = '<span class="danger">' + escapeHtml(data.error) + "</span>";
+          return;
+        }
+        const band = (n) => (n == null ? "" : n >= 80 ? "good" : n >= 60 ? "ok" : "poor");
+        const overall = Math.round(data.pron ?? data.accuracy);
+        const words = data.words
+          .filter((w) => w.errorType !== "Insertion")
+          .map((w) => {
+            const missed = w.errorType === "Omission";
+            const title = missed ? "you didn't say this" : `${w.accuracy}${w.errorType && w.errorType !== "None" ? " · " + w.errorType : ""}`;
+            return `<span class="wscore ${missed ? "poor missed" : band(w.accuracy)}" title="${escapeHtml(title)}">${escapeHtml(w.word)}</span>`;
+          })
+          .join("");
+        const acc = Math.round(data.accuracy ?? 0);
+        const flu = Math.round(data.fluency ?? 0);
+        const comp = Math.round(data.completeness ?? 0);
+        // Name what pulled the overall down; otherwise all-green words under a
+        // 61 look like a bug.
+        const lowest = [["pronunciation", acc], ["flow", flu], ["completeness", comp]].sort((a, b) => a[1] - b[1])[0];
+        const hint =
+          overall >= 80 ? "Nice." :
+          lowest[0] === "flow" ? "Flow is what cost you: say it in one go, without pauses or restarts." :
+          lowest[0] === "completeness" ? "Some words were missed: the crossed-out ones." :
+          "Pronunciation: listen to the red and amber words again.";
+        result.innerHTML =
+          `<span class="score ${band(overall)}">${overall}</span>` +
+          words +
+          `<div class="hint" style="flex-basis:100%;margin-top:2px">pronunciation ${acc} · flow ${flu} · completeness ${comp} — ${escapeHtml(hint)}</div>`;
+        if (shownLesson) {
+          shownLesson.practice = [...(shownLesson.practice || []), { text: box.dataset.text, pron: data.pron, accuracy: data.accuracy }];
+          const best = bestFor(shownLesson, box.dataset.text);
+          let tag = box.querySelector(".best");
+          if (!tag) { tag = document.createElement("span"); tag.className = "best"; box.appendChild(tag); }
+          tag.textContent = `best ${best}`;
+        }
+      }
+
+      $("lessonBody").addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-say]");
+        if (!btn) return;
+        const box = btn.closest(".say");
+        const text = box.dataset.text;
+        const act = btn.dataset.say;
+        if (act === "listen") listen(text, false);
+        if (act === "slow") listen(text, true);
+        if (act === "rec") {
+          if (recording && recording.box === box) stopRecording();
+          else startRecording(box);
+        }
+        if (act === "mine" && btn.dataset.url) {
+          if (playing) playing.pause();
+          playing = new Audio(btn.dataset.url);
+          playing.play().catch(() => {});
+        }
+      });
+
+      // Lesson headings follow "Explained in". Other languages fall back to English.
+      const LESSON_LABELS = {
+        en: {
+          words: "The words", why: "Why this order", literal: "Word for word",
+          trap: (x) => `${x} order ✗`, right: (t) => `${t} order ✓`,
+          context: "In context", build: "Build it up — say each one out loud"
+        },
+        es: {
+          words: "Las palabras", why: "Por qué este orden", literal: "Palabra por palabra",
+          trap: (x) => `Orden del ${x} ✗`, right: (t) => `Orden del ${t} ✓`,
+          context: "En contexto", build: "Constrúyelo — di cada una en voz alta"
+        }
+      };
+
+      function renderLesson(lesson, saved = null) {
+        const e = escapeHtml;
+        const target = saved?.target || lesson.target_language || "es";
+        const explain = saved?.explain || lesson.explain_language || "en";
+        // Language names in the lesson's own language: "inglés", not "English".
+        const nameIn = (code) => {
+          try { return new Intl.DisplayNames([explain], { type: "language" }).of(code) || code; } catch { return langName(code); }
+        };
+        const tName = nameIn(target);
+        const xName = nameIn(explain);
+        const L = LESSON_LABELS[explain] || LESSON_LABELS.en;
+        const sections = lesson.sentences.map((s) => {
+          const words = s.words
+            .map((w) => `<div class="w" title="${e(w.lemma && w.lemma !== w.text ? "from " + w.lemma : "")}">
+                <b>${e(w.text)}</b><span>${e(w.gloss)}</span><small>${e(w.role)}</small></div>`)
+            .join("");
+          const notes = s.words.filter((w) => w.note).map((w) => `<li><b>${e(w.text)}</b> — ${e(w.note)}</li>`).join("");
+          const rules = s.order_points
+            .map((p) => `<li><b>${e(p.rule)}</b> — ${e(p.explanation)}${p.example ? `<div class="ex">${e(p.example)}</div>` : ""}</li>`)
+            .join("");
+          return `
+            <section class="lsn">
+              <div class="lsn-target">${e(s.target)}</div>
+              <div class="lsn-en">${e(s.english)}</div>
+              <div class="sentence-say">${sayControls(s.target, lesson.target_language, saved)}</div>
+              ${s.as_said ? `<div class="hint">Captured as: “${e(s.as_said)}” — cleaned up above.</div>` : ""}
+
+              <h4>${e(L.words)}</h4>
+              <div class="words">${words}</div>
+              ${notes ? `<ul class="notes">${notes}</ul>` : ""}
+
+              <h4>${e(L.why)}</h4>
+              <div class="order">
+                ${s.literal ? `<span class="lbl">${e(L.literal)}</span><span>${e(s.literal)}</span>` : ""}
+                ${s.english_order_trap ? `<span class="lbl">${e(L.trap(xName))}</span><span class="trap">${e(s.english_order_trap)}</span>` : ""}
+                <span class="lbl">${e(L.right(tName))}</span><span class="right">${e(s.target)}</span>
+              </div>
+              ${rules ? `<ul class="rules">${rules}</ul>` : ""}
+
+              <h4>${e(L.context)}</h4>
+              <div>${e(s.context_meaning)} ${s.register ? `<span class="pill">${e(s.register)}</span>` : ""}</div>
+
+              ${s.chunks.length ? `<h4>${e(L.build)}</h4>
+              <ol class="chunks">${s.chunks.map((c) => `<li><div>${e(c)}</div>${sayControls(c, lesson.target_language, saved)}</li>`).join("")}</ol>` : ""}
+            </section>`;
+        });
+        return (
+          sections.join("") +
+          (lesson.caveats ? `<div class="hint" style="margin-top:20px">Note: ${e(lesson.caveats)}</div>` : "")
+        );
+      }
+
+      // Select text in the panel → a button to make a lesson from exactly that.
+      function selectionInPanel() {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed || !String(sel).trim()) return null;
+        const range = sel.getRangeAt(0);
+        if (!$("detailBody").contains(range.commonAncestorContainer)) return null;
+        const keys = [...$("detailBody").querySelectorAll(".ctx[data-key]")]
+          .filter((el) => range.intersectsNode(el))
+          .map((el) => Number(el.dataset.key))
+          .slice(0, 3);
+        return keys.length ? { keys, text: String(sel).trim(), rect: range.getBoundingClientRect() } : null;
+      }
+      function hideFab() { $("lessonFab").hidden = true; }
+      document.addEventListener("selectionchange", () => {
+        const pick = selectionInPanel();
+        if (!pick) return hideFab();
+        const fab = $("lessonFab");
+        fab.hidden = false;
+        const top = pick.rect.bottom + 8 + fab.offsetHeight > innerHeight ? pick.rect.top - fab.offsetHeight - 8 : pick.rect.bottom + 8;
+        fab.style.top = Math.max(8, top) + "px";
+        fab.style.left = Math.min(Math.max(8, pick.rect.left), innerWidth - fab.offsetWidth - 8) + "px";
+      });
+      $("lessonFab").addEventListener("mousedown", (e) => e.preventDefault()); // keep the selection
+      $("lessonFab").addEventListener("click", () => {
+        const pick = selectionInPanel();
+        if (pick) openLesson(pick.keys, pick.text);
+      });
+      $("lessonClose").addEventListener("click", closeLesson);
+      $("lessonsBtn").addEventListener("click", showLibrary);
+      refreshLessonCount();
+      // Capture phase: with a lesson open, Esc closes the lesson, not the panel.
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !$("lesson").hidden) {
+          e.stopImmediatePropagation();
+          closeLesson();
+        }
+      }, true);
+
+      $("detailBody").addEventListener("click", (e) => {
+        const lessonBtn = e.target.closest("[data-lesson]");
+        if (lessonBtn) {
+          e.stopPropagation();
+          openLesson([Number(lessonBtn.closest(".ctx").dataset.key)]);
+          return;
+        }
+        const more = e.target.closest("[data-more]");
+        if (more) {
+          detail[more.dataset.more] += 20;
+          openDetail(detail.key, { keepWindow: true });
+          return;
+        }
+        if (String(window.getSelection()).length) return;
+        const ctx = e.target.closest(".ctx[data-key]");
+        if (ctx && !ctx.classList.contains("focus")) openDetail(Number(ctx.dataset.key));
+      });
+      $("detailClose").addEventListener("click", closeDetail);
+      $("detailPrev").addEventListener("click", () => stepResult(-1));
+      $("detailNext").addEventListener("click", () => stepResult(1));
+      document.addEventListener("keydown", (e) => {
+        if (!detail.key || !$("lesson").hidden) return;
+        const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? "");
+        if (e.key === "Escape") { closeDetail(); return; }
+        if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); stepResult(1); }
+        if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); stepResult(-1); }
+      });
+
+      // The format rides along on the same filter query, so a download and a
+      // save of the same view always contain exactly the same records.
+      function exportQuery() {
+        const params = queryString();
+        params.set("format", $("exportFormat").value);
+        return params;
+      }
+
+      function syncExportLabel() {
+        const md = $("exportFormat").value === "md";
+        $("downloadBtn").textContent = md ? "Export Markdown ↓" : "Export JSON ↓";
+      }
+
+      function download() {
+        if (!loaded) return toast("Load a source first.", true);
+        window.location = "/api/export?" + exportQuery().toString();
+      }
+
+      async function saveExport() {
+        if (!loaded) return toast("Load a source first.", true);
+        $("saveBtn").disabled = true;
+        try {
+          const res = await fetch("/api/export/save", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query: exportQuery().toString() })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "save failed");
+          toast(`Wrote ${data.records.toLocaleString()} records to ${data.path}`);
+          await refreshSources();
+        } catch (err) {
+          toast(err.message, true);
+        } finally {
+          $("saveBtn").disabled = false;
+        }
+      }
+
+      $("loadBtn").addEventListener("click", load);
+      $("reloadBtn").addEventListener("click", load);
+      $("searchBtn").addEventListener("click", () => { offset = 0; search(); });
+      $("clearBtn").addEventListener("click", () => {
+        for (const id of ["q", "from", "to"]) $(id).value = "";
+        for (const id of ["source_lang", "target_lang", "engine", "table"]) $(id).value = "";
+        $("raw").checked = false;
+        $("order").value = "newest";
+        offset = 0;
+        search();
+      });
+      $("q").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { offset = 0; search(); }
+      });
+      for (const id of ["from", "to", "source_lang", "target_lang", "engine", "table", "order"]) {
+        $(id).addEventListener("change", () => { offset = 0; search(); });
+      }
+      $("prevBtn").addEventListener("click", () => {
+        offset = Math.max(0, offset - PAGE);
+        search();
+      });
+      $("nextBtn").addEventListener("click", () => {
+        if (offset + PAGE < lastTotal) { offset += PAGE; search(); }
+      });
+      $("exportFormat").addEventListener("change", syncExportLabel);
+      syncExportLabel();
+      $("downloadBtn").addEventListener("click", download);
+      $("saveBtn").addEventListener("click", saveExport);
+
+      refreshSources().then((data) => {
+        if (data.loaded) {
+          loaded = data.loaded;
+          applySummary(data.loaded);
+          search();
+        }
+      });
+    </script>
+  </body>
+</html>
