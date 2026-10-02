@@ -86,6 +86,12 @@ export interface InterpreterInputBridge {
   /** The stream to hand to `addTrack` — locally generated, so Safari sends it. */
   stream: MediaStream;
   track: MediaStreamTrack;
+  /**
+   * How far this graph's clock has fallen behind wall time since the bridge
+   * was built, in ms — `audio_arrival_ms` in lib/call/lag.ts. Null where the
+   * context exposes no clock.
+   */
+  clockDriftMs: () => number | null;
   /** Drop the nodes. Never touches the partner's own track. */
   release: () => void;
 }
@@ -118,9 +124,35 @@ export function bridgeInterpreterInput(
       source.disconnect();
       return null;
     }
+
+    // The graph's own timeline — `currentTime` advances by rendered sample
+    // frames — against `performance.now()`. A context that stalls, glitches or
+    // gets suspended by iOS stops advancing while wall time does not, and the
+    // gap between the two is audio the bridge is holding rather than sending.
+    // Baselined at the first reading taken while the context is RUNNING, so a
+    // context still waking up from the Join tap does not start the call owing.
+    //
+    // What this cannot see: a queue building inside the source node without
+    // the render clock slowing down. `vad_lag_ms` and `heard_ms` (lib/call/
+    // lag.ts) are end-to-end and do see that, which is why they ride along.
+    let baseline: { ctxMs: number; wallMs: number } | null = null;
+    const clockDriftMs = (): number | null => {
+      if (typeof ctx.currentTime !== "number" || typeof performance === "undefined") return null;
+      const ctxMs = ctx.currentTime * 1000;
+      const wallMs = performance.now();
+      if (!baseline) {
+        if (ctx.state !== "running") return null;
+        baseline = { ctxMs, wallMs };
+        return 0;
+      }
+      return wallMs - baseline.wallMs - (ctxMs - baseline.ctxMs);
+    };
+    clockDriftMs();
+
     return {
       stream: destination.stream,
       track: bridged,
+      clockDriftMs,
       release: () => {
         try {
           source.disconnect();

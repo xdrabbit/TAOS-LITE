@@ -29,6 +29,7 @@ import {
 } from "@/lib/call/interpreter";
 import { resolveCallDirection, type CallDirection } from "@/lib/call/instructions";
 import { ensureCallAudioContext } from "@/lib/call/audioBridge";
+import { createCallLagLog, type CallLagLog, type LagRecord } from "@/lib/call/lag";
 import {
   emptySpend,
   formatUsd,
@@ -261,6 +262,9 @@ export function CallShell(): JSX.Element {
   const roomRef = useRef("");
   // Read at hang-up, when the state itself is already being reset.
   const transportRef = useRef<CallTransport | null>(null);
+  // The call's [taos-call-lag] telemetry (lib/call/lag.ts). One per call, not
+  // per interpreter session: a rejoin is a line in it, not the end of it.
+  const lagLogRef = useRef<CallLagLog | null>(null);
 
   // The pair, exactly as every other screen holds it. Changing it mid-call
   // re-points the live interpreter and tells the partner, rather than
@@ -402,6 +406,13 @@ export function CallShell(): JSX.Element {
   // anybody guessing at it.
   useEffect(() => onWakeLog(pushTrail), [pushTrail]);
 
+  // `heard_ms`: the moment the faint untranslated line was committed to the
+  // screen. It is THE discriminating number in lib/call/lag.ts — the heard
+  // line waits behind nothing, so it is late only if the audio is.
+  useEffect(() => {
+    if (liveHeard !== null) lagLogRef.current?.heardRendered();
+  }, [liveHeard]);
+
   const stopInterpreter = useCallback(() => {
     const it = interpreterRef.current;
     interpreterRef.current = null;
@@ -485,7 +496,8 @@ export function CallShell(): JSX.Element {
           direction: dir,
           inputTrack: track,
           muted: !voiceOnRef.current,
-          voiceMode: voiceModeRef.current
+          voiceMode: voiceModeRef.current,
+          lag: lagLogRef.current?.session()
         },
         {
           // Every one of these is a state the screen had no word for before
@@ -516,10 +528,13 @@ export function CallShell(): JSX.Element {
           // reached the session — which is the 2026-09-03 failure exactly.
           onInputSilent: () =>
             setNotice(
-              "Interpreter is connected but hearing nothing — try Rejoin, and check the trail below."
+              "Interpreter is connected but hearing nothing — try Resync, and check the trail below."
             ),
           onIdleWarning: (secondsLeft) => setIdleSecondsLeft(secondsLeft),
           onAutoEnd: (reason: InterpreterEndReason) => {
+            lagLogRef.current?.nextReason(
+              reason === "idle" ? "auto_end_idle" : "auto_end_max_duration"
+            );
             setAutoEnded(reason);
             setNotice(
               reason === "idle"
@@ -600,6 +615,32 @@ export function CallShell(): JSX.Element {
     startInterpreterFor(track);
   }, [startInterpreterFor]);
 
+  /**
+   * Resync: the same rebuild as Rejoin, on demand, while the interpreter is
+   * still running.
+   *
+   * The 2026-09-13 call grew lag for over an hour and only a rejoin cleared
+   * it — but Rejoin only existed after an auto-end. This is that rebuild
+   * available at any time. It calls `rejoinInterpreter` unchanged, so it
+   * touches one realtime session and its bridge, never the call's peer
+   * connection.
+   *
+   * The one guard: a rebuild already in flight. `startInterpreterFor`
+   * already refuses a second one, but a second press would still log a
+   * `manual_resync` that did nothing, and a lie in the lag log is worse than
+   * a missing line. The button is disabled for the same window.
+   *
+   * Deliberately NOT guarded on translated audio playing: a lagging
+   * interpreter is always behind on playback, so that guard would make the
+   * button dead exactly when it is wanted. Pressing it means dropping the
+   * backlog; stop() settles the readout and clears the partner's hold-on.
+   */
+  const resyncInterpreter = useCallback(() => {
+    if (startingRef.current) return;
+    lagLogRef.current?.manualResync();
+    rejoinInterpreter();
+  }, [rejoinInterpreter]);
+
   // Keep the live session pointed at the current pair. Either phone changing
   // its language lands here — mine through the picker, theirs over the wire.
   useEffect(() => {
@@ -642,6 +683,10 @@ export function CallShell(): JSX.Element {
     const finalTransport = transportRef.current;
     startingRef.current = false;
     stopInterpreter();
+    // After the interpreter has closed its session, so the last turn is in
+    // the final batch.
+    lagLogRef.current?.end();
+    lagLogRef.current = null;
     const call = callRef.current;
     callRef.current = null;
     if (call) void call.hangUp();
@@ -730,6 +775,24 @@ export function CallShell(): JSX.Element {
     // gesture, and both the ducking graph and the interpreter's input bridge
     // hang off this one. Created here, it is running before either asks.
     ensureCallAudioContext();
+
+    // Lag telemetry for this call. Posted in small batches rather than once at
+    // hang-up: the calls this is for are the long ones, and a two-hour call
+    // whose tab is swiped away must still have left its first hour behind.
+    lagLogRef.current?.end();
+    lagLogRef.current = createCallLagLog({
+      room: code,
+      pair: () => `${directionRef.current.source}->${directionRef.current.target}`,
+      send: async (records: LagRecord[], dropped: number) => {
+        const res = await fetch("/api/call/lag", {
+          method: "POST",
+          headers: await jsonAuthHeaders(),
+          body: JSON.stringify({ room: code, records, dropped }),
+          keepalive: true
+        });
+        if (!res.ok) throw new Error(`lag post ${res.status}`);
+      }
+    });
 
     try {
       const call = await startCall(
@@ -1419,6 +1482,30 @@ export function CallShell(): JSX.Element {
                 captions or the controls off the bottom of a phone again, which
                 is the whole of the 8/31 report. */}
             <div className="min-h-0 flex-[1_1_0%] space-y-3 overflow-y-auto">
+            {/* Resync, any time the interpreter is running.
+                Down here on purpose: below Hang up, inside the secondary box,
+                away from the Mic and Voice buttons a thumb reaches for
+                mid-sentence, and drawn as an outline rather than a filled
+                button, because it is a repair and not a control. Hidden
+                after an auto-end, where the notice's Rejoin is the same
+                rebuild and "Resync" would describe a session that is not
+                there; hidden when no interpreter is needed at all. */}
+            {!autoEnded && interpreterStatus !== "not_needed" ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[11px] leading-snug text-amber-100/40">
+                  Translations falling behind? This restarts the interpreter only — the call stays
+                  up.
+                </span>
+                <button
+                  type="button"
+                  onClick={resyncInterpreter}
+                  disabled={interpreterStatus === "starting"}
+                  className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-xl border border-white/10 px-3 text-xs text-amber-100/60 transition active:scale-95 disabled:opacity-40"
+                >
+                  ↻ Resync · Resincronizar
+                </button>
+              </div>
+            ) : null}
             {/* Two voices, two controls, and until 8/28 nothing on the screen
                 said which was which. */}
             <p className="text-[11px] leading-snug text-amber-100/40">
