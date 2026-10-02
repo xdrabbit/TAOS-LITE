@@ -61,6 +61,21 @@ describe("every Study route is behind the flag", () => {
     }
     expect(readFileSync(PAGE, "utf8")).not.toContain("tutorEnabled");
   });
+
+  it("borrows the tutor's Azure scoring, opened by EITHER flag, never unmetered", () => {
+    // ● Say it posts to /api/tutor/assess. That route stays under
+    // tutor-flag.test.ts (it must still name tutorEnabled and 404) AND must
+    // name studyEnabled, or Study's button dies the day tutor goes dark.
+    // There is deliberately no app/api/study/assess: that would be a second,
+    // unmetered Azure endpoint.
+    const assess = readFileSync(new URL("../app/api/tutor/assess/route.ts", import.meta.url), "utf8");
+    expect(assess).toContain("studyEnabled");
+    expect(assess).toContain("tutorEnabled");
+    expect(assess).toContain("!tutorEnabled() && !studyEnabled()");
+    expect(assess).toContain("{ status: 404 }");
+    expect(assess).toContain("beginTutorSession");
+    expect(routeFiles()).not.toContain("assess/route.ts");
+  });
 });
 
 describe("the Study page", () => {

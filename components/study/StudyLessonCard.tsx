@@ -4,9 +4,11 @@
 // the app's own styling — the same sections in the same order, because that
 // order was what the stress run judged: the sentence, its words, why they are
 // in THAT order (with the explain-language order struck through), what it
-// meant in context, and the build-up ladder to say out loud.
+// meant in context, and the build-up ladder to say out loud — and now to be
+// SCORED out loud, through SayIt, on every sentence and every rung.
 
 import type { StudyLesson, StudySentence } from "@/lib/study/types";
+import { SayIt } from "./SayIt";
 
 /** Section headings in the language the lesson is written in. */
 const LABELS: Record<string, {
@@ -67,55 +69,43 @@ function H4({ children }: { children: React.ReactNode }): JSX.Element {
   );
 }
 
-function Say({
-  text,
-  label,
-  slowLabel,
-  onHear,
-  busy
-}: {
-  text: string;
-  label: string;
-  slowLabel: string;
+interface PracticeProps {
+  target: string;
+  explain: string;
+  lessonKey: string;
+  bests: Record<string, number>;
   onHear: (text: string, slow: boolean) => void;
+  onScored: (text: string, pron: number) => void;
   busy: boolean;
-}): JSX.Element {
+}
+
+/** Hear it, hear it slowly, say it — on one line of the lesson. */
+function Practice({ text, L, p }: { text: string; L: (typeof LABELS)["en"]; p: PracticeProps }): JSX.Element {
   const base =
     "min-h-[36px] rounded-full border px-3 text-[13px] transition disabled:opacity-50 " +
     "border-white/15 bg-white/[0.04] text-amber-100/85 hover:bg-amber-400/10";
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-      <button type="button" className={base} disabled={busy} onClick={() => onHear(text, false)} aria-label={`${label}: ${text}`}>
-        ▶ {label}
+    <div className="mt-1 flex flex-wrap items-start gap-1.5">
+      <button type="button" className={base} disabled={p.busy} onClick={() => p.onHear(text, false)} aria-label={`${L.hear}: ${text}`}>
+        ▶ {L.hear}
       </button>
-      <button type="button" className={base} disabled={busy} onClick={() => onHear(text, true)} aria-label={`${slowLabel}: ${text}`}>
-        🐢 {slowLabel}
+      <button type="button" className={base} disabled={p.busy} onClick={() => p.onHear(text, true)} aria-label={`${L.slow}: ${text}`}>
+        🐢 {L.slow}
       </button>
+      <div className="-mt-1 basis-full">
+        <SayIt text={text} lang={p.target} explain={p.explain} lessonKey={p.lessonKey} best={p.bests[text] ?? null} onScored={p.onScored} />
+      </div>
     </div>
   );
 }
 
-function Sentence({
-  s,
-  tName,
-  xName,
-  L,
-  onHear,
-  busy
-}: {
-  s: StudySentence;
-  tName: string;
-  xName: string;
-  L: (typeof LABELS)["en"];
-  onHear: (text: string, slow: boolean) => void;
-  busy: boolean;
-}): JSX.Element {
+function Sentence({ s, tName, xName, L, p }: { s: StudySentence; tName: string; xName: string; L: (typeof LABELS)["en"]; p: PracticeProps }): JSX.Element {
   const notes = s.words.filter((w) => w.note);
   return (
     <section className="[&+&]:mt-7 [&+&]:border-t [&+&]:border-white/10 [&+&]:pt-5">
       <div className="text-2xl font-semibold leading-tight tracking-[-0.01em] text-white">{s.target}</div>
       <div className="mt-1 text-[15px] text-amber-100/65">{s.english}</div>
-      <Say text={s.target} label={L.hear} slowLabel={L.slow} onHear={onHear} busy={busy} />
+      <Practice text={s.target} L={L} p={p} />
       {s.as_said ? <div className="mt-2 text-xs text-amber-100/50">{L.captured(s.as_said)}</div> : null}
 
       <H4>{L.words}</H4>
@@ -161,10 +151,10 @@ function Sentence({
       </div>
       {s.order_points.length ? (
         <ul className="mt-2.5 list-disc space-y-2 pl-5 text-[14px] text-amber-100/85">
-          {s.order_points.map((p, i) => (
-            <li key={`${p.rule}-${i}`}>
-              <b className="text-white">{p.rule}</b> — {p.explanation}
-              {p.example ? <div className="mt-0.5 italic text-amber-100/55">{p.example}</div> : null}
+          {s.order_points.map((pt, i) => (
+            <li key={`${pt.rule}-${i}`}>
+              <b className="text-white">{pt.rule}</b> — {pt.explanation}
+              {pt.example ? <div className="mt-0.5 italic text-amber-100/55">{pt.example}</div> : null}
             </li>
           ))}
         </ul>
@@ -183,11 +173,11 @@ function Sentence({
       {s.chunks.length ? (
         <>
           <H4>{L.build}</H4>
-          <ol className="list-decimal space-y-2 pl-6">
+          <ol className="list-decimal space-y-3 pl-6">
             {s.chunks.map((c, i) => (
               <li key={`${c}-${i}`} className="text-base text-white">
                 <div>{c}</div>
-                <Say text={c} label={L.hear} slowLabel={L.slow} onHear={onHear} busy={busy} />
+                <Practice text={c} L={L} p={p} />
               </li>
             ))}
           </ol>
@@ -201,23 +191,32 @@ export function StudyLessonCard({
   lesson,
   target,
   explain,
+  lessonKey,
+  bests,
   onHear,
+  onScored,
   busy = false
 }: {
   lesson: StudyLesson;
   target: string;
   explain: string;
+  /** Attempts are saved under this; "best N" is read back by it. */
+  lessonKey: string;
+  /** Best score so far, per line of text. */
+  bests: Record<string, number>;
   /** Play `text` in the target language; `slow` asks for the slower read. */
   onHear: (text: string, slow: boolean) => void;
+  onScored: (text: string, pron: number) => void;
   busy?: boolean;
 }): JSX.Element {
   const L = LABELS[explain] ?? LABELS.en;
   const tName = nameIn(target, explain);
   const xName = nameIn(explain, explain);
+  const p: PracticeProps = { target, explain, lessonKey, bests, onHear, onScored, busy };
   return (
     <div>
       {lesson.sentences.map((s, i) => (
-        <Sentence key={`${s.target}-${i}`} s={s} tName={tName} xName={xName} L={L} onHear={onHear} busy={busy} />
+        <Sentence key={`${s.target}-${i}`} s={s} tName={tName} xName={xName} L={L} p={p} />
       ))}
       {lesson.caveats ? (
         <div className="mt-5 text-xs text-amber-100/50">

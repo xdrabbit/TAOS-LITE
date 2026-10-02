@@ -142,6 +142,24 @@ export async function deleteStudyLesson(id: string): Promise<void> {
   if (error) throw error;
 }
 
+/** A learner's scored attempts on one Study lesson — written by SayIt via
+ *  saveTutorAttempt with course "study", read back here for "best N". */
+export interface StudyAttemptRow {
+  target_phrase: string;
+  pron_score: number | null;
+}
+
+export async function listStudyAttempts(lessonKey: string): Promise<StudyAttemptRow[]> {
+  const { data, error } = await supabase
+    .from("tutor_attempts")
+    .select("target_phrase, pron_score")
+    .eq("course", "study")
+    .eq("lesson_id", lessonKey)
+    .limit(1000);
+  if (error) throw error;
+  return (data ?? []) as StudyAttemptRow[];
+}
+
 export async function updateStudyLessonNote(id: string, note: string): Promise<void> {
   const { error } = await supabase
     .from(STUDY_TABLE)
