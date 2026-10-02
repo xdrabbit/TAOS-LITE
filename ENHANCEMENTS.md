@@ -872,6 +872,13 @@ blank.
 
 ## Shipped
 
+- **`/call` speaks one language per phone** — every word of `/call`'s chrome
+  moved into `lib/chrome/copy.ts` (the home screen's and Table's tables lifted
+  into it too), resolved from `mine`, so Liz's phone reads Spanish and Tom's
+  reads English; no more `English · Español` on one control. Rebased onto #67,
+  the Resync button and the "hearing nothing" notice were reconciled to say
+  Resync / Resincronizar — approved by Tom 2026-10-02. Two-phone test cleared
+  by Tom and Liz 2026-10-02. (shipped 2026-10-02, PR #68)
 - **`/study` — lessons from your own conversations, in the app** — the viewer's
   lesson prototype moved to a route behind Liz's own account: pick a line (history
   grouped into conversations by `session_id`), get the breakdown, hear it in the
