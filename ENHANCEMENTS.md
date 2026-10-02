@@ -16,6 +16,19 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Cap Study lesson generation per user per month** — `/study` went live in
+  production on 2026-10-02 (Tom flipped `NEXT_PUBLIC_ENABLE_STUDY` to
+  Production). Every lesson is a gpt-5.5 completion of ~4,500 tokens taking
+  17–31 s, and `/api/study/lesson` is behind `guardSpend` — i.e. sign-in — and
+  nothing else: no monthly allowance, no per-user ceiling. Founders being
+  unlimited is the intent; the other eleven accounts in `auth.users` being
+  unlimited is not. The cache helps (a repeat ask for the same line is free)
+  but a fresh line is always a fresh completion. Reuse the shared 25/month
+  meter (`lib/fast/meter.ts` counts `taos_lite_translations` rows for it, so a
+  Study row would need its own count) or give Study its own small allowance
+  with a paywall card, the way tutor minutes work. Until then the exposure is
+  bounded only by how many strangers have accounts. (added 2026-10-02)
+
 - **/live never gets a breath: continuous or group speech is never flushed** —
   Driver report, 2026-09-06: when one person talks without pausing, or a group
   talks over each other, `/live` goes quiet. Server VAD never sees a silence
