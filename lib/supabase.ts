@@ -31,6 +31,8 @@ export interface HistoryRow {
   original_text: string;
   translation_text: string;
   engine: string | null;
+  /** Shared by every turn of one conversation on one phone; null before 2026-10-01. */
+  session_id: string | null;
 }
 
 export interface NewTranslation {
@@ -40,10 +42,13 @@ export interface NewTranslation {
   original_text: string;
   translation_text: string;
   engine?: string | null;
+  /** From lib/translate/session.ts — the conversation this turn belongs to. */
+  session_id?: string | null;
 }
 
 // user_id is filled server-side by the column default auth.uid(); RLS guarantees
-// the row can only belong to the signed-in user.
+// the row can only belong to the signed-in user. session_id is the client's
+// call — the server has no way to know when a conversation went quiet.
 export async function saveTranslation(input: NewTranslation): Promise<void> {
   const { error } = await supabase.from(TABLE).insert(input);
   if (error) throw error;
