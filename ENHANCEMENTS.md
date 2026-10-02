@@ -740,6 +740,20 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     shipping the product. The viewer stays local, single-user and Tom's — which
     is also the honest answer to the "safeguard the viewer" entry above: not a
     login, just nobody else uses it.
+  - **v1 shipped without "Say it" scoring, on purpose (PR #74, 2026-10-01).**
+    The screen does pick-a-line → breakdown → hear it in the speaker's cloned
+    voice → library. Pronunciation scoring is the one leg left out: the app's
+    Azure scoring is `/api/tutor/assess`, which is metered through TUTOR
+    MINUTES (`beginTutorSession` / `settleTutorSession`) and gated by
+    `tutorEnabled()`. Wiring Study into it is a decision about billing — do
+    Study attempts spend tutor minutes, does the assess route get a second
+    gate (`tutorEnabled() || studyEnabled()`), does `tests/tutor-flag.test.ts`
+    still hold — not a wiring job, and it was not smuggled into the port.
+    Decide that, then it is one route change and the viewer's `practice.mjs`
+    (record → 16 kHz WAV → assess) ported into the card's ● Say it button.
+  - Stacked on #73 (`session_id`). DEPLOY ORDER: apply
+    `20261001_translation_sessions.sql`, then `20261001_study_lessons.sql`,
+    before either reaches production; then `NEXT_PUBLIC_ENABLE_STUDY=1`.
   (added 2026-10-01 from the evening spent failing to get the viewer onto
   Liz's phone)
 
