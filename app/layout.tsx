@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import { tutorEnabled } from "@/lib/release";
+import { pairForDevice } from "@/lib/translate/deviceLanguage";
+import { DevicePairProvider } from "@/lib/translate/useLanguagePair";
 import "./globals.css";
 
 // The site title and description are the first promise TAOS makes — they are
@@ -63,9 +66,16 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }): JSX.Element {
+  // A first-time visitor's pair follows their phone's language, read here on
+  // the server so the page renders in it once (lib/translate/deviceLanguage.ts).
+  // A stored pair still wins on the phone. Reading headers() renders every
+  // route per request — that is the price of knowing who is asking.
+  const devicePair = pairForDevice(headers().get("accept-language"));
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <DevicePairProvider pair={devicePair}>{children}</DevicePairProvider>
+      </body>
     </html>
   );
 }
