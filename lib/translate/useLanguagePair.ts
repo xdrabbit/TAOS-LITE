@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode
+} from "react";
 import type { LanguageCode } from "@/lib/languages/catalog";
 import {
   DEFAULT_PAIR,
@@ -89,9 +98,27 @@ export interface LanguagePairOptions {
   onPairChange?: (pair: readonly [PairLangCode, PairLangCode]) => void;
 }
 
+// The pair a phone with NOTHING stored starts in. The root layout fills this
+// from the request's Accept-Language header (lib/translate/deviceLanguage.ts)
+// so a first-time visitor's pair follows their phone, decided on the server
+// and rendered once. Without a provider — tests, anything mounted outside the
+// layout — it is DEFAULT_PAIR, exactly as before.
+const DevicePairContext = createContext<readonly [PairLangCode, PairLangCode]>(DEFAULT_PAIR);
+
+export function DevicePairProvider({
+  pair,
+  children
+}: {
+  pair: readonly [PairLangCode, PairLangCode];
+  children?: ReactNode;
+}): JSX.Element {
+  return createElement(DevicePairContext.Provider, { value: pair }, children);
+}
+
 export function useLanguagePair(options: LanguagePairOptions = {}): LanguagePairSelection {
   const { onPairChange, lockMine = false } = options;
-  const [pair, setPair] = useState<readonly [PairLangCode, PairLangCode]>(DEFAULT_PAIR);
+  const devicePair = useContext(DevicePairContext);
+  const [pair, setPair] = useState<readonly [PairLangCode, PairLangCode]>(devicePair);
   const [recent, setRecent] = useState<readonly PairLangCode[]>(DEFAULT_RECENT);
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -112,9 +139,19 @@ export function useLanguagePair(options: LanguagePairOptions = {}): LanguagePair
     // sitting in.
     setRecent(readStoredRecent());
     const stored = readStoredPair();
+    // Nothing stored and the phone's language moved the starting pair: tell
+    // the screen, the same as a restore would, so state it keeps alongside
+    // the pair (/'s `source`) starts on this pair rather than the old default.
+    // A stored pair skips this entirely — it wins, below.
+    if (!stored && (devicePair[0] !== DEFAULT_PAIR[0] || devicePair[1] !== DEFAULT_PAIR[1])) {
+      changeRef.current?.(devicePair);
+    }
     if (!stored) return;
     setPair(stored);
     changeRef.current?.(stored);
+    // Mount-only, like the restore it sits in: the device pair is fixed for
+    // the life of the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectLanguage = useCallback(
