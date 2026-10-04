@@ -27,6 +27,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   pair. `lib/chrome/copy.ts` is already shaped for it: one call site to change,
   and no screen holds an opinion about its own language any more.
   (added 2026-09-16)
+- **Home screen chrome should follow the phone's owner, not the active
+  speaker** — Tom's decision, 2026-10-04: today's speaker-following is a bug;
+  home should read `pair[0]` the way `/call` reads `mine`. Deliberately
+  sequenced AFTER PR #77 (nav recovery) merges — #77 rewrites
+  `TranslatorShell.tsx`, and two versions of that file in flight is how #56
+  overwrote #55. (added 2026-10-04)
 - **Samoan is not in the language catalog** — The ask that started the copy
   table work was a woman who wants her grandfather to use TAOS in Samoan, and
   `sm` is not in `lib/languages/catalog.ts` at all, so it cannot be picked on
@@ -872,6 +878,11 @@ blank.
 
 ## Shipped
 
+- **A first-time visitor's pair follows their phone** — the root layout reads
+  `Accept-Language` on the server and seeds the starting pair from it, instead
+  of every stranger opening Spanish-first. Only the chrome languages map (en,
+  es, bs, it, zh, yue); anything else gets the old default. A saved pair still
+  wins at mount. (shipped 2026-10-04, PR #78, e461ea1)
 - **`/call` speaks one language per phone** — every word of `/call`'s chrome
   moved into `lib/chrome/copy.ts` (the home screen's and Table's tables lifted
   into it too), resolved from `mine`, so Liz's phone reads Spanish and Tom's

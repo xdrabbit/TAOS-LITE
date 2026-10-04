@@ -77,8 +77,10 @@ import { copyFor, fill, splitAround, type ChromeCopy, type ChromeKey } from "@/l
 // because a mixed pair had to share one screen, and on a call they do not.
 // A language with no chrome entry falls back to English, key by key.
 //
-// Chrome language is still TIED TO THE PAIR, exactly like the home screen.
-// Untying it — a UI-language setting of its own, defaulted from the device
+// Chrome language is still TIED TO THE PAIR, but not the way the home screen
+// ties it: /call follows the phone's own side (`mine`, which is `pair[0]`),
+// while the home screen follows whoever is speaking right now (`copyFor(source)`
+// in TranslatorShell). Untying it — a UI-language setting of its own, defaulted from the device
 // locale — is the next PR, deliberately not this one.
 
 interface CaptionLine {
