@@ -6,6 +6,7 @@ import { predict } from "@/lib/predict/engine";
 import type { PredictModel } from "@/lib/predict/model.mjs";
 import { languageNative } from "@/lib/languages/catalog";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { copyFor } from "@/lib/chrome/copy";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { pairDirection, type PairSide } from "@/lib/translate/pair";
 import { jsonAuthHeaders } from "@/lib/authClient";
@@ -77,6 +78,9 @@ export function TranslateShell(): JSX.Element {
       setError(null);
     }
   });
+
+  // The picker caption is in the phone owner's language, like home's.
+  const copy = copyFor(mine);
 
   const { sourceLanguage, targetLanguage } = pairDirection(pair, speaking);
   const direction = `${sourceLanguage}-${targetLanguage}`;
@@ -237,7 +241,7 @@ export function TranslateShell(): JSX.Element {
           pills={pills}
           selected={theirs}
           paired={mine}
-          caption="Translate into · Traducir a"
+          caption={copy.translateInto}
           sheetOpen={sheetOpen}
           onSelect={selectLanguage}
           onOpenSheet={() => setSheetOpen(true)}
@@ -380,6 +384,7 @@ export function TranslateShell(): JSX.Element {
         open={sheetOpen}
         selected={theirs}
         paired={mine}
+        caption={copy.translateInto}
         onSelect={selectLanguage}
         onClose={() => setSheetOpen(false)}
       />

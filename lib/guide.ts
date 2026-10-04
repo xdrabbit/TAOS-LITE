@@ -14,8 +14,8 @@
 //      scanned a code at a table is the reader. Not in copy, not in comments.
 //   2. IT DESCRIBES THE SHIPPED UI, NOT THE INTENDED ONE. Every control named
 //      below is quoted from the screen it lives on: "START LISTENING" from
-//      components/LiveShell.tsx, "TAP TO TALK" from TabletopShell, "+ More ·
-//      Más" from LanguagePicker, "Start a chat" from lib/chatInvite.ts. A
+//      components/LiveShell.tsx, "TAP TO TALK" from TabletopShell, "+ More"
+//      from lib/chrome/copy.ts, "Start a chat" from lib/chatInvite.ts. A
 //      guide that renames things is worse than no guide, because the reader
 //      trusts it and then cannot find the button. If a label changes, change
 //      it here in the same PR.
@@ -33,6 +33,7 @@
 // section. Two full sentences joined by a middot is unreadable on a phone,
 // and the point of this page is that half the group reads the Spanish first.
 import { LANGUAGES } from "@/lib/languages/catalog";
+import { copyFor, fill } from "@/lib/chrome/copy";
 
 /** Derived, never typed by hand — the catalog is the only count that exists. */
 export const LANGUAGE_COUNT = LANGUAGES.length;
@@ -91,6 +92,16 @@ export interface GuideSection {
   readonly footnote?: Bilingual;
 }
 
+// The home-screen words the sections below quote. They are read out of
+// lib/chrome/copy.ts rather than typed here because home prints each phone in
+// its owner's language: an English reader sees "Translate into", a Spanish
+// reader "Traducir a", and each half of this page must quote the word on ITS
+// reader's phone. Until 2026-10-04 both halves quoted the doubled
+// "Translate into · Traducir a" and "+ More · Más", and the Spanish half
+// sent its reader to an "Install" button their phone no longer shows.
+const EN_HOME = copyFor("en");
+const ES_HOME = copyFor("es");
+
 // ── 1. Install ─────────────────────────────────────────────────────────────
 // Three steps, in the order a phone actually does them. The install step is
 // two different sets of words because the platforms are genuinely different:
@@ -125,8 +136,8 @@ const INSTALL: GuideSection = {
       icon: "📲",
       label: "Add to Home Screen · Añadir a inicio",
       body: {
-        en: "Install it so it opens full screen, like any other app. On iPhone: tap Share, then Add to Home Screen. On Android: tap the Install button TAOS offers you, or open Chrome's ⋮ menu (three dots, top right) and choose Install app.",
-        es: "Instálala para que abra en pantalla completa, como cualquier otra app. En iPhone: toca Compartir y luego Añadir a inicio. En Android: toca el botón Install que TAOS te ofrece, o abre el menú ⋮ de Chrome (tres puntos, arriba a la derecha) y elige Instalar app."
+        en: `Install it so it opens full screen, like any other app. On iPhone: tap Share, then Add to Home Screen. On Android: tap the ${EN_HOME.install} button TAOS offers you, or open Chrome's ⋮ menu (three dots, top right) and choose Install app.`,
+        es: `Instálala para que abra en pantalla completa, como cualquier otra app. En iPhone: toca Compartir y luego Añadir a inicio. En Android: toca el botón ${ES_HOME.install} que TAOS te ofrece, o abre el menú ⋮ de Chrome (tres puntos, arriba a la derecha) y elige Instalar app.`
       }
     }
   ],
@@ -244,16 +255,16 @@ const LANGUAGES_SECTION: GuideSection = {
   id: "languages",
   heading: { en: "Choosing languages", es: "Elegir idiomas" },
   intro: {
-    en: `The row of pills near the top of the screen is the language list — "Translate into · Traducir a". Tap one and that is what comes out.`,
-    es: `La fila de botones cerca de la parte de arriba es la lista de idiomas — "Translate into · Traducir a". Toca uno y eso es lo que sale.`
+    en: `The row of pills near the top of the screen is the language list — "${EN_HOME.translateInto}". Tap one and that is what comes out.`,
+    es: `La fila de botones cerca de la parte de arriba es la lista de idiomas — "${ES_HOME.translateInto}". Toca uno y eso es lo que sale.`
   },
   entries: [
     {
       icon: "➕",
       label: "+ More · Más",
       body: {
-        en: `The pills hold the languages you have been using. "+ More · Más" at the end of the row opens a search box with all ${LANGUAGE_COUNT} of them; pick one and it joins the row.`,
-        es: `Los botones guardan los idiomas que has estado usando. "+ More · Más" al final de la fila abre un buscador con los ${LANGUAGE_COUNT}; elige uno y se suma a la fila.`
+        en: `The pills hold the languages you have been using. "${EN_HOME.moreLanguages}" at the end of the row opens a search box with all ${LANGUAGE_COUNT} of them; pick one and it joins the row.`,
+        es: `Los botones guardan los idiomas que has estado usando. "${ES_HOME.moreLanguages}" al final de la fila abre un buscador con los ${LANGUAGE_COUNT}; elige uno y se suma a la fila.`
       }
     },
     {
@@ -281,22 +292,22 @@ const FREE: GuideSection = {
   entries: [
     {
       icon: "🎁",
-      label: "Free",
+      label: "Free · Gratis",
       body: {
         en: `Starting costs nothing: every screen is open, and you get ${FREE_TRANSLATIONS} translations a month. The counter sits at the top of the home screen and starts over on the 1st.`,
         es: `Empezar no cuesta nada: todas las pantallas están abiertas y tienes ${FREE_TRANSLATIONS} traducciones al mes. El contador está arriba en la pantalla principal y vuelve a empezar el día 1.`
       },
       example: {
-        en: `"Free · ${FREE_TRANSLATIONS} translations left this month" — that banner is your count.`,
-        es: `"Free · ${FREE_TRANSLATIONS} translations left this month" — ese aviso es tu cuenta.`
+        en: `"${fill(EN_HOME.trialLeft, { count: FREE_TRANSLATIONS })}" — that banner is your count.`,
+        es: `"${fill(ES_HOME.trialLeft, { count: FREE_TRANSLATIONS })}" — ese aviso es tu cuenta.`
       }
     },
     {
       icon: "⬆️",
-      label: "Upgrade",
+      label: `${EN_HOME.upgrade} · ${ES_HOME.upgrade}`,
       body: {
-        en: "Upgrading lifts the limit: paid plans translate without a monthly cap. The Upgrade button is on that same banner.",
-        es: "Mejorar el plan quita el límite: los planes de pago traducen sin tope mensual. El botón Upgrade está en ese mismo aviso."
+        en: `Upgrading lifts the limit: paid plans translate without a monthly cap. The ${EN_HOME.upgrade} button is on that same banner.`,
+        es: `Mejorar el plan quita el límite: los planes de pago traducen sin tope mensual. El botón ${ES_HOME.upgrade} está en ese mismo aviso.`
       }
     }
   ]
