@@ -882,7 +882,7 @@ blank.
   launch. Closes the Up next item "Cap Study lesson generation per user per
   month" (added 2026-10-02). `GET /api/tutor/lessons` deliberately stays
   public and uncapped — Tom's decision, 2026-10-04. (shipped 2026-10-04,
-  PR #PRNUM; migration `20261004_lesson_generation_cap.sql` applied)
+  PR #80; migration `20261004_lesson_generation_cap.sql` applied)
 
 - **A first-time visitor's pair follows their phone** — the root layout reads
   `Accept-Language` on the server and seeds the starting pair from it, instead
