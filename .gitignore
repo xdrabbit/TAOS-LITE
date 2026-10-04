@@ -30,3 +30,6 @@ scripts/fixtures
 
 # Sensitive local database exports — never commit.
 local_exports/
+
+# Supabase CLI version cache (generated).
+supabase/.temp/

@@ -1,8 +1,8 @@
 # TAOS-LITE — agent guide
 
 Live EN⇄ES (+ZH/YUE) translation app for Tom (English) and Liz (Spanish),
-deployed at taoslite.com via Vercel from `main`. Screens: /translate (spoken
-turns, home page), /live (ambient), /call, /chat, /tabletop, /tutor, /study.
+deployed at taoslite.com via Vercel from `main`. Screens: / (spoken turns, home
+page), /translate (typed), /live (ambient), /call, /chat, /tabletop, /tutor, /study.
 
 ## The enhancements workflow (important)
 
@@ -27,11 +27,14 @@ build task:
   must all pass. CI (typecheck+lint+test) also runs on every PR.
 - Cloned-voice source of truth is `lib/tts/voice.ts` — IDs and the
   voice-follows-speaker rule live there; don't restate IDs elsewhere.
+- Money routes: `guardSpend` first (`lib/spendGuard.ts`). Do not weaken it.
 - Workflow: branch from latest `origin/main` (always `git fetch` first),
   PR to `main`, squash-merge after CI is green. Vercel auto-deploys `main`
   to production.
 - Field reports from Tom are the primary QA signal — production issues are
   diagnosable via Vercel runtime logs (project `taos-lite`).
+- Local launch: port 3017 (`.mc-launch.toml`). No remote tunnel is declared.
+- Architecture: `TAOS-LITE-arch.md`. Docs index: `docs/README.md`.
 
 ## Tutor and Study: who can reach what (as of 2026-10-04)
 
