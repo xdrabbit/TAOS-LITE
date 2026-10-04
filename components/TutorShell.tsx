@@ -746,6 +746,7 @@ function Conversation({
     return (
       <Paywall
         email={email}
+        mine={mine}
         currentTier={tier}
         onClose={() => setShowPaywall(false)}
         onSignOut={() => void supabase.auth.signOut()}

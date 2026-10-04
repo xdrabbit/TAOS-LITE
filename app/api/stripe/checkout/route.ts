@@ -3,6 +3,7 @@ import { stripe, priceForPlan, type PlanId } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
 import { trustedOrigin } from "@/lib/authRedirect";
+import { stripeLocale } from "@/lib/stripeLocale";
 
 export const runtime = "nodejs";
 
@@ -16,7 +17,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Not signed in." }, { status: 401 });
     }
 
-    const body = (await req.json().catch(() => ({}))) as { plan?: string };
+    const body = (await req.json().catch(() => ({}))) as { plan?: string; lang?: string };
     const plan: PlanId = body.plan === "premium" ? "premium" : "basic";
 
     const { data: profile } = await supabaseAdmin
@@ -51,6 +52,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       line_items: [{ price: priceForPlan(plan), quantity: 1 }],
       client_reference_id: user.id,
       allow_promotion_codes: true,
+      // Stripe's page, in the language the paywall was just read in.
+      locale: stripeLocale(body.lang),
       success_url: `${origin}/?checkout=success`,
       cancel_url: `${origin}/?checkout=cancel`
     });

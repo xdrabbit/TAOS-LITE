@@ -3,6 +3,7 @@ import { stripe, STRIPE_PACKS } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
 import { trustedOrigin } from "@/lib/authRedirect";
+import { stripeLocale } from "@/lib/stripeLocale";
 
 export const runtime = "nodejs";
 
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Not signed in." }, { status: 401 });
     }
 
-    const body = (await req.json().catch(() => ({}))) as { pack?: string };
+    const body = (await req.json().catch(() => ({}))) as { pack?: string; lang?: string };
     const pack = STRIPE_PACKS[body.pack ?? "100"] ?? STRIPE_PACKS["100"];
 
     const { data: profile } = await supabaseAdmin
@@ -60,6 +61,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       customer: customerId,
       line_items: [{ price: pack.price, quantity: 1 }],
       client_reference_id: user.id,
+      // Stripe's page, in the language the paywall was just read in.
+      locale: stripeLocale(body.lang),
       // The webhook reads these to credit the right number of minutes.
       metadata: { kind: "pack", pack_minutes: String(pack.minutes), user_id: user.id },
       payment_intent_data: {

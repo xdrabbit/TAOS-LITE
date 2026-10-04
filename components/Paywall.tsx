@@ -1,16 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { COMING_SOON, tutorComingSoon } from "@/lib/release";
-import { ROLLOVER_NOTE } from "@/lib/tutor/meterCopy";
+import { tutorComingSoon } from "@/lib/release";
+import { ENGLISH, copyFor, fill, type ChromeCopy, type ChromeKey } from "@/lib/chrome/copy";
 import { startCheckout, startPackCheckout, supabase, type Tier } from "@/lib/supabase";
 
 interface Plan {
   id: "basic" | "premium";
-  name: string;
+  /** A copy key, or null for "Premium", which is the same word in Spanish. */
+  name: ChromeKey | null;
   price: string;
-  features: { text: string; tutor?: boolean }[];
+  features: { text: ChromeKey; tutor?: boolean }[];
   highlight?: boolean;
+}
+
+// "Premium" reads the same in both languages, so it is printed plain rather
+// than given a key (see the paywall block in lib/chrome/copy.ts).
+const PREMIUM = "Premium";
+
+function planName(p: Plan, copy: ChromeCopy): string {
+  return p.name ? copy[p.name] : PREMIUM;
 }
 
 // This is the screen with the Stripe button on it, so it is the one that has
@@ -18,25 +27,31 @@ interface Plan {
 // drills and the progress tracking all live behind /tutor, so each is flagged
 // `tutor: true` and renders as pending rather than as something the charge
 // buys today. Same flag as the nav — when tutor returns, so does the ✓.
+//
+// Every word on it is a key in lib/chrome/copy.ts, read in the phone owner's
+// language (`mine`) — Tom's decision, 2026-10-04: Liz tapped "Mejorar el plan"
+// on home and landed here in English. The prices are not words and stay as
+// they are. Stripe's own pages (Checkout, the billing portal) are not ours to
+// translate; they get the same language as a `locale` (lib/stripeLocale.ts).
 const PLANS: Plan[] = [
   {
     id: "basic",
-    name: "Basic",
+    name: "paywallBasic",
     price: "$5.99",
     features: [
-      { text: "Unlimited translation" },
-      { text: "45 tutor minutes / month", tutor: true },
-      { text: "Drills + progress", tutor: true }
+      { text: "paywallUnlimited" },
+      { text: "paywallTutorBasic", tutor: true },
+      { text: "paywallDrills", tutor: true }
     ]
   },
   {
     id: "premium",
-    name: "Premium",
+    name: null,
     price: "$19.99",
     features: [
-      { text: "Unlimited translation" },
-      { text: "200 tutor minutes / month", tutor: true },
-      { text: "Drills + progress", tutor: true }
+      { text: "paywallUnlimited" },
+      { text: "paywallTutorPremium", tutor: true },
+      { text: "paywallDrills", tutor: true }
     ],
     highlight: true
   }
@@ -44,11 +59,14 @@ const PLANS: Plan[] = [
 
 export function Paywall({
   email,
+  mine,
   currentTier = "free",
   onClose,
   onSignOut
 }: {
   email: string;
+  /** The phone owner's language — what every word here is written in. */
+  mine: string;
   currentTier?: Tier;
   onClose?: () => void;
   onSignOut: () => void;
@@ -57,6 +75,19 @@ export function Paywall({
   const [error, setError] = useState<string | null>(null);
   const isPaid = currentTier === "basic" || currentTier === "premium";
   const comingSoon = tutorComingSoon();
+  const copy = copyFor(mine);
+  const plans = PLANS.map((p) => ({ ...p, label: planName(p, copy) }));
+
+  // What went wrong, in the owner's language. The routes answer in English
+  // (and Stripe in whatever Stripe says), which is fine for the log and no use
+  // to Liz, so the raw message goes to the console and the screen says which
+  // step failed. "Sign in again" is the one failure the reader can act on, so
+  // it keeps its own sentence; lib/supabase.ts throws exactly ENGLISH's.
+  function failed(e: unknown, fallback: "paywallCheckoutFailed" | "paywallBillingFailed") {
+    const raw = e instanceof Error ? e.message : String(e);
+    console.warn("[paywall]", raw);
+    setError(raw === ENGLISH.paywallSignInAgain ? copy.paywallSignInAgain : copy[fallback]);
+  }
 
   // Free users start a new checkout; existing subscribers switch plans in the
   // Stripe billing portal (avoids creating a second subscription).
@@ -67,10 +98,10 @@ export function Paywall({
       if (isPaid) {
         await openPortal();
       } else {
-        await startCheckout(plan);
+        await startCheckout(plan, mine);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start checkout.");
+      failed(e, "paywallCheckoutFailed");
       setBusy(null);
     }
   }
@@ -79,9 +110,9 @@ export function Paywall({
     setBusy(`pack-${pack}`);
     setError(null);
     try {
-      await startPackCheckout(pack);
+      await startPackCheckout(pack, mine);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start checkout.");
+      failed(e, "paywallCheckoutFailed");
       setBusy(null);
     }
   }
@@ -92,16 +123,17 @@ export function Paywall({
     try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
-      if (!token) throw new Error("Please sign in again.");
+      if (!token) throw new Error(ENGLISH.paywallSignInAgain);
       const res = await fetch("/api/stripe/portal", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: mine })
       });
       const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
-      if (!res.ok || !payload.url) throw new Error(payload.error || "Could not open billing.");
+      if (!res.ok || !payload.url) throw new Error(payload.error || ENGLISH.paywallBillingFailed);
       window.location.href = payload.url;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      failed(e, "paywallBillingFailed");
       setBusy(null);
     }
   }
@@ -111,20 +143,22 @@ export function Paywall({
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-amber-200">Choose your plan</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-amber-200">{copy.paywallTitle}</h1>
             <p className="mt-1 text-sm text-amber-100/70">
               {currentTier === "free"
                 ? comingSoon
-                  ? "You're on the free plan (25 translations / month). Paid plans lift that limit today."
-                  : "You're on the free plan (25 translations + 15 tutor min / month)."
-                : `You're on ${currentTier === "premium" ? "Premium" : "Basic"}.`}
+                  ? copy.paywallFreeNow
+                  : copy.paywallFreeWithTutor
+                : fill(copy.paywallOnPlan, {
+                    plan: currentTier === "premium" ? PREMIUM : copy.paywallBasic
+                  })}
             </p>
           </div>
           {onClose ? (
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close"
+              aria-label={copy.close}
               className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm text-amber-100/70"
             >
               ✕
@@ -133,7 +167,7 @@ export function Paywall({
         </div>
 
         <div className="mt-5 flex flex-col gap-3">
-          {PLANS.map((p) => {
+          {plans.map((p) => {
             const isCurrent = currentTier === p.id;
             return (
               <div
@@ -145,9 +179,9 @@ export function Paywall({
                 }`}
               >
                 <div className="flex items-baseline justify-between">
-                  <span className="text-lg font-semibold text-white">{p.name}</span>
+                  <span className="text-lg font-semibold text-white">{p.label}</span>
                   <span className="text-amber-100/80">
-                    <span className="text-xl font-semibold text-white">{p.price}</span> / mo
+                    <span className="text-xl font-semibold text-white">{p.price}</span> {copy.paywallPerMonth}
                   </span>
                 </div>
                 <ul className="mt-2 flex flex-col gap-1 text-sm text-amber-50/80">
@@ -155,10 +189,10 @@ export function Paywall({
                     const pending = f.tutor === true && comingSoon;
                     return (
                       <li key={f.text} className={pending ? "text-amber-50/45" : undefined}>
-                        {pending ? "·" : "✓"} {f.text}
+                        {pending ? "·" : "✓"} {copy[f.text]}
                         {pending ? (
                           <span className="ml-1.5 inline-block whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 align-middle text-[0.65rem] font-medium uppercase tracking-wide text-amber-200/90">
-                            {COMING_SOON}
+                            {copy.comingSoon}
                           </span>
                         ) : null}
                       </li>
@@ -176,12 +210,10 @@ export function Paywall({
                   }`}
                 >
                   {isCurrent
-                    ? "Current plan"
+                    ? copy.paywallCurrentPlan
                     : busy === p.id
-                      ? "Opening…"
-                      : isPaid
-                        ? `Switch to ${p.name}`
-                        : `Get ${p.name}`}
+                      ? copy.paywallOpening
+                      : fill(isPaid ? copy.paywallSwitchTo : copy.paywallGet, { plan: p.label })}
                 </button>
               </div>
             );
@@ -198,22 +230,18 @@ export function Paywall({
         {isPaid && comingSoon ? (
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
             <p className="text-sm font-medium text-amber-100/90">
-              Add-on tutor minute packs{" "}
+              {copy.paywallPacksSoon}{" "}
               <span className="ml-0.5 inline-block whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 align-middle text-[0.65rem] font-medium uppercase tracking-wide text-amber-200/90">
-                {COMING_SOON}
+                {copy.comingSoon}
               </span>
             </p>
-            <p className="mt-2 text-xs text-amber-100/40">
-              The +100 and +200 minute packs go on sale when the tutor arrives. They never expire —
-              pack minutes roll over, while a plan&apos;s minutes reset monthly. Your plan&apos;s
-              unlimited translation is unaffected.
-            </p>
+            <p className="mt-2 text-xs text-amber-100/40">{copy.paywallPacksSoonBody}</p>
           </div>
         ) : null}
 
         {isPaid && !comingSoon ? (
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-            <p className="text-sm font-medium text-amber-100/90">Need more tutor minutes this month?</p>
+            <p className="text-sm font-medium text-amber-100/90">{copy.paywallMoreMinutes}</p>
             <div className="mt-2 flex gap-2">
               <button
                 type="button"
@@ -221,7 +249,7 @@ export function Paywall({
                 disabled={busy !== null}
                 className="flex-1 rounded-xl border border-amber-300/30 bg-white/5 px-3 py-2 text-sm text-amber-100 disabled:opacity-60"
               >
-                {busy === "pack-100" ? "Opening…" : "+100 min · $9.99"}
+                {busy === "pack-100" ? copy.paywallOpening : "+100 min · $9.99"}
               </button>
               <button
                 type="button"
@@ -229,7 +257,7 @@ export function Paywall({
                 disabled={busy !== null}
                 className="flex-1 rounded-xl border border-amber-300/30 bg-white/5 px-3 py-2 text-sm text-amber-100 disabled:opacity-60"
               >
-                {busy === "pack-200" ? "Opening…" : "+200 min · $17.99"}
+                {busy === "pack-200" ? copy.paywallOpening : "+200 min · $17.99"}
               </button>
             </div>
             {/* This sentence was "Packs add minutes for the rest of this
@@ -239,21 +267,20 @@ export function Paywall({
                 rolls over and never expires, and the meter spends the plan's
                 rented minutes before it touches it. Saying so BEFORE the
                 charge is cheaper than saying it after. */}
-            <p className="mt-2 text-xs text-amber-100/40">{ROLLOVER_NOTE.en}</p>
-            <p className="text-xs text-amber-100/30">{ROLLOVER_NOTE.es}</p>
+            <p className="mt-2 text-xs text-amber-100/40">{copy.paywallRollover}</p>
           </div>
         ) : null}
 
         <div className="mt-4 flex items-center justify-between text-xs text-amber-100/50">
           {isPaid ? (
             <button type="button" onClick={() => void openPortal()} className="underline-offset-2 hover:underline">
-              Manage billing
+              {copy.paywallManageBilling}
             </button>
           ) : (
             <span />
           )}
           <button type="button" onClick={onSignOut} title={email} className="underline-offset-2 hover:underline">
-            Sign out
+            {copy.navSignOut}
           </button>
         </div>
 

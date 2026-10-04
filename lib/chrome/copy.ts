@@ -28,6 +28,8 @@
 // So: do NOT invent translations in a language nobody at this table reads.
 // An absent key is honest. A guessed one is a bug you cannot see.
 
+import { ROLLOVER_NOTE } from "@/lib/tutor/meterCopy";
+
 /**
  * The complete table. Every key in the app is declared here, in English, and
  * this object is what the TYPE is derived from — so adding a key is adding a
@@ -286,7 +288,47 @@ const EN = {
   callWaitingAudio: "Waiting for your partner's audio — the interpreter starts when it arrives.",
   callPartnerLeft: "Your partner left the call. Waiting for them to rejoin…",
   callCameraFailed: "Could not switch the camera.",
-  callInterpreterStartFailed: "The interpreter could not start."
+  callInterpreterStartFailed: "The interpreter could not start.",
+
+  // ── The paywall (components/Paywall.tsx) — plans, prices, the buy buttons ─
+  // Tom's decision, 2026-10-04: after #83 Liz read "Mejorar el plan" on home,
+  // tapped it, and landed on a paywall that was English from top to bottom.
+  // It is the one screen where a word she cannot read costs money, so it
+  // reads in the phone owner's language like the rest of home. Prices and
+  // the numbers inside these sentences are NOT localised: "$5.99" is "$5.99"
+  // on every phone, and the minute counts are the ones lib/tutor/meter.ts
+  // enforces (tests/tutor-metering.test.ts holds them equal).
+  // "Premium" has no key: it is the same word in Spanish, and a Spanish key
+  // equal to its English fails tests/chrome-copy.test.ts, the navChat rule.
+  paywallTitle: "Choose your plan",
+  paywallFreeNow: "You're on the free plan (25 translations / month). Paid plans lift that limit today.",
+  paywallFreeWithTutor: "You're on the free plan (25 translations + 15 tutor min / month).",
+  paywallOnPlan: "You're on {plan}.",
+  paywallBasic: "Basic",
+  paywallPerMonth: "/ mo",
+  paywallUnlimited: "Unlimited translation",
+  paywallTutorBasic: "45 tutor minutes / month",
+  paywallTutorPremium: "200 tutor minutes / month",
+  paywallDrills: "Drills + progress",
+  paywallCurrentPlan: "Current plan",
+  paywallOpening: "Opening…",
+  paywallSwitchTo: "Switch to {plan}",
+  paywallGet: "Get {plan}",
+  paywallPacksSoon: "Add-on tutor minute packs",
+  paywallPacksSoonBody:
+    "The +100 and +200 minute packs go on sale when the tutor arrives. They never expire — pack minutes roll over, while a plan's minutes reset monthly. Your plan's unlimited translation is unaffected.",
+  paywallMoreMinutes: "Need more tutor minutes this month?",
+  // The sentence a pack buyer is owed before the charge; its wording lives in
+  // lib/tutor/meterCopy.ts, where the tutor's own out-of-minutes panel reads
+  // it too, so the two cannot drift.
+  paywallRollover: ROLLOVER_NOTE.en,
+  paywallManageBilling: "Manage billing",
+  paywallSignInAgain: "Please sign in again.",
+  paywallCheckoutFailed: "Could not start checkout.",
+  paywallBillingFailed: "Could not open billing.",
+  // lib/release.ts's COMING_SOON, one language at a time. The doubled
+  // constant stays for Landing, which has no phone owner to ask.
+  comingSoon: "Coming soon"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -509,7 +551,39 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     callWaitingAudio: "Esperando el audio de la otra persona — el intérprete arranca cuando llegue.",
     callPartnerLeft: "La otra persona salió de la llamada. Esperando a que vuelva…",
     callCameraFailed: "No se pudo cambiar la cámara.",
-    callInterpreterStartFailed: "El intérprete no pudo arrancar."
+    callInterpreterStartFailed: "El intérprete no pudo arrancar.",
+
+    // The paywall. Reused where the app already had the Spanish: Abriendo…
+    // (the sign-in button), Próximamente (COMING_SOON), "minutos de tutor al
+    // mes" and the rollover sentence (lib/tutor/meterCopy.ts), "25
+    // traducciones al mes" and "los planes de pago" (/guide), "facturación"
+    // (/about), "Elige" (/video). Everything else is new on 2026-10-04 and
+    // unread by Liz — the PR that added it lists every one.
+    paywallTitle: "Elige tu plan",
+    paywallFreeNow:
+      "Estás en el plan gratis (25 traducciones al mes). Los planes de pago quitan ese límite hoy mismo.",
+    paywallFreeWithTutor: "Estás en el plan gratis (25 traducciones + 15 min de tutor al mes).",
+    paywallOnPlan: "Estás en el plan {plan}.",
+    paywallBasic: "Básico",
+    paywallPerMonth: "/ mes",
+    paywallUnlimited: "Traducción ilimitada",
+    paywallTutorBasic: "45 minutos de tutor al mes",
+    paywallTutorPremium: "200 minutos de tutor al mes",
+    paywallDrills: "Ejercicios y progreso",
+    paywallCurrentPlan: "Tu plan actual",
+    paywallOpening: "Abriendo…",
+    paywallSwitchTo: "Cambiar a {plan}",
+    paywallGet: "Elegir {plan}",
+    paywallPacksSoon: "Paquetes adicionales de minutos de tutor",
+    paywallPacksSoonBody:
+      "Los paquetes de +100 y +200 minutos salen a la venta cuando llegue el tutor. Nunca caducan: los minutos de paquete se acumulan, mientras que los minutos del plan se renuevan cada mes. La traducción ilimitada de tu plan no cambia.",
+    paywallMoreMinutes: "¿Necesitas más minutos de tutor este mes?",
+    paywallRollover: ROLLOVER_NOTE.es,
+    paywallManageBilling: "Administrar facturación",
+    paywallSignInAgain: "Vuelve a iniciar sesión.",
+    paywallCheckoutFailed: "No se pudo abrir el pago.",
+    paywallBillingFailed: "No se pudo abrir la facturación.",
+    comingSoon: "Próximamente"
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

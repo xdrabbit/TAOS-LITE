@@ -576,12 +576,21 @@ describe("pricing copy does not sell a gated tutor (v1.0.0)", () => {
     for (const path of ["components/Landing.tsx", "components/Paywall.tsx"]) {
       const src = read(path);
       expect(src).toContain("tutorComingSoon");
-      expect(src).toContain("COMING_SOON");
+      // Landing prints the doubled COMING_SOON; the paywall prints the same
+      // label in the phone owner's language (copy.comingSoon), since
+      // 2026-10-04. Either way it is the flag's label, not hand-typed text.
+      expect(src).toMatch(/COMING_SOON|copy\.comingSoon/);
 
       // Every "N tutor minutes" and every drills/progress line carries the tag.
+      // The paywall names its lines by copy key (paywallTutor*, paywallDrills)
+      // rather than by English text, so both spellings are caught.
       const tutorLines = src
         .split("\n")
-        .filter((l) => /tutor minutes|Drills [&+]|minute packs/.test(l) && l.includes("text:"));
+        .filter(
+          (l) =>
+            /tutor minutes|Drills [&+]|minute packs|"paywallTutor|"paywallDrills/.test(l) &&
+            l.includes("text:")
+        );
       expect(tutorLines.length).toBeGreaterThan(0);
       for (const line of tutorLines) expect(line).toContain("tutor: true");
     }
