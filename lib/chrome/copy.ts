@@ -54,6 +54,30 @@ const EN = {
   noAudio: "No audio was captured. Check the mic and try again.",
   tooShort: "Too short — tap, say a full thought, then tap again.",
 
+  // The rest of home's own words. Every one of these was "English · Español"
+  // or English alone until 2026-10-04, when Tom chose to put them all in the
+  // owner's language: a doubled label reads as clutter to both people, and an
+  // English-only upgrade prompt is one Liz cannot read at all. The record
+  // button's "Speak · Hablar" in auto-detect is NOT here and stays doubled on
+  // purpose — it greets both people at once (speakPrompt in TranslatorShell).
+  translateInto: "Translate into",
+  autoDetect: "Auto-detect",
+  autoDetectLanguage: "Auto-detect language",
+  autoPlayVoice: "Auto-play voice",
+  premiumVoices: "Premium voices",
+  flip: "Flip",
+  flipAria: "Flip direction",
+  flipTitle: "Wrong direction? Re-translate the same recording the other way",
+  play: "Play",
+  playAria: "Play translation",
+  // The free-trial banner. {count} is a slot, not a seam (see fill below);
+  // the singular is its own key because a language may change more than the
+  // noun when there is only one left — Spanish changes the verb too.
+  trialLeft: "Free · {count} translations left this month",
+  trialLeftOne: "Free · 1 translation left this month",
+  trialUsedUp: "Free translations used up this month",
+  upgrade: "Upgrade",
+
   // ── The nav on the home header — pills, the nine-dot grid, the avatar ───
   // In the language of the phone's OWNER (`mine`), the same rule /call uses,
   // because the header belongs to whoever is holding the phone, not to
@@ -278,6 +302,26 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     connectionLost: "Problema de conexión — revisa tu señal e inténtalo de nuevo.",
     noAudio: "No se captó audio. Revisa el micrófono e inténtalo de nuevo.",
     tooShort: "Muy corto — toca, di una idea completa y toca otra vez.",
+
+    // The Spanish half of each label home used to double, unchanged, where
+    // there was one. The banner, the Upgrade button and the Flip tooltip were
+    // English-only and had none: trialUsedUp is /fast's quota refusal
+    // (lib/fast/meter.ts), upgrade is /guide's "Mejorar el plan", and
+    // trialLeft, trialLeftOne and flipTitle are new on 2026-10-04.
+    translateInto: "Traducir a",
+    autoDetect: "Detección automática",
+    autoDetectLanguage: "Detectar idioma",
+    autoPlayVoice: "Reproducir voz",
+    premiumVoices: "Voces premium",
+    flip: "Voltear",
+    flipAria: "Voltear",
+    flipTitle: "¿Dirección equivocada? Vuelve a traducir la misma grabación al revés",
+    play: "Oír",
+    playAria: "Reproducir traducción",
+    trialLeft: "Gratis · quedan {count} traducciones este mes",
+    trialLeftOne: "Gratis · queda 1 traducción este mes",
+    trialUsedUp: "Se acabaron las traducciones de este mes",
+    upgrade: "Mejorar el plan",
 
     // The Spanish half of each label the header used to double, unchanged.
     // navAllScreens, navAccount, navScreens, navLive and navTutor are the

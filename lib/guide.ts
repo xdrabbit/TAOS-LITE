@@ -33,6 +33,7 @@
 // section. Two full sentences joined by a middot is unreadable on a phone,
 // and the point of this page is that half the group reads the Spanish first.
 import { LANGUAGES } from "@/lib/languages/catalog";
+import { copyFor, fill } from "@/lib/chrome/copy";
 
 /** Derived, never typed by hand — the catalog is the only count that exists. */
 export const LANGUAGE_COUNT = LANGUAGES.length;
@@ -235,6 +236,15 @@ const PHOTO: GuideSection = {
   ]
 };
 
+// The home-screen words the two sections below quote. They are read out of
+// lib/chrome/copy.ts rather than typed here because home prints each phone in
+// its owner's language: an English reader sees "Translate into", a Spanish
+// reader "Traducir a", and each half of this page must quote the word on ITS
+// reader's phone. Until 2026-10-04 both halves quoted the doubled
+// "Translate into · Traducir a" — a label that no longer exists.
+const EN_HOME = copyFor("en");
+const ES_HOME = copyFor("es");
+
 // ── 4. Languages ───────────────────────────────────────────────────────────
 // The count comes from the catalog. The text-only fact is here because it is
 // the one thing about the language list that surprises people, and meeting it
@@ -244,8 +254,8 @@ const LANGUAGES_SECTION: GuideSection = {
   id: "languages",
   heading: { en: "Choosing languages", es: "Elegir idiomas" },
   intro: {
-    en: `The row of pills near the top of the screen is the language list — "Translate into · Traducir a". Tap one and that is what comes out.`,
-    es: `La fila de botones cerca de la parte de arriba es la lista de idiomas — "Translate into · Traducir a". Toca uno y eso es lo que sale.`
+    en: `The row of pills near the top of the screen is the language list — "${EN_HOME.translateInto}". Tap one and that is what comes out.`,
+    es: `La fila de botones cerca de la parte de arriba es la lista de idiomas — "${ES_HOME.translateInto}". Toca uno y eso es lo que sale.`
   },
   entries: [
     {
@@ -281,22 +291,22 @@ const FREE: GuideSection = {
   entries: [
     {
       icon: "🎁",
-      label: "Free",
+      label: "Free · Gratis",
       body: {
         en: `Starting costs nothing: every screen is open, and you get ${FREE_TRANSLATIONS} translations a month. The counter sits at the top of the home screen and starts over on the 1st.`,
         es: `Empezar no cuesta nada: todas las pantallas están abiertas y tienes ${FREE_TRANSLATIONS} traducciones al mes. El contador está arriba en la pantalla principal y vuelve a empezar el día 1.`
       },
       example: {
-        en: `"Free · ${FREE_TRANSLATIONS} translations left this month" — that banner is your count.`,
-        es: `"Free · ${FREE_TRANSLATIONS} translations left this month" — ese aviso es tu cuenta.`
+        en: `"${fill(EN_HOME.trialLeft, { count: FREE_TRANSLATIONS })}" — that banner is your count.`,
+        es: `"${fill(ES_HOME.trialLeft, { count: FREE_TRANSLATIONS })}" — ese aviso es tu cuenta.`
       }
     },
     {
       icon: "⬆️",
-      label: "Upgrade",
+      label: `${EN_HOME.upgrade} · ${ES_HOME.upgrade}`,
       body: {
-        en: "Upgrading lifts the limit: paid plans translate without a monthly cap. The Upgrade button is on that same banner.",
-        es: "Mejorar el plan quita el límite: los planes de pago traducen sin tope mensual. El botón Upgrade está en ese mismo aviso."
+        en: `Upgrading lifts the limit: paid plans translate without a monthly cap. The ${EN_HOME.upgrade} button is on that same banner.`,
+        es: `Mejorar el plan quita el límite: los planes de pago traducen sin tope mensual. El botón ${ES_HOME.upgrade} está en ese mismo aviso.`
       }
     }
   ]

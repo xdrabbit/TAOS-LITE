@@ -7,6 +7,7 @@ import { jsonAuthHeaders } from "@/lib/authClient";
 import { isTextOnlyLanguage, requestSpeech } from "@/lib/tts/speech";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { copyFor } from "@/lib/chrome/copy";
 import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
 import { hasSomethingToClear } from "@/lib/fast/clear";
 import { fastMicEnabled } from "@/lib/release";
@@ -569,6 +570,7 @@ export function FastShell(): JSX.Element {
         open={sheetOpen}
         selected={theirs}
         paired={mine}
+        caption={copyFor(mine).translateInto}
         onSelect={selectLanguage}
         onClose={() => setSheetOpen(false)}
       />

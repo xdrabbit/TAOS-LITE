@@ -28,7 +28,7 @@ import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } f
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
-import { copyFor } from "@/lib/chrome/copy";
+import { copyFor, fill } from "@/lib/chrome/copy";
 
 // The pair's languages, its storage, and the tap rule all live in
 // lib/translate/pair.ts — /vision reads the same saved pair to decide what
@@ -1391,15 +1391,17 @@ export function TranslatorShell({
           >
             <span>
               {trialBlocked
-                ? "Free translations used up this month"
-                : `Free · ${transLeft} translation${transLeft === 1 ? "" : "s"} left this month`}
+                ? s.trialUsedUp
+                : transLeft === 1
+                  ? s.trialLeftOne
+                  : fill(s.trialLeft, { count: transLeft })}
             </span>
             <button
               type="button"
               onClick={() => setShowPaywall(true)}
               className="rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-stone-950"
             >
-              Upgrade
+              {s.upgrade}
             </button>
           </div>
         ) : null}
@@ -1417,7 +1419,7 @@ export function TranslatorShell({
           pills={pills}
           selected={output}
           paired={mine}
-          caption="Translate into · Traducir a"
+          caption={s.translateInto}
           sheetOpen={sheetOpen}
           onSelect={selectLanguage}
           onOpenSheet={() => setSheetOpen(true)}
@@ -1428,7 +1430,7 @@ export function TranslatorShell({
           <div className="flex items-center justify-between rounded-3xl border border-amber-300/20 bg-amber-400/5 p-4">
             <div>
               <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">
-                Auto-detect · Detección automática
+                {s.autoDetect}
               </div>
               <div className="text-2xl font-semibold text-white">
                 {/* The language, never a name — see speakerFor above. */}
@@ -1462,13 +1464,18 @@ export function TranslatorShell({
         <section className="flex flex-1 flex-col gap-3">
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
             <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
-              <span>
-                {/* Neutral: "Translation · English", never "For <name>".
-                    The word is the owner's, like the rest of the screen; the
-                    language name after it is the listener's, in their own
-                    script, so the person across the table still finds it. */}
-                {s.translationLabel} · {listener.label}
-              </span>
+              {/* Neutral: "Translation · English", never "For <name>". The
+                  word is the owner's, like the rest of the screen; the
+                  language name after it is the listener's, in their own
+                  script, so the person across the table still finds it.
+                  Only once there IS a translation (Tom, 2026-10-04): over the
+                  idle hint it named a language above a placeholder written
+                  in a different one, which read as a broken screen. */}
+              {translation ? (
+                <span>
+                  {s.translationLabel} · {listener.label}
+                </span>
+              ) : null}
               {translation ? (
                 <div className="flex items-center gap-2">
                   {!autoDetect ? (
@@ -1476,12 +1483,12 @@ export function TranslatorShell({
                       type="button"
                       onClick={flipLast}
                       disabled={processing}
-                      title="Wrong direction? Re-translate the same recording the other way"
-                      aria-label="Flip direction / Voltear"
+                      title={s.flipTitle}
+                      aria-label={s.flipAria}
                       className="flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-amber-200 transition disabled:opacity-50"
                     >
                       <span className="text-base">⇄</span>
-                      <span className="text-[11px]">Flip · Voltear</span>
+                      <span className="text-[11px]">{s.flip}</span>
                     </button>
                   ) : null}
                   {textOnlyTarget ? (
@@ -1498,10 +1505,10 @@ export function TranslatorShell({
                       className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
                         isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
                       }`}
-                      aria-label="Play translation / Reproducir traducción"
+                      aria-label={s.playAria}
                     >
                       <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
-                      <span className="text-[11px]">Play · Oír</span>
+                      <span className="text-[11px]">{s.play}</span>
                     </button>
                   )}
                 </div>
@@ -1569,7 +1576,7 @@ export function TranslatorShell({
               onChange={(e) => setAutoDetect(e.target.checked)}
               className="h-4 w-4 accent-amber-400"
             />
-            Auto-detect language · Detectar idioma
+            {s.autoDetectLanguage}
           </label>
 
           <div className="flex items-center justify-between gap-3 text-sm">
@@ -1580,7 +1587,7 @@ export function TranslatorShell({
                 onChange={(e) => setAutoPlay(e.target.checked)}
                 className="h-4 w-4 accent-amber-400"
               />
-              Auto-play voice · Reproducir voz
+              {s.autoPlayVoice}
             </label>
             <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
               {/* ElevenLabs greyed (not hidden) for free-tier beta testers —
@@ -1592,7 +1599,7 @@ export function TranslatorShell({
                     key={eng}
                     type="button"
                     disabled={locked}
-                    title={locked ? "Premium voices · Voces premium" : undefined}
+                    title={locked ? s.premiumVoices : undefined}
                     onClick={() => {
                       engineTouchedRef.current = true;
                       setEngine(eng);
@@ -1621,6 +1628,7 @@ export function TranslatorShell({
         open={sheetOpen}
         selected={output}
         paired={mine}
+        caption={s.translateInto}
         onSelect={selectLanguage}
         onClose={() => setSheetOpen(false)}
       />

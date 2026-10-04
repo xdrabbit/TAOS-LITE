@@ -10,7 +10,7 @@ import {
   LANGUAGE_COUNT
 } from "@/lib/guide";
 import { QUOTAS } from "@/lib/supabase";
-import { copyFor, ENGLISH, type ChromeKey } from "@/lib/chrome/copy";
+import { copyFor, ENGLISH, fill, type ChromeKey } from "@/lib/chrome/copy";
 
 // /guide is the quick start handed to a group of travellers by QR code. Three
 // things about it are worth fencing, and they are the three things that rot:
@@ -105,10 +105,9 @@ describe("the page renders both languages", () => {
   it("never leaves the two halves identical", () => {
     // The realistic failure is a Spanish field filled in with the English
     // sentence to get a build green, which reads as translated and is not.
-    // Short quoted UI labels are exempt: "Free · 25 translations left this
-    // month" is the same string on both sides BECAUSE the app prints it in
-    // English, and pretending otherwise would send a reader looking for
-    // Spanish chrome that does not exist.
+    // Short quoted UI labels are exempt: a label the app prints in only one
+    // language has to be quoted the same on both sides, and pretending
+    // otherwise would send a reader looking for chrome that does not exist.
     for (const s of GUIDE_SECTIONS) {
       expect(s.heading.en).not.toBe(s.heading.es);
       if (s.intro) expect(s.intro.en).not.toBe(s.intro.es);
@@ -174,7 +173,9 @@ describe("the labels it quotes are the labels on the screen", () => {
     // the case below this loop rather than as doubled literals.
     ["+ More · Más", "components/LanguagePicker.tsx"],
     ["Text only · Solo texto", "components/TextOnly.tsx"],
-    ["Translate into · Traducir a", "components/TranslatorShell.tsx"],
+    // "Translate into · Traducir a" was here until 2026-10-04, when home's
+    // picker caption went one language per phone like the header did. It is
+    // checked per language in the home-label case below, same as the nav.
     ["Tap the mic, speak a full thought, tap again.", "lib/chrome/copy.ts"],
     ["Lay the phone flat between you", "lib/chrome/copy.ts"],
     ["Pon el teléfono entre ustedes", "lib/chrome/copy.ts"]
@@ -207,6 +208,33 @@ describe("the labels it quotes are the labels on the screen", () => {
       expect(en, `English guide does not quote ${ENGLISH[key]}`).toContain(ENGLISH[key]);
       expect(es, `Spanish guide does not quote ${copyFor("es")[key]}`).toContain(copyFor("es")[key]);
     }
+  });
+
+  it("quotes home's picker caption, trial banner and Upgrade button by the word on THAT reader's phone", () => {
+    // Same rule as the header above, for the home-screen words the languages
+    // and free sections quote. These went one language per phone on
+    // 2026-10-04 (the banner and button had been English-only), so the
+    // English half must quote the English word and the Spanish half the
+    // Spanish one — and the shell must still be printing that key.
+    const inLang = (lang: "en" | "es") =>
+      GUIDE_SECTIONS.flatMap((s) => [
+        s.intro?.[lang] ?? "",
+        ...s.entries.flatMap((e) => [e.body[lang], e.example?.[lang] ?? ""])
+      ]).join("\n");
+    const en = inLang("en");
+    const es = inLang("es");
+    const shell = read("components/TranslatorShell.tsx");
+    const QUOTED_HOME: ChromeKey[] = ["translateInto", "upgrade"];
+    for (const key of QUOTED_HOME) {
+      expect(shell, `${key} is not on home`).toContain(`s.${key}`);
+      expect(en, `English guide does not quote ${ENGLISH[key]}`).toContain(ENGLISH[key]);
+      expect(es, `Spanish guide does not quote ${copyFor("es")[key]}`).toContain(copyFor("es")[key]);
+    }
+    expect(shell).toContain("fill(s.trialLeft, { count: transLeft })");
+    expect(en).toContain(fill(ENGLISH.trialLeft, { count: FREE_TRANSLATIONS }));
+    expect(es).toContain(fill(copyFor("es").trialLeft, { count: FREE_TRANSLATIONS }));
+    // …and neither half still quotes the doubled caption that is gone.
+    expect(en + es).not.toContain("Translate into · Traducir a");
   });
 
   it("does not call the microphone screen 'Translate'", () => {

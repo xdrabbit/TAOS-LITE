@@ -40,8 +40,11 @@ export const PILL_SELECTED_CLASS = "border-amber-300 bg-amber-400 text-stone-950
 export const PILL_MINE_CLASS = "border-amber-300 bg-transparent text-amber-200"; // your side
 export const PILL_IDLE_CLASS = "border-amber-300/30 bg-amber-400/10 text-amber-200";
 
-/** The sheet's default header — what tapping a language means on /translate. */
-export const DEFAULT_PICKER_CAPTION = "Translate into · Traducir a";
+// There is no default sheet caption. It used to be "Translate into · Traducir
+// a", and every screen that left `caption` off got that doubled label on top
+// of its sheet whatever language its phone read in. Each screen passes its own
+// now, from lib/chrome/copy.ts — on home, /translate and /fast that is
+// `translateInto` in the phone owner's language.
 
 interface PickerCommon {
   /** The solid pill: the language this screen is currently pointed at. */
@@ -136,12 +139,13 @@ export function LanguageSheet({
   paired,
   pairedLabel = "Yours",
   pairedLocked = false,
-  caption = DEFAULT_PICKER_CAPTION,
+  caption,
   onSelect,
   onClose
 }: PickerCommon & {
   open: boolean;
-  caption?: string;
+  /** What tapping a language here means, in the phone owner's language. */
+  caption: string;
   onClose: () => void;
 }): JSX.Element | null {
   const [query, setQuery] = useState("");
