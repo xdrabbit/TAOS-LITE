@@ -334,10 +334,13 @@ export function TranslatorShell({
   const target: LangCode = source === pair[0] ? pair[1] : pair[0];
   const speaker = speakerFor(source);
   const listener = speakerFor(target);
-  const s = copyFor(source); // speaker-facing copy (active speaker's language)
-  // The header is the phone OWNER's, not the speaker's: it must not change
+  // The screen is the phone OWNER's, not the speaker's: it must not change
   // language every time auto-detect hands the turn across. `mine` is the side
   // this phone keeps as its own — the same choice /call makes (CallShell).
+  // Tom, 2026-10-04: the whole home screen reads this way, not just the
+  // header. `source` still decides who is speaking and which way a turn is
+  // translated; it no longer decides what language the buttons are in.
+  const s = copyFor(mine);
   const nav = copyFor(mine);
   // Tier 2 (lib/languages/catalog.ts): translated, never spoken. The screen has
   // to say so up front — an audio control that silently does nothing reads as a
@@ -1455,14 +1458,16 @@ export function TranslatorShell({
           </button>
         )}
 
-        {/* Result — header in the listener's language */}
+        {/* Result — header in the owner's language */}
         <section className="flex flex-1 flex-col gap-3">
           <div className="flex min-h-[34vh] flex-1 flex-col rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
             <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
               <span>
                 {/* Neutral: "Translation · English", never "For <name>".
-                    Written in the LISTENER's language like before. */}
-                {copyFor(target).translationLabel} · {listener.label}
+                    The word is the owner's, like the rest of the screen; the
+                    language name after it is the listener's, in their own
+                    script, so the person across the table still finds it. */}
+                {s.translationLabel} · {listener.label}
               </span>
               {translation ? (
                 <div className="flex items-center gap-2">
