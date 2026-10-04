@@ -5,19 +5,29 @@
 // The prompt and the parser live in lib/study/lesson.ts (a port of the viewer
 // prototype that proved them). The route's own job is the fences around them,
 // in the same order every money route in this app uses: the study flag, the
-// spend guard, then the cache.
+// spend guard, then the cache — and on a miss, the monthly cap
+// (lib/lessonCap.ts).
 //
 // Two things this route refuses to take from the browser:
 //   - the TEXT. The client sends row ids; the server reads the rows from the
 //     table it trusts, scoped to the signed-in user. A lesson is never built
 //     from text the phone typed in, and never from another person's rows.
 //   - the BILL. A lesson is cached per (user, sources, selection, pair) and a
-//     repeat ask is served from the table. `force` regenerates on purpose.
+//     repeat ask is served from the table. `force` regenerates on purpose,
+//     which is a paid call, so it counts against the cap like any miss.
 
 import { NextRequest, NextResponse } from "next/server";
 import { studyEnabled } from "@/lib/release";
 import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 import { isLanguageCode } from "@/lib/languages/catalog";
+import {
+  LESSON_CAP_UNAVAILABLE,
+  LessonCapUnavailableError,
+  lessonCapRefusal,
+  releaseLessonGeneration,
+  reserveLessonGeneration,
+  type LessonReservation
+} from "@/lib/lessonCap";
 import {
   STUDY_LESSON_MODEL_DEFAULT,
   StudyLessonParseError,
@@ -126,6 +136,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // mistakes, gpt-5.5 does not.
   const model = process.env.OPENAI_STUDY_LESSON_MODEL?.trim() || STUDY_LESSON_MODEL_DEFAULT;
 
+  // Everything past here is a paid generation — a miss or a `force` — so it is
+  // reserved against this person's month before the provider is called.
+  let reservation: LessonReservation;
+  try {
+    reservation = await reserveLessonGeneration(user, "study");
+  } catch (error) {
+    if (error instanceof LessonCapUnavailableError) {
+      return NextResponse.json({ error: LESSON_CAP_UNAVAILABLE }, { status: 503 });
+    }
+    throw error;
+  }
+  if (!reservation.ok) {
+    return NextResponse.json(lessonCapRefusal("study", reservation.used, reservation.cap), { status: 429 });
+  }
+
   const context = await readContext(user.id, sources[0]);
   const prompt = buildStudyPrompt({ selection, records: sources, context, target, explain });
 
@@ -163,6 +188,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     return NextResponse.json(response);
   } catch (error) {
+    // No lesson arrived, so the month should not pay for one.
+    await releaseLessonGeneration(user.id, reservation);
     if (error instanceof StudyLessonParseError) {
       return NextResponse.json({ error: error.message }, { status: 502 });
     }

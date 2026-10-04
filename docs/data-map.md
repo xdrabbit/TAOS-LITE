@@ -308,6 +308,15 @@ keyed the way the code is keyed, which is not what this was.
 
 The only table in the schema that holds no user-attributable data at all.
 
+### 12b. `lesson_generations` — the lesson-cap ledger *(new 2026-10-04)*
+
+| | |
+|---|---|
+| **Content** | One row per paid lesson generation: `kind` (`tutor` \| `study`), `metered` (false for founders), `created_at`. No lesson text. |
+| **User ids** | `user_id` → `auth.users`, `on delete cascade`. |
+| **Retention** | Indefinite; only the current UTC month is ever counted. |
+| **RLS** | Enabled, no policies — written only by `lesson_generation_reserve()` / `_release()` with the service role (`lib/lessonCap.ts`). |
+
 ### 13. `taos_lite_predict_models` — /translate next-word models
 
 | | |

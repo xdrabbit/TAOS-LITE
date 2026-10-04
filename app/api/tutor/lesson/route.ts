@@ -4,7 +4,8 @@
 //
 // This is where the fourteen intent modules become teachable text. The prompt
 // and the parser live in lib/tutor/lesson.ts; the route's own job is the three
-// fences around them: the tutor flag, the spend guard, and the cache.
+// fences around them: the tutor flag, the spend guard, the cache, and the
+// monthly cap on what a cache miss may cost one person (lib/lessonCap.ts).
 //
 // The cache is not an optimization here, it is the feature's economics. A
 // lesson depends on (module, target, learner) and on nothing else, so the
@@ -19,7 +20,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isLanguageCode, canSpeak } from "@/lib/languages/catalog";
 import { tutorEnabled } from "@/lib/release";
-import { guardSpend } from "@/lib/spendGuard";
+import {
+  LESSON_CAP_UNAVAILABLE,
+  LessonCapUnavailableError,
+  lessonCapRefusal,
+  releaseLessonGeneration,
+  reserveLessonGeneration,
+  type LessonReservation
+} from "@/lib/lessonCap";
+import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 import { buildLessonPrompt, lessonCacheKey, parseLesson, LessonParseError } from "@/lib/tutor/lesson";
 import { readCachedLesson, writeCachedLesson } from "@/lib/tutor/lessonStore";
 import { getTutorModule } from "@/lib/tutor/modules";
@@ -40,6 +49,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const guard = await guardSpend(req);
   if (!guard.ok) return guard.response;
+  const user = guard.user;
+  if (!user) return NextResponse.json({ error: SIGN_IN_REQUIRED }, { status: 401 });
 
   const body = (await req.json().catch(() => ({}))) as {
     moduleId?: string;
@@ -95,7 +106,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     process.env.OPENAI_TRANSLATE_MODEL?.trim() ||
     "gpt-4.1";
 
-  const { system, user } = buildLessonPrompt({ module: mod, target, learner });
+  // A cache miss is a paid generation, so it counts against this person's
+  // month — reserved BEFORE the provider is called, so a refusal is free.
+  let reservation: LessonReservation;
+  try {
+    reservation = await reserveLessonGeneration(user, "tutor");
+  } catch (error) {
+    if (error instanceof LessonCapUnavailableError) {
+      return NextResponse.json({ error: LESSON_CAP_UNAVAILABLE }, { status: 503 });
+    }
+    throw error;
+  }
+  if (!reservation.ok) {
+    return NextResponse.json(lessonCapRefusal("tutor", reservation.used, reservation.cap), { status: 429 });
+  }
+
+  const prompt = buildLessonPrompt({ module: mod, target, learner });
 
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -106,8 +132,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         temperature: 0.4,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: system },
-          { role: "user", content: user }
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user }
         ]
       }),
       cache: "no-store",
@@ -115,6 +141,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     });
     const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok) {
+      await releaseLessonGeneration(user.id, reservation);
       const detail = payload ? JSON.stringify(payload) : `HTTP ${res.status}`;
       return NextResponse.json(
         { error: "Could not generate that lesson.", details: detail },
@@ -138,6 +165,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     return NextResponse.json({ lesson, cached: false, source: "generated", capabilities });
   } catch (error) {
+    // No lesson arrived, so the person did not get what the month paid for.
+    await releaseLessonGeneration(user.id, reservation);
     if (error instanceof LessonParseError) {
       return NextResponse.json({ error: error.message }, { status: 502 });
     }
