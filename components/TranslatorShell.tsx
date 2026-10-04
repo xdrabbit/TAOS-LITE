@@ -1378,7 +1378,7 @@ export function TranslatorShell({
         {/* One-time "add to home screen" nudge (hides itself once installed
             or dismissed). Inline, above the trial banner — never floating over
             the record button. */}
-        <InstallPrompt />
+        <InstallPrompt copy={s} />
 
         {/* Free-trial allowance banner (hidden for subscribers) */}
         {!subscriber && Number.isFinite(transLeft) ? (
@@ -1420,6 +1420,7 @@ export function TranslatorShell({
           selected={output}
           paired={mine}
           caption={s.translateInto}
+          labels={s}
           sheetOpen={sheetOpen}
           onSelect={selectLanguage}
           onOpenSheet={() => setSheetOpen(true)}
@@ -1628,7 +1629,9 @@ export function TranslatorShell({
         open={sheetOpen}
         selected={output}
         paired={mine}
+        pairedLabel={s.yours}
         caption={s.translateInto}
+        labels={s}
         onSelect={selectLanguage}
         onClose={() => setSheetOpen(false)}
       />

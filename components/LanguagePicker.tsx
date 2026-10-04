@@ -10,6 +10,7 @@ import {
   type LanguageCode
 } from "@/lib/languages/catalog";
 import { TEXT_ONLY_TITLE } from "@/lib/tts/speech";
+import type { ChromeCopy } from "@/lib/chrome/copy";
 import { TextOnlyChip } from "./TextOnly";
 
 // The language picker — the pill row and the search sheet behind it.
@@ -46,6 +47,30 @@ export const PILL_IDLE_CLASS = "border-amber-300/30 bg-amber-400/10 text-amber-2
 // now, from lib/chrome/copy.ts — on home, /translate and /fast that is
 // `translateInto` in the phone owner's language.
 
+// The picker's own controls — "+ More", its screen-reader name, and the
+// sheet's name, Close, search box and empty result. Home passes its owner's copy (lib/chrome/copy.ts), so each
+// phone reads one language. The default is the doubled label every other
+// screen still shows until it passes its own; home stopped on 2026-10-04.
+export type PickerLabels = Pick<
+  ChromeCopy,
+  | "moreLanguages"
+  | "moreLanguagesAria"
+  | "close"
+  | "chooseLanguage"
+  | "searchLanguages"
+  | "searchLanguagesAria"
+  | "noLanguageMatches"
+>;
+const DOUBLED_LABELS: PickerLabels = {
+  moreLanguages: "+ More · Más",
+  moreLanguagesAria: "More languages · Más idiomas",
+  close: "Close · Cerrar",
+  chooseLanguage: "Choose a language · Elegir idioma",
+  searchLanguages: "Search · Buscar…",
+  searchLanguagesAria: "Search languages · Buscar idiomas",
+  noLanguageMatches: "No language matches · Ningún idioma coincide"
+};
+
 interface PickerCommon {
   /** The solid pill: the language this screen is currently pointed at. */
   selected: LanguageCode;
@@ -55,7 +80,10 @@ interface PickerCommon {
    * sheet only, where it is the partner's language and not yours to change.
    */
   paired?: LanguageCode | null;
-  /** Badge for `paired` in the sheet. "Yours" on the pair screens. */
+  /**
+   * Badge for `paired` in the sheet. "Yours" on the pair screens that do not
+   * pass one; home passes its owner's `yours`, so a Spanish phone says so.
+   */
   pairedLabel?: string;
   /**
    * What tapping `paired` does, for its tooltip and screen-reader name. Only
@@ -140,10 +168,12 @@ export function LanguageSheet({
   pairedLabel = "Yours",
   pairedLocked = false,
   caption,
+  labels = DOUBLED_LABELS,
   onSelect,
   onClose
 }: PickerCommon & {
   open: boolean;
+  labels?: PickerLabels;
   /** What tapping a language here means, in the phone owner's language. */
   caption: string;
   onClose: () => void;
@@ -175,7 +205,7 @@ export function LanguageSheet({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Choose a language · Elegir idioma"
+      aria-label={labels.chooseLanguage}
     >
       <div
         // Stop taps inside the sheet from reaching the backdrop's close.
@@ -187,10 +217,10 @@ export function LanguageSheet({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close · Cerrar"
+            aria-label={labels.close}
             className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-amber-100/70"
           >
-            Close · Cerrar
+            {labels.close}
           </button>
         </div>
 
@@ -201,15 +231,15 @@ export function LanguageSheet({
           // Opens the keyboard on the way in: the list is a hundred long, so
           // typing is the fast path and scrolling is the fallback.
           autoFocus
-          placeholder="Search · Buscar…"
-          aria-label="Search languages · Buscar idiomas"
+          placeholder={labels.searchLanguages}
+          aria-label={labels.searchLanguagesAria}
           className="w-full rounded-2xl border border-amber-300/20 bg-black/30 px-4 py-3 text-base text-white placeholder:text-amber-100/30 focus:border-amber-300/50 focus:outline-none"
         />
 
         <ul className="flex-1 overflow-y-auto">
           {results.length === 0 ? (
             <li className="px-2 py-6 text-center text-sm text-amber-100/40">
-              No language matches · Ningún idioma coincide
+              {labels.noLanguageMatches}
             </li>
           ) : (
             results.map((language) => {
@@ -259,7 +289,7 @@ export function LanguageSheet({
 }
 
 /**
- * The row itself: the working set of pills plus the "+ More · Más" that opens
+ * The row itself: the working set of pills plus the "+ More" that opens
  * the sheet. Every screen draws this the same way, which is the whole point —
  * the row keeps its width no matter how big the catalog gets, which was Tom's
  * constraint on 8/15 and is the only reason the catalog could grow.
@@ -271,10 +301,12 @@ export function LanguagePillRow({
   pairedTitle,
   pairedLocked,
   caption,
+  labels = DOUBLED_LABELS,
   sheetOpen,
   onSelect,
   onOpenSheet
 }: PickerCommon & {
+  labels?: PickerLabels;
   pills: readonly LanguageCode[];
   /** Omitted on the cramped rows (/tabletop's table bar) — the row alone. */
   caption?: string;
@@ -303,11 +335,11 @@ export function LanguagePillRow({
           onClick={onOpenSheet}
           aria-haspopup="dialog"
           aria-expanded={sheetOpen}
-          aria-label="More languages · Más idiomas"
-          title="More languages · Más idiomas"
+          aria-label={labels.moreLanguagesAria}
+          title={labels.moreLanguagesAria}
           className={`${PILL_CLASS} ${PILL_IDLE_CLASS}`}
         >
-          + More · Más
+          {labels.moreLanguages}
         </button>
       </div>
     </div>

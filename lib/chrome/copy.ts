@@ -77,6 +77,27 @@ const EN = {
   trialLeftOne: "Free · 1 translation left this month",
   trialUsedUp: "Free translations used up this month",
   upgrade: "Upgrade",
+  // The language picker's own controls and the install banner — the last of
+  // home's doubled or half-translated words, moved here on 2026-10-04 so home
+  // reads in one language end to end. `yours` is the sheet's badge on the
+  // phone owner's own language; it was English-only, so a Spanish reader
+  // could not tell what it was marking. The picker's defaults stay doubled
+  // for the screens that do not pass these yet (components/LanguagePicker.tsx).
+  moreLanguages: "+ More",
+  moreLanguagesAria: "More languages",
+  close: "Close",
+  yours: "Yours",
+  // The rest of the sheet, which was doubled too and turned up when the four
+  // above were walked in Chrome: its name, the search box, the empty result.
+  chooseLanguage: "Choose a language",
+  searchLanguages: "Search…",
+  searchLanguagesAria: "Search languages",
+  noLanguageMatches: "No language matches",
+  installTitle: "Install TAOS on your phone 📲",
+  installHowIos: "Share → Add to Home Screen",
+  installHowOther: "Full screen, one tap from your home screen",
+  install: "Install",
+  installDismiss: "Dismiss install prompt",
 
   // ── The nav on the home header — pills, the nine-dot grid, the avatar ───
   // In the language of the phone's OWNER (`mine`), the same rule /call uses,
@@ -322,6 +343,26 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     trialLeftOne: "Gratis · queda 1 traducción este mes",
     trialUsedUp: "Se acabaron las traducciones de este mes",
     upgrade: "Mejorar el plan",
+    // The Spanish halves the picker and the install banner already carried,
+    // unchanged, where there were any: Más, Más idiomas, Cerrar, Descartar,
+    // Elegir idioma, Buscar, Buscar idiomas, Ningún idioma coincide,
+    // "Compartir → Añadir a inicio", and /guide's "Instalar". New on
+    // 2026-10-04: yours (the badge was English-only), installTitle (the
+    // banner's first line was English-only), and installHowOther, which had
+    // only the tail "Pantalla completa" and now says the whole sentence.
+    moreLanguages: "+ Más",
+    moreLanguagesAria: "Más idiomas",
+    close: "Cerrar",
+    yours: "Tu idioma",
+    chooseLanguage: "Elegir idioma",
+    searchLanguages: "Buscar…",
+    searchLanguagesAria: "Buscar idiomas",
+    noLanguageMatches: "Ningún idioma coincide",
+    installTitle: "Instala TAOS en tu teléfono 📲",
+    installHowIos: "Compartir → Añadir a inicio",
+    installHowOther: "Pantalla completa, a un toque desde tu inicio",
+    install: "Instalar",
+    installDismiss: "Descartar",
 
     // The Spanish half of each label the header used to double, unchanged.
     // navAllScreens, navAccount, navScreens, navLive and navTutor are the

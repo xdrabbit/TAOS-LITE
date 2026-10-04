@@ -161,7 +161,9 @@ describe("the labels it quotes are the labels on the screen", () => {
   // is still exact-string and still two-sided; only the file it reads moved.
   const QUOTED: Array<[string, string]> = [
     ["Continue with Google", "components/SignIn.tsx"],
-    ["Add to Home Screen", "components/InstallPrompt.tsx"],
+    // The install banner's words moved into lib/chrome/copy.ts on 2026-10-04
+    // when it went one language per phone; the iOS line still says this.
+    ["Add to Home Screen", "lib/chrome/copy.ts"],
     ["START LISTENING", "components/LiveShell.tsx"],
     ["TAP TO TALK", "lib/chrome/copy.ts"],
     ["TAP WHEN DONE", "lib/chrome/copy.ts"],
@@ -171,7 +173,8 @@ describe("the labels it quotes are the labels on the screen", () => {
     // ("Table · Mesa", "All screens · Pantallas", "Photo translator · Fotos")
     // are one language per phone now, so they are checked per language in
     // the case below this loop rather than as doubled literals.
-    ["+ More · Más", "components/LanguagePicker.tsx"],
+    // "+ More · Más" was here until 2026-10-04, when home's picker went one
+    // language per phone. Checked per language in the home-label case below.
     ["Text only · Solo texto", "components/TextOnly.tsx"],
     // "Translate into · Traducir a" was here until 2026-10-04, when home's
     // picker caption went one language per phone like the header did. It is
@@ -233,8 +236,18 @@ describe("the labels it quotes are the labels on the screen", () => {
     expect(shell).toContain("fill(s.trialLeft, { count: transLeft })");
     expect(en).toContain(fill(ENGLISH.trialLeft, { count: FREE_TRANSLATIONS }));
     expect(es).toContain(fill(copyFor("es").trialLeft, { count: FREE_TRANSLATIONS }));
-    // …and neither half still quotes the doubled caption that is gone.
+    // "+ More" and the install banner's button reach home through the
+    // picker's `labels` and InstallPrompt's `copy`, not as `s.key` literals.
+    expect(shell).toContain("labels={s}");
+    expect(shell).toContain("<InstallPrompt copy={s} />");
+    for (const key of ["moreLanguages", "install"] as ChromeKey[]) {
+      expect(en, `English guide does not quote ${ENGLISH[key]}`).toContain(`${ENGLISH[key]}`);
+      expect(es, `Spanish guide does not quote ${copyFor("es")[key]}`).toContain(copyFor("es")[key]);
+    }
+    expect(es, "Spanish guide sends its reader to the English Install button").not.toContain("botón Install ");
+    // …and neither half still quotes the doubled labels that are gone.
     expect(en + es).not.toContain("Translate into · Traducir a");
+    expect(en + es).not.toContain("+ More · Más");
   });
 
   it("does not call the microphone screen 'Translate'", () => {

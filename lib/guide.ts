@@ -14,8 +14,8 @@
 //      scanned a code at a table is the reader. Not in copy, not in comments.
 //   2. IT DESCRIBES THE SHIPPED UI, NOT THE INTENDED ONE. Every control named
 //      below is quoted from the screen it lives on: "START LISTENING" from
-//      components/LiveShell.tsx, "TAP TO TALK" from TabletopShell, "+ More ·
-//      Más" from LanguagePicker, "Start a chat" from lib/chatInvite.ts. A
+//      components/LiveShell.tsx, "TAP TO TALK" from TabletopShell, "+ More"
+//      from lib/chrome/copy.ts, "Start a chat" from lib/chatInvite.ts. A
 //      guide that renames things is worse than no guide, because the reader
 //      trusts it and then cannot find the button. If a label changes, change
 //      it here in the same PR.
@@ -92,6 +92,16 @@ export interface GuideSection {
   readonly footnote?: Bilingual;
 }
 
+// The home-screen words the sections below quote. They are read out of
+// lib/chrome/copy.ts rather than typed here because home prints each phone in
+// its owner's language: an English reader sees "Translate into", a Spanish
+// reader "Traducir a", and each half of this page must quote the word on ITS
+// reader's phone. Until 2026-10-04 both halves quoted the doubled
+// "Translate into · Traducir a" and "+ More · Más", and the Spanish half
+// sent its reader to an "Install" button their phone no longer shows.
+const EN_HOME = copyFor("en");
+const ES_HOME = copyFor("es");
+
 // ── 1. Install ─────────────────────────────────────────────────────────────
 // Three steps, in the order a phone actually does them. The install step is
 // two different sets of words because the platforms are genuinely different:
@@ -126,8 +136,8 @@ const INSTALL: GuideSection = {
       icon: "📲",
       label: "Add to Home Screen · Añadir a inicio",
       body: {
-        en: "Install it so it opens full screen, like any other app. On iPhone: tap Share, then Add to Home Screen. On Android: tap the Install button TAOS offers you, or open Chrome's ⋮ menu (three dots, top right) and choose Install app.",
-        es: "Instálala para que abra en pantalla completa, como cualquier otra app. En iPhone: toca Compartir y luego Añadir a inicio. En Android: toca el botón Install que TAOS te ofrece, o abre el menú ⋮ de Chrome (tres puntos, arriba a la derecha) y elige Instalar app."
+        en: `Install it so it opens full screen, like any other app. On iPhone: tap Share, then Add to Home Screen. On Android: tap the ${EN_HOME.install} button TAOS offers you, or open Chrome's ⋮ menu (three dots, top right) and choose Install app.`,
+        es: `Instálala para que abra en pantalla completa, como cualquier otra app. En iPhone: toca Compartir y luego Añadir a inicio. En Android: toca el botón ${ES_HOME.install} que TAOS te ofrece, o abre el menú ⋮ de Chrome (tres puntos, arriba a la derecha) y elige Instalar app.`
       }
     }
   ],
@@ -236,15 +246,6 @@ const PHOTO: GuideSection = {
   ]
 };
 
-// The home-screen words the two sections below quote. They are read out of
-// lib/chrome/copy.ts rather than typed here because home prints each phone in
-// its owner's language: an English reader sees "Translate into", a Spanish
-// reader "Traducir a", and each half of this page must quote the word on ITS
-// reader's phone. Until 2026-10-04 both halves quoted the doubled
-// "Translate into · Traducir a" — a label that no longer exists.
-const EN_HOME = copyFor("en");
-const ES_HOME = copyFor("es");
-
 // ── 4. Languages ───────────────────────────────────────────────────────────
 // The count comes from the catalog. The text-only fact is here because it is
 // the one thing about the language list that surprises people, and meeting it
@@ -262,8 +263,8 @@ const LANGUAGES_SECTION: GuideSection = {
       icon: "➕",
       label: "+ More · Más",
       body: {
-        en: `The pills hold the languages you have been using. "+ More · Más" at the end of the row opens a search box with all ${LANGUAGE_COUNT} of them; pick one and it joins the row.`,
-        es: `Los botones guardan los idiomas que has estado usando. "+ More · Más" al final de la fila abre un buscador con los ${LANGUAGE_COUNT}; elige uno y se suma a la fila.`
+        en: `The pills hold the languages you have been using. "${EN_HOME.moreLanguages}" at the end of the row opens a search box with all ${LANGUAGE_COUNT} of them; pick one and it joins the row.`,
+        es: `Los botones guardan los idiomas que has estado usando. "${ES_HOME.moreLanguages}" al final de la fila abre un buscador con los ${LANGUAGE_COUNT}; elige uno y se suma a la fila.`
       }
     },
     {

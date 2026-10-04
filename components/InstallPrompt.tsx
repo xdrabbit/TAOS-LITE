@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { ChromeCopy } from "@/lib/chrome/copy";
 
 // One-time "add it to your home screen" nudge. Deliberately an inline banner in
 // the normal flow rather than a floating overlay: the record button owns the
@@ -12,6 +13,11 @@ import { useEffect, useState } from "react";
 // - iOS Safari has no such event and never will. Installing is Share → "Add to
 //   Home Screen", so there the banner can only say so. That is also the only
 //   path on iPhones, which is what Tom and Liz carry.
+//
+// Its words come from the phone owner's copy (lib/chrome/copy.ts). It was
+// English with a Spanish tail glued on until 2026-10-04 — "Install TAOS on
+// your phone" over "… · Pantalla completa" — so neither reader got a whole
+// sentence in their own language.
 const DISMISSED_KEY = "taos.install.dismissed";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -36,7 +42,11 @@ function isIos(): boolean {
   );
 }
 
-export function InstallPrompt(): JSX.Element | null {
+export function InstallPrompt({
+  copy
+}: {
+  copy: Pick<ChromeCopy, "installTitle" | "installHowIos" | "installHowOther" | "install" | "installDismiss">;
+}): JSX.Element | null {
   const [show, setShow] = useState(false);
   const [ios, setIos] = useState(false);
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
@@ -89,12 +99,8 @@ export function InstallPrompt(): JSX.Element | null {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-400/5 px-4 py-2.5 text-sm text-amber-100/80">
       <div className="flex-1">
-        <p>Install TAOS on your phone 📲</p>
-        <p className="text-xs text-amber-100/50">
-          {ios
-            ? "Share → Add to Home Screen · Compartir → Añadir a inicio"
-            : "Full screen, one tap from your home screen · Pantalla completa"}
-        </p>
+        <p>{copy.installTitle}</p>
+        <p className="text-xs text-amber-100/50">{ios ? copy.installHowIos : copy.installHowOther}</p>
       </div>
       {!ios && deferred ? (
         <button
@@ -102,13 +108,13 @@ export function InstallPrompt(): JSX.Element | null {
           onClick={() => void install()}
           className="rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-stone-950"
         >
-          Install
+          {copy.install}
         </button>
       ) : null}
       <button
         type="button"
         onClick={dismiss}
-        aria-label="Dismiss install prompt / Descartar"
+        aria-label={copy.installDismiss}
         className="text-lg leading-none text-amber-100/40 transition hover:text-amber-100/80"
       >
         ×

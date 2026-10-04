@@ -17,6 +17,14 @@
 // And the result card's "Translation · English" header must not exist until
 // there is a translation under it. Over the idle hint it named a language
 // above a placeholder written in a different one.
+//
+// The last four strays joined it the same day, on Tom's call to finish home in
+// one change: the install banner (English with a Spanish tail), "+ More ·
+// Más", the language sheet's "Close · Cerrar", and the sheet's "Yours" badge
+// on the phone's own language — English-only, so a Spanish reader could not
+// tell what it was marking. Walking those in Chrome turned up the rest of the
+// sheet doubled as well — its name, the search box and the empty result — so
+// they went too.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -162,7 +170,20 @@ const KEYS: ChromeKey[] = [
   "trialLeft",
   "trialLeftOne",
   "trialUsedUp",
-  "upgrade"
+  "upgrade",
+  "moreLanguages",
+  "moreLanguagesAria",
+  "close",
+  "yours",
+  "chooseLanguage",
+  "searchLanguages",
+  "searchLanguagesAria",
+  "noLanguageMatches",
+  "installTitle",
+  "installHowIos",
+  "installHowOther",
+  "install",
+  "installDismiss"
 ];
 
 /** The doubled and English-only literals as they were before 2026-10-04. */
@@ -175,7 +196,18 @@ const OLD = [
   "Play translation / Reproducir traducción",
   "Auto-detect language · Detectar idioma",
   "Auto-play voice · Reproducir voz",
-  "Premium voices · Voces premium"
+  "Premium voices · Voces premium",
+  "+ More · Más",
+  "More languages · Más idiomas",
+  "Close · Cerrar",
+  "Choose a language · Elegir idioma",
+  "Search · Buscar…",
+  "Search languages · Buscar idiomas",
+  "No language matches · Ningún idioma coincide",
+  "Compartir → Añadir a inicio · ",
+  " · Compartir → Añadir a inicio",
+  " · Pantalla completa",
+  "Dismiss install prompt / Descartar"
 ];
 
 const PHONES = [
@@ -270,12 +302,67 @@ for (const phone of PHONES) {
 
     it("captions the language sheet in its own language too", async () => {
       await mountHome(phone.pair);
+      // "+ More" — its face, its screen-reader name and its tooltip.
+      const more = screen.getByRole("button", { name: mine.moreLanguagesAria });
+      expect(more.textContent).toBe(mine.moreLanguages);
+      expect(more.getAttribute("title")).toBe(mine.moreLanguagesAria);
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: /More languages/ }));
+        fireEvent.click(more);
       });
-      const sheet = screen.getByRole("dialog");
+      const sheet = screen.getByRole("dialog", { name: mine.chooseLanguage });
       expect(sheet.textContent).toContain(mine.translateInto);
+      const search = screen.getByRole("searchbox", { name: mine.searchLanguagesAria });
+      expect(search.getAttribute("placeholder")).toBe(mine.searchLanguages);
       expect(sheet.textContent).not.toContain(theirs.translateInto);
+
+      // Close: face and name.
+      const close = screen.getByRole("button", { name: mine.close });
+      expect(close.textContent).toBe(mine.close);
+
+      // The badge on the phone's own language — pair[0] is `mine`, drawn as
+      // the sheet's `paired` row — reads in that phone's language.
+      const own = Array.from(sheet.querySelectorAll("li button")).find(
+        (row) => row.getAttribute("aria-pressed") === "false" && row.textContent?.includes(mine.yours)
+      );
+      expect(own, `no "${mine.yours}" badge in the sheet`).toBeTruthy();
+      expect(sheet.textContent).not.toContain(theirs.yours);
+
+      expectNoneOfTheirs();
+
+      // A search with no hit says so in the owner's language.
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "zzzzqqq" } });
+      });
+      expect(sheet.textContent).toContain(mine.noLanguageMatches);
+      expectNoneOfTheirs();
+    });
+
+    it("writes the install banner in its own language on Android", async () => {
+      await mountHome(phone.pair);
+      // Chromium announces installability; the banner waits for it.
+      const ev = Object.assign(new Event("beforeinstallprompt"), {
+        prompt: async () => {},
+        userChoice: Promise.resolve({ outcome: "dismissed" as const })
+      });
+      await act(async () => {
+        window.dispatchEvent(ev);
+      });
+      expect(screen.getByText(mine.installTitle)).toBeTruthy();
+      expect(screen.getByText(mine.installHowOther)).toBeTruthy();
+      expect(screen.getByRole("button", { name: mine.install })).toBeTruthy();
+      expect(screen.getByRole("button", { name: mine.installDismiss })).toBeTruthy();
+      expectNoneOfTheirs();
+    });
+
+    it("writes the install banner in its own language on an iPhone", async () => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
+      );
+      await mountHome(phone.pair);
+      expect(screen.getByText(mine.installTitle)).toBeTruthy();
+      expect(screen.getByText(mine.installHowIos)).toBeTruthy();
+      expect(screen.getByRole("button", { name: mine.installDismiss })).toBeTruthy();
+      expectNoneOfTheirs();
     });
   });
 }
@@ -285,7 +372,9 @@ describe("the copy table carries every one of them", () => {
     for (const key of KEYS) {
       expect(copyFor("es")[key], key).not.toBe(copyFor("en")[key]);
       // Never doubled inside a single language's entry.
-      expect(copyFor("en")[key], key).not.toMatch(/ · (Traducir|Detecci|Voltear|Oír|Reproducir|Detectar|Voces)/);
+      expect(copyFor("en")[key], key).not.toMatch(
+        / · (Traducir|Detecci|Voltear|Oír|Reproducir|Detectar|Voces|Más|Cerrar|Compartir|Pantalla|Descartar|Elegir|Buscar|Ningún)/
+      );
     }
   });
 });
