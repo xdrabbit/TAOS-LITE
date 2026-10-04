@@ -27,12 +27,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   pair. `lib/chrome/copy.ts` is already shaped for it: one call site to change,
   and no screen holds an opinion about its own language any more.
   (added 2026-09-16)
-- **Home screen chrome should follow the phone's owner, not the active
-  speaker** — Tom's decision, 2026-10-04: today's speaker-following is a bug;
-  home should read `pair[0]` the way `/call` reads `mine`. Deliberately
-  sequenced AFTER PR #77 (nav recovery) merges — #77 rewrites
-  `TranslatorShell.tsx`, and two versions of that file in flight is how #56
-  overwrote #55. (added 2026-10-04)
+- **The paywall reads in the phone owner's language** — Tom's decision,
+  2026-10-04. After #83, Liz sees "Mejorar el plan" on home, taps it, and
+  lands on an English-only paywall with English plan names and prices: the
+  door is Spanish and the room isn't. It is the one screen where a language
+  failure costs money directly, so it gets its own PR and Tom looks at it on a
+  phone before it ships. (added 2026-10-04; PR open, deliberately unmerged)
 - **Samoan is not in the language catalog** — The ask that started the copy
   table work was a woman who wants her grandfather to use TAOS in Samoan, and
   `sm` is not in `lib/languages/catalog.ts` at all, so it cannot be picked on
@@ -878,6 +878,25 @@ blank.
 - **The public flag stays off:** do NOT set `NEXT_PUBLIC_ENABLE_CALL`, which opens /call to everyone. Don't add test pairs to `NEXT_PUBLIC_FOUNDER_EMAILS` either: that list also grants /fast, /video, unmetered tutor, and the orphan sweep, and it ships in the public bundle.
 
 ## Shipped
+
+- **Home follows the phone's owner, in one language** — Tom's decision,
+  2026-10-04: home's chrome reads `copyFor(mine)` (`pair[0]`, the phone's
+  owner) instead of the active speaker's language, the way `/call` and the #77
+  nav already did. Speaker-following was right for one phone passed across a
+  table and wrong for two people each holding their own: Tom's buttons went
+  Spanish the moment Liz spoke into his phone. `source` still decides who is
+  speaking and which way a turn is translated; it just no longer picks the
+  language of the buttons. Two follow-ups from Tom's look at production went
+  in the same PR: the result card shows no "Translation · …" header until
+  there is a result under it, and every label on home except the auto-detect
+  record button's `Hablar · Speak` (doubled on purpose — it greets both
+  people) renders in one language — picker, checkboxes, Flip/Play, the trial
+  banner and its "Mejorar el plan" button, the language sheet and the install
+  banner. Closes the Up next item "Home screen chrome should follow the
+  phone's owner" (added 2026-10-04). (shipped 2026-10-04, PR #83, 8d07aa7 —
+  merged on Tom's approval after he was given the preview URL; verified by
+  the full suite, the one-language fence tests and the headless browser
+  script; NOT tested on a phone.)
 
 - **Paid lesson generation is capped per user per month** — `POST
   /api/tutor/lesson` and `POST /api/study/lesson` now reserve one generation
