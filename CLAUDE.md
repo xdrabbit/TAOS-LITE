@@ -2,7 +2,7 @@
 
 Live EN⇄ES (+ZH/YUE) translation app for Tom (English) and Liz (Spanish),
 deployed at taoslite.com via Vercel from `main`. Screens: /translate (spoken
-turns, home page), /live (ambient), /call, /chat, /tabletop, /tutor.
+turns, home page), /live (ambient), /call, /chat, /tabletop, /tutor, /study.
 
 ## The enhancements workflow (important)
 
@@ -32,3 +32,21 @@ build task:
   to production.
 - Field reports from Tom are the primary QA signal — production issues are
   diagnosable via Vercel runtime logs (project `taos-lite`).
+
+## Tutor and Study: who can reach what (as of 2026-10-04)
+
+Both flags (`NEXT_PUBLIC_ENABLE_TUTOR`, `NEXT_PUBLIC_ENABLE_STUDY`) are ON in
+Production, so `/tutor` and `/study` are live for every signed-in account.
+
+- **No tutor or study route is founder-gated.** Founders (`isFounder()`,
+  `lib/release.ts`) only skip the meters: tutor minutes (`lib/tutor/meter.ts`)
+  and the lesson-generation cap below.
+- **`GET /api/tutor/lessons` is public on purpose** — no sign-in. Tom's
+  decision 2026-10-04: the free pair app is the funnel, revenue comes from
+  businesses, and public course content is on-strategy. Do not gate it.
+- **`POST /api/tutor/lesson` and `POST /api/study/lesson` are capped per user
+  per UTC calendar month** (`lib/lessonCap.ts`; Tutor 30, Study 60, env
+  `TAOS_TUTOR_LESSON_CAP` / `TAOS_STUDY_LESSON_CAP`). Only a real paid
+  generation counts — a cache miss or Study's `force: true`; cache hits are
+  free. The ledger is `public.lesson_generations`. Over the cap is a 429 with
+  `code: "lesson_cap_reached"` and an `error` string both screens show.

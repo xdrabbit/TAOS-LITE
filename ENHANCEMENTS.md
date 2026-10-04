@@ -42,19 +42,6 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   actually answered yet. Needs the tier check the Languages section below
   describes (does ElevenLabs speak it?) before it is added.
   (added 2026-09-16)
-- **Cap Study lesson generation per user per month** — `/study` went live in
-  production on 2026-10-02 (Tom flipped `NEXT_PUBLIC_ENABLE_STUDY` to
-  Production). Every lesson is a gpt-5.5 completion of ~4,500 tokens taking
-  17–31 s, and `/api/study/lesson` is behind `guardSpend` — i.e. sign-in — and
-  nothing else: no monthly allowance, no per-user ceiling. Founders being
-  unlimited is the intent; the other eleven accounts in `auth.users` being
-  unlimited is not. The cache helps (a repeat ask for the same line is free)
-  but a fresh line is always a fresh completion. Reuse the shared 25/month
-  meter (`lib/fast/meter.ts` counts `taos_lite_translations` rows for it, so a
-  Study row would need its own count) or give Study its own small allowance
-  with a paywall card, the way tutor minutes work. Until then the exposure is
-  bounded only by how many strangers have accounts. (added 2026-10-02)
-
 - **/live never gets a breath: continuous or group speech is never flushed** —
   Driver report, 2026-09-06: when one person talks without pausing, or a group
   talks over each other, `/live` goes quiet. Server VAD never sees a silence
@@ -174,11 +161,17 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   founders-only.
   → Tutor pulled from RC1 2026-08-18 (second cut): it is unfinished and is
   planned as a PREMIUM feature, so it is gated behind
-  NEXT_PUBLIC_ENABLE_TUTOR (lib/release.ts), off by default. Hidden from
-  everyone including founders — nav link gone, /tutor redirects to /, and
-  all three /api/tutor routes 404 so a disabled feature cannot bill OpenAI
-  realtime or Azure. Nothing was deleted; set the var to 1 and redeploy to
-  bring it back.
+  NEXT_PUBLIC_ENABLE_TUTOR (lib/release.ts), off by default. With the flag
+  off it is hidden from everyone, founders included — nav link gone, /tutor
+  redirects to /, and the /api/tutor routes 404 so a disabled feature cannot
+  bill OpenAI realtime or Azure. Nothing was deleted; set the var to 1 and
+  redeploy to bring it back.
+  → **No longer the state (corrected 2026-10-04):** the flag is ON in
+  Production, so /tutor is live for every signed-in account. No tutor route
+  is founder-gated; founders only skip the minutes meter and the lesson cap.
+  `GET /api/tutor/lessons` is **public on purpose** — Tom's decision
+  2026-10-04 (the free app is the funnel, revenue is businesses, public course
+  content is on-strategy). Do not re-gate it.
   → Curriculum plan for bringing it back: `docs/tutor-curriculum-plan.md`
   (14 language-agnostic intent modules, crawl/walk/run loop, engineering
   order — cost guards land before customers). (added 2026-08-19)
@@ -877,6 +870,19 @@ blank.
 - **The public flag stays off:** do NOT set `NEXT_PUBLIC_ENABLE_CALL`, which opens /call to everyone. Don't add test pairs to `NEXT_PUBLIC_FOUNDER_EMAILS` either: that list also grants /fast, /video, unmetered tutor, and the orphan sweep, and it ships in the public bundle.
 
 ## Shipped
+
+- **Paid lesson generation is capped per user per month** — `POST
+  /api/tutor/lesson` and `POST /api/study/lesson` now reserve one generation
+  in `public.lesson_generations` before calling the model, and refuse with a
+  429 the screen shows once a user has had 30 tutor or 60 study generations
+  in the UTC calendar month. Study's `force: true` counts; cache hits don't;
+  founders are exempt (recorded unmetered, the tutor-meter rule). The numbers
+  came from production: Study's busiest users made ~5 generations each in its
+  first two days, and the tutor cache holds 13 lessons from every user since
+  launch. Closes the Up next item "Cap Study lesson generation per user per
+  month" (added 2026-10-02). `GET /api/tutor/lessons` deliberately stays
+  public and uncapped — Tom's decision, 2026-10-04. (shipped 2026-10-04,
+  PR #PRNUM; migration `20261004_lesson_generation_cap.sql` applied)
 
 - **A first-time visitor's pair follows their phone** — the root layout reads
   `Accept-Language` on the server and seeds the starting pair from it, instead
