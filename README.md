@@ -1,7 +1,7 @@
 # TAOS-LITE
 
-A fast, dead-simple **push-to-talk translator** for two people sharing one iPhone.
-Built for English ↔ Spanish, concept-level (not word-for-word) translation, with
+A fast, dead-simple **push-to-talk translator** for the people in front of you.
+About 100 languages, concept-level (not word-for-word) translation, with
 optional spoken playback.
 
 Production: `https://taoslite.com` (Vercel project `taos-lite`, auto-deploys
@@ -26,11 +26,12 @@ Architecture: [`TAOS-LITE-arch.md`](TAOS-LITE-arch.md). Docs index: [`docs/READM
   condition, and the feeling behind it, said the way a fluent native speaker would say it.
 - **The exceptions** — `/fast` is the one literal surface (word-level, for a sign or an address);
   `/live` is the one that summarizes (rolling gist of a room).
-- **Swap** — flip the direction (Liz · Español ↔ Tom · English) with one tap.
+- **Swap** — tap the "speaking now" card to flip which of your two languages is being spoken.
 - **Auto-play voice** — speak the translation automatically after each turn (Use Case 2),
   or turn it off and tap the speaker icon (Use Case 1).
 
-The whole app is one screen: who's speaking, the translation, and a big mic button.
+Home is one screen: who's speaking, the translation, and a big mic button. The others —
+Live, Chat, Table, typed and photo translation, and more — are listed under **Screens** below.
 
 ## Screens
 
@@ -150,8 +151,9 @@ local HTTPS tunnel (Tailscale Serve, ngrok, mkcert). Open in Safari and accept t
 
 ## Deploy (Vercel)
 
-Push to a Git repo, import into Vercel, and add the env vars from `.env.example` in the Vercel
-project settings. Vercel serves HTTPS by default, so iPhone mic + audio autoplay work out of the box.
+This repo is connected to the Vercel project `taos-lite`. Changes land as a PR to `main`,
+squash-merged once CI is green. Env vars live in the Vercel project settings (`.env.example`
+lists them). Vercel serves HTTPS, so iPhone mic + audio autoplay work out of the box.
 
 Pushing to `main` deploys production. The auth redirect allow-list (code +
 Supabase dashboard) is documented in `docs/supabase-auth-redirects.md`;
