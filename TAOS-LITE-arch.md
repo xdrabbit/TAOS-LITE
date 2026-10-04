@@ -62,13 +62,19 @@ Founders are hardcoded in `lib/release.ts` plus optional
 ### Navigation (production)
 
 Logged-out visitors see `components/Landing.tsx`; signed-in users get
-`components/TranslatorShell.tsx` (via `AppShell`). Its header carries pills for
-Live, Call (only when `callVisibleTo`), a **Together ▾** menu (Chat, Table),
-and Translate (`/translate`). A **More · Más** menu holds Tutor, Study, Quick
-translate (`/fast`), Video, Photo translator, History, the guide, About, and
-sign-out — each behind its gate above.
+`components/TranslatorShell.tsx` (via `AppShell`). Its header has three tiers
+(PR #77):
 
-Open PR #77 replaces this with a three-tier nav; it is not merged.
+- **Pills** — the daily verbs, one touch each: Translate, Live, Table, Chat,
+  and Call (only when `callVisibleTo`). No dropdown in the pill row.
+- **Nine-dot launcher** — every screen as a 2-column icon grid: Speak (`/`),
+  Translate, Live, Table, Chat, Call, Quick translate (`/fast`), Photo
+  translator (`/vision`), Video, Tutor, Study — each behind its gate above.
+- **Avatar menu** — identity only: History, How to use TAOS (`/guide`), About,
+  Sign out.
+
+Labels come from `lib/chrome/copy.ts` in the phone owner's language. Fenced by
+`tests/nav-completeness.test.ts`.
 
 ## Core flows
 

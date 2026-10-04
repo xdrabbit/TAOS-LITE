@@ -1,5 +1,9 @@
-// The header button that opens the More menu — Tutor, Video, Photo, History,
-// the guide, About, Sign out.
+// The two header buttons that open the two menus: the nine-dot LAUNCHER (every
+// screen TAOS has) and the AVATAR (History, the guide, About, Sign out).
+//
+// They were one button until the nav restructure — a "More" menu holding four
+// screens and four account items — and the split is why this file now talks
+// about two triggers. The rule below is unchanged and is about the launcher.
 //
 // It used to draw the first letter of the signed-in email. On Tom's account
 // (xdrabbit@) that letter is X, so the control that OPENS the menu was wearing
@@ -9,11 +13,18 @@
 // and an email with none at all fell back to a person glyph, so what the
 // trigger looked like depended on who was signed in.
 //
-// The rule this file pins: the CLOSED trigger is the nine-dot apps grid, the
-// OPEN trigger is an X, and neither one is derived from the account. A first
+// The rule this file pins: the CLOSED launcher trigger is the nine-dot apps
+// grid, the OPEN one is an X, and neither is derived from the account. A first
 // impression should not be a function of whose phone it is.
+//
+// The avatar beside it IS derived from the account, and that is not a
+// regression of the above — it is the distinction the rule was always about. A
+// DISCLOSURE wearing a dismissal glyph is what strangers refused to tap. An
+// avatar is supposed to say whose phone this is; that is the whole convention,
+// and it never swaps to an X. The last describe block pins that split.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { copyFor, ENGLISH } from "@/lib/chrome/copy";
 
 const SHELL = "components/TranslatorShell.tsx";
 
@@ -32,29 +43,40 @@ function code(path: string): string {
 }
 
 /**
- * The trigger button: from the `onClick` that toggles the menu to the closing
+ * A trigger button: from the `onClick` that toggles its menu to the closing
  * `</button>`. Sliced rather than pattern-matched so the assertions below are
- * about THIS button and cannot be satisfied by the Share icon next to it,
- * which is also a round icon-only button full of circles.
+ * about THAT button and cannot be satisfied by the Share icon next to it,
+ * which is also a round icon-only button full of circles — nor, now, by the
+ * other trigger.
  */
-function trigger(): string {
+function buttonToggling(setter: string): string {
   const source = code(SHELL);
-  const start = source.indexOf("setAccountMenuOpen((o) => !o)");
-  expect(start, "account-menu trigger not found").toBeGreaterThan(-1);
+  const start = source.indexOf(`${setter}((o) => !o)`);
+  expect(start, `${setter} trigger not found`).toBeGreaterThan(-1);
   const open = source.lastIndexOf("<button", start);
   const end = source.indexOf("</button>", start);
   return source.slice(open, end);
 }
 
-describe("the More trigger invites rather than dismisses", () => {
+/** The nine-dot launcher. */
+function trigger(): string {
+  return buttonToggling("setGridMenuOpen");
+}
+
+/** The identity chip. */
+function avatar(): string {
+  return buttonToggling("setAccountMenuOpen");
+}
+
+describe("the launcher trigger invites rather than dismisses", () => {
   it("draws nine dots when the menu is closed", () => {
     // Nine, not "some": eight is a ring, and the grid only reads as "apps"
     // at three-by-three.
     const t = trigger();
-    const grid = t.slice(0, t.indexOf('accountMenuOpen ? "opacity-100"'));
+    const grid = t.slice(0, t.indexOf('gridMenuOpen ? "opacity-100"'));
     expect(grid.match(/<circle /g) ?? []).toHaveLength(9);
     // And that block is the one shown while CLOSED.
-    expect(grid).toContain('accountMenuOpen ? "opacity-0" : "opacity-100"');
+    expect(grid).toContain('gridMenuOpen ? "opacity-0" : "opacity-100"');
   });
 
   it("draws an X only when the menu is open", () => {
@@ -64,16 +86,21 @@ describe("the More trigger invites rather than dismisses", () => {
     // ...and the half of the button holding it is the half that lights up on
     // open. If these ever swap, the stranger meets an X again.
     const xHalf = t.slice(t.indexOf("M6 6l12 12M18 6L6 18") - 600, t.indexOf("M6 6l12 12M18 6L6 18"));
-    expect(xHalf).toContain('accountMenuOpen ? "opacity-100" : "opacity-0"');
+    expect(xHalf).toContain('gridMenuOpen ? "opacity-100" : "opacity-0"');
   });
 
-  it("never derives the trigger from the signed-in email", () => {
-    // The actual defect. No initial, no first-letter arithmetic on `email`,
-    // and no per-account fallback glyph.
+  it("never derives the LAUNCHER from the signed-in email", () => {
+    // The actual defect, and the half of it that still holds after the nav
+    // split: no initial, no first-letter arithmetic on `email`, no per-account
+    // fallback glyph on the control that discloses the app's screens.
+    //
+    // The blanket "avatarInitial appears nowhere in the file" this used to
+    // assert has become "appears nowhere in THIS button" — the avatar chip is
+    // a real identity control now and is allowed to be an initial. Which
+    // button is which is exactly what the slice above is for.
     const t = trigger();
     expect(t).not.toContain("avatarInitial");
     expect(t).not.toContain("email");
-    expect(code(SHELL)).not.toContain("avatarInitial");
   });
 
   it("swaps the two glyphs in place, so the header cannot reflow", () => {
@@ -86,19 +113,44 @@ describe("the More trigger invites rather than dismisses", () => {
   });
 });
 
+// "In both languages" used to mean ONE string carrying both ("All screens ·
+// Pantallas"). Since the nav reached lib/chrome/copy.ts it means each phone
+// reads its owner's language, and BOTH languages are in the table — which is
+// what the last case here checks, so the claim is still pinned, not dropped.
 describe("the trigger says what it does, in both languages", () => {
-  it("offers More · Más while closed and Close · Cerrar while open", () => {
+  it("offers All screens while closed and Close menu while open", () => {
     const t = trigger();
-    expect(t).toContain('accountMenuOpen ? "Close menu · Cerrar menú" : "More · Más"');
+    expect(t).toContain("gridMenuOpen ? nav.navCloseMenu : nav.navAllScreens");
     // Both the screen reader and the tooltip, not one or the other.
-    expect(t.match(/accountMenuOpen \? "Close menu · Cerrar menú" : "More · Más"/g) ?? [])
-      .toHaveLength(2);
+    expect(t.match(/gridMenuOpen \? nav\.navCloseMenu : nav\.navAllScreens/g) ?? []).toHaveLength(2);
     expect(t).toContain("aria-label=");
     expect(t).toContain("title=");
   });
 
-  it("keeps the menu itself labelled, and bilingual", () => {
-    expect(code(SHELL)).toContain('aria-label="More · Más"');
+  it("keeps the menu itself labelled", () => {
+    expect(code(SHELL)).toContain("aria-label={nav.navAllScreens}");
+    expect(code(SHELL)).toContain("aria-label={nav.navAccount}");
+  });
+
+  it("has every header label in English AND Spanish, one language per string", () => {
+    const es = copyFor("es");
+    const keys = (Object.keys(ENGLISH) as Array<keyof typeof ENGLISH>).filter((k) => k.startsWith("nav"));
+    expect(keys.length).toBeGreaterThan(0);
+    for (const k of keys) {
+      expect(code(SHELL), `${k} is in the table but not on the header`).toContain(`nav.${k}`);
+      expect(ENGLISH[k]).not.toContain(" · ");
+      expect(es[k]).not.toContain(" · ");
+    }
+    // Spanish is really there, not English falling through. ("Chat" is the
+    // one word the two languages share, so it has no key — see copy.ts.)
+    for (const k of keys) expect(es[k], k).not.toBe(ENGLISH[k]);
+    // And the header no longer hard-codes a doubled label anywhere in it.
+    const src = code(SHELL);
+    const header = src.slice(src.indexOf("<header"), src.indexOf("</header>"));
+    const doubled = (header.match(/(aria-label|title)="[^"]* · [^"]*"/g) ?? []).filter(
+      (m) => !m.includes("Share TAOS")
+    );
+    expect(doubled).toEqual([]);
   });
 
   it("still announces itself as a menu button", () => {
@@ -106,19 +158,63 @@ describe("the trigger says what it does, in both languages", () => {
     // disclosure and not a link. The label rewrite must not drop them.
     const t = trigger();
     expect(t).toContain('aria-haspopup="menu"');
-    expect(t).toContain("aria-expanded={accountMenuOpen}");
+    expect(t).toContain("aria-expanded={gridMenuOpen}");
   });
 });
 
 describe("the menu still says who is signed in", () => {
-  it("shows the email inside the menu, now that the trigger does not", () => {
+  it("shows the email inside the account menu, not in a tooltip", () => {
     // `title={email}` used to be the only place the account appeared, and a
     // tooltip needs a mouse — on the phone this app is built for, it never
     // rendered at all. Sign out lives in this menu; the account it signs out
     // of has to be visible in it.
     const menu = code(SHELL);
-    const start = menu.indexOf('aria-label="More · Más"');
-    const body = menu.slice(start, menu.indexOf("Sign out", start));
+    const start = menu.indexOf("aria-label={nav.navAccount}");
+    expect(start).toBeGreaterThan(-1);
+    const body = menu.slice(start, menu.indexOf("nav.navSignOut", start));
     expect(body).toContain("{email}");
+  });
+});
+
+describe("the avatar is identity, and is never asked to mean close", () => {
+  it("draws the account's initial, with a person glyph when there is none", () => {
+    // An initial is the convention, and the fallback matters: an empty circle
+    // or a "?" both read as an error state on a first impression.
+    const a = avatar();
+    expect(a).toContain("{avatarInitial ?? (");
+    expect(code(SHELL)).toContain("const avatarInitial =");
+  });
+
+  it("never swaps to an X the way the launcher does", () => {
+    // #45's finding, kept honest across the split: an X on Tom's account meant
+    // "close/delete" to every stranger Liz handed the phone to. The launcher
+    // earns its X because it genuinely toggles closed. The avatar shows open
+    // state with a ring instead, so the glyph never changes meaning.
+    const a = avatar();
+    expect(a).not.toMatch(/M6 6l12 12M18 6L6 18/);
+    expect(a).toContain("ring-2 ring-amber-300/60");
+  });
+
+  it("says what it is, in both languages, and announces itself as a menu", () => {
+    const a = avatar();
+    expect(a).toContain("accountMenuOpen ? nav.navCloseMenu : nav.navAccount");
+    expect(a).toContain('aria-haspopup="menu"');
+    expect(a).toContain("aria-expanded={accountMenuOpen}");
+  });
+
+  it("holds the account items and no screens", () => {
+    // The split this whole restructure is for. /vision is a SCREEN and used to
+    // live in here, which is why /guide had to tell readers that the photo
+    // translator was in "the account menu".
+    const src = code(SHELL);
+    const start = src.indexOf("aria-label={nav.navAccount}", src.indexOf('role="menu"'));
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("<nav", start));
+    for (const account of ["{nav.navHistory}", "{nav.navGuide}", "{nav.navAbout}", "{nav.navSignOut}"]) {
+      expect(body).toContain(account);
+    }
+    for (const screen of ["/vision", "/live", "/chat", "/tabletop", "/translate", "/call", "/fast", "/video", "/tutor", "/study"]) {
+      expect(body).not.toContain(`href="${screen}"`);
+    }
   });
 });
