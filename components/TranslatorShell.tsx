@@ -34,7 +34,14 @@ import { copyFor, fill } from "@/lib/chrome/copy";
 // lib/translate/pair.ts — /vision reads the same saved pair to decide what
 // language a photo comes back in.
 type LangCode = PairLangCode;
-type Engine = "elevenlabs" | "openai";
+type Engine = "elevenlabs" | "openai" | "fishaudio";
+
+// Brand names, so not in lib/chrome/copy.ts: they read the same in every language.
+const ENGINE_LABEL: Record<Engine, string> = {
+  fishaudio: "Fish Audio",
+  elevenlabs: "ElevenLabs",
+  openai: "OpenAI"
+};
 type Status = "idle" | "recording" | "processing" | "done" | "error";
 
 interface Speaker {
@@ -233,13 +240,15 @@ export function TranslatorShell({
   // character and a fleet of testers would run up real cost. Default is
   // openai so a free user never touches ElevenLabs even during the
   // profile-load window; a subscriber's default upgrades once the profile
-  // resolves (unless they already tapped the toggle themselves).
+  // resolves (unless they already tapped the toggle themselves). Since
+  // 10/06 that upgrade lands on Fish Audio, the clones' new home on trial;
+  // ElevenLabs stays one tap away beside it.
   const [engine, setEngine] = useState<Engine>("openai");
   const engineTouchedRef = useRef(false);
   // The conversation the next saved turn belongs to; see lib/translate/session.ts.
   const sessionRef = useRef<ConversationSession | null>(null);
   useEffect(() => {
-    if (subscriber && !engineTouchedRef.current) setEngine("elevenlabs");
+    if (subscriber && !engineTouchedRef.current) setEngine("fishaudio");
   }, [subscriber]);
   const [autoPlay, setAutoPlay] = useState(true);
   const [autoDetect, setAutoDetect] = useState(true);
@@ -1581,21 +1590,26 @@ export function TranslatorShell({
             {s.autoDetectLanguage}
           </label>
 
+          <label className="flex items-center gap-2 text-sm text-amber-100/70">
+            <input
+              type="checkbox"
+              checked={autoPlay}
+              onChange={(e) => setAutoPlay(e.target.checked)}
+              className="h-4 w-4 accent-amber-400"
+            />
+            {s.autoPlayVoice}
+          </label>
+
+          {/* The voice engine gets its own row since 10/06: three pills beside
+              the auto-play label overflow a phone, and an overflowing row is
+              what ate taps in PR #53. */}
           <div className="flex items-center justify-between gap-3 text-sm">
-            <label className="flex items-center gap-2 text-amber-100/70">
-              <input
-                type="checkbox"
-                checked={autoPlay}
-                onChange={(e) => setAutoPlay(e.target.checked)}
-                className="h-4 w-4 accent-amber-400"
-              />
-              {s.autoPlayVoice}
-            </label>
-            <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
-              {/* ElevenLabs greyed (not hidden) for free-tier beta testers —
+            <span className="shrink-0 text-amber-100/70">{s.voiceEngine}</span>
+            <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-full border border-white/10 bg-white/5 p-1">
+              {/* Premium engines greyed (not hidden) for free-tier beta testers —
                   visible as a premium voice tier, unreachable as a cost. */}
-              {(["elevenlabs", "openai"] as Engine[]).map((eng) => {
-                const locked = eng === "elevenlabs" && !subscriber;
+              {(["fishaudio", "elevenlabs", "openai"] as Engine[]).map((eng) => {
+                const locked = eng !== "openai" && !subscriber;
                 return (
                   <button
                     key={eng}
@@ -1606,7 +1620,7 @@ export function TranslatorShell({
                       engineTouchedRef.current = true;
                       setEngine(eng);
                     }}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                    className={`truncate rounded-full px-2 py-1 text-xs font-medium transition ${
                       engine === eng
                         ? "bg-amber-400 text-stone-950"
                         : locked
@@ -1614,7 +1628,7 @@ export function TranslatorShell({
                           : "text-amber-100/60"
                     }`}
                   >
-                    {eng === "elevenlabs" ? "ElevenLabs" : "OpenAI"}
+                    {ENGINE_LABEL[eng]}
                   </button>
                 );
               })}
