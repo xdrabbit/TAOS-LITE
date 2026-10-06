@@ -65,6 +65,9 @@ const EN = {
   autoDetectLanguage: "Auto-detect language",
   autoPlayVoice: "Auto-play voice",
   premiumVoices: "Premium voices",
+  // The voice-engine picker's row label (Fish Audio / ElevenLabs / OpenAI),
+  // its own row since 2026-10-06.
+  voiceEngine: "Voice",
   flip: "Flip",
   flipAria: "Flip direction",
   flipTitle: "Wrong direction? Re-translate the same recording the other way",
@@ -334,6 +337,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     autoDetectLanguage: "Detectar idioma",
     autoPlayVoice: "Reproducir voz",
     premiumVoices: "Voces premium",
+    voiceEngine: "Voz",
     flip: "Voltear",
     flipAria: "Voltear",
     flipTitle: "¿Dirección equivocada? Vuelve a traducir la misma grabación al revés",

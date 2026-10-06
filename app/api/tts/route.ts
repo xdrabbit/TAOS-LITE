@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   gatedElevenLabsVoiceId,
+  gatedFishAudioVoiceId,
   type TtsLangCode as LangCode,
   type VoiceOverride
 } from "@/lib/tts/voice";
@@ -11,7 +12,7 @@ import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-type Engine = "elevenlabs" | "openai";
+type Engine = "elevenlabs" | "openai" | "fishaudio";
 
 // Bound the upstream synthesis call well under maxDuration (60s): a stalled
 // provider must become a fast, retryable JSON error, not a hung request the
@@ -24,12 +25,17 @@ function isTimeout(e: unknown): boolean {
 
 const DEFAULT_OPENAI_VOICE = "nova";
 
-function audioResponse(buffer: ArrayBuffer): NextResponse {
+// X-TTS-Engine says which provider actually spoke. It matters for Fish
+// Audio, the one engine that can hand a line to another provider (see
+// fishAudio below): without it, "that didn't sound like Fish" has no answer
+// short of the server log.
+function audioResponse(buffer: ArrayBuffer, engine: Engine): NextResponse {
   return new NextResponse(buffer, {
     status: 200,
     headers: {
       "Content-Type": "audio/mpeg",
-      "Cache-Control": "no-store"
+      "Cache-Control": "no-store",
+      "X-TTS-Engine": engine
     }
   });
 }
@@ -89,7 +95,7 @@ async function elevenLabs(
     const detail = await res.text().catch(() => `HTTP ${res.status}`);
     return NextResponse.json({ error: "ElevenLabs TTS failed.", details: detail }, { status: 502 });
   }
-  return audioResponse(await res.arrayBuffer());
+  return audioResponse(await res.arrayBuffer(), "elevenlabs");
 }
 
 async function openai(text: string): Promise<NextResponse> {
@@ -115,7 +121,64 @@ async function openai(text: string): Promise<NextResponse> {
     const detail = await res.text().catch(() => `HTTP ${res.status}`);
     return NextResponse.json({ error: "OpenAI TTS failed.", details: detail }, { status: 502 });
   }
-  return audioResponse(await res.arrayBuffer());
+  return audioResponse(await res.arrayBuffer(), "openai");
+}
+
+/**
+ * Fish Audio (fish.audio) — a second home for Tom's and Liz's clones, tried
+ * as the home screen's default on 10/06.
+ *
+ * Fish is ONLY the clones. When there is no Fish clone for this line — a
+ * locked phone, a guest speaker, a missing or malformed voice variable — the
+ * line goes to the ElevenLabs path, which answers exactly as it always has
+ * (the stock multilingual voice). That hand-off is about WHICH voice, never a
+ * rescue from a failure: a Fish error is a Fish error and comes back as a 502,
+ * because quietly answering in another provider's voice is how a "why does
+ * it sound different?" report is born. X-TTS-Engine says who spoke.
+ */
+async function fishAudio(
+  text: string,
+  unlocked: boolean,
+  sourceLanguage?: LangCode,
+  targetLanguage?: LangCode,
+  latency?: "flash",
+  voice?: VoiceOverride
+): Promise<NextResponse> {
+  const referenceId = gatedFishAudioVoiceId(unlocked, sourceLanguage, targetLanguage, voice);
+  if (!referenceId) {
+    return elevenLabs(text, unlocked, sourceLanguage, targetLanguage, latency, voice);
+  }
+  const apiKey = process.env.FISHAUDIO_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "Missing FISHAUDIO_API_KEY." }, { status: 500 });
+  }
+
+  const res = await fetch("https://api.fish.audio/v1/tts", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      model: process.env.FISHAUDIO_MODEL?.trim() || "s2.1-pro"
+    },
+    body: JSON.stringify({
+      text,
+      reference_id: referenceId,
+      format: "mp3",
+      mp3_bitrate: 128,
+      latency: latency === "flash" ? "low" : "normal"
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(SYNTH_TIMEOUT_MS)
+  });
+
+  if (!res.ok) {
+    // 402 is the one worth naming: Fish keeps API credit separate from the
+    // app's credit, so a funded account can still be empty here.
+    const detail = await res.text().catch(() => `HTTP ${res.status}`);
+    console.error(`[tts/fishaudio] HTTP ${res.status}: ${detail.slice(0, 300)}`);
+    return NextResponse.json({ error: "Fish Audio TTS failed.", details: detail }, { status: 502 });
+  }
+  return audioResponse(await res.arrayBuffer(), "fishaudio");
 }
 
 /**
@@ -149,7 +212,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       voice?: string;
     };
     const text = typeof body.text === "string" ? body.text.trim() : "";
-    const engine: Engine = body.engine === "openai" ? "openai" : "elevenlabs";
+    const engine: Engine =
+      body.engine === "openai" || body.engine === "fishaudio" ? body.engine : "elevenlabs";
     const latency = body.latency === "flash" ? ("flash" as const) : undefined;
     const voice: VoiceOverride | undefined =
       body.voice === "tom" || body.voice === "liz" ? body.voice : undefined;
@@ -204,9 +268,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // `await` (not a bare returned promise) so a thrown timeout lands in the
     // catch below rather than escaping the handler as a generic 500.
-    return engine === "openai"
-      ? await openai(text)
-      : await elevenLabs(text, unlocked, body.sourceLanguage, body.targetLanguage, latency, voice);
+    if (engine === "openai") return await openai(text);
+    if (engine === "fishaudio") {
+      return await fishAudio(text, unlocked, body.sourceLanguage, body.targetLanguage, latency, voice);
+    }
+    return await elevenLabs(text, unlocked, body.sourceLanguage, body.targetLanguage, latency, voice);
   } catch (error) {
     if (isTimeout(error)) {
       return NextResponse.json(

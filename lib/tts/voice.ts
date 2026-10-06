@@ -1,4 +1,4 @@
-// Cloned-voice selection for /api/tts (ElevenLabs engine). Extracted from the
+// Cloned-voice selection for /api/tts (ElevenLabs and Fish Audio engines). Extracted from the
 // route so the rule is PURE and unit-tested — tests/tts-voice.test.ts pins it
 // after the 7/24 flip-flop (PR #5 reversed it for an afternoon; PR #6 put it
 // back and this module exists so that can never happen silently again).
@@ -90,9 +90,7 @@ export function elevenLabsVoiceId(
   targetLanguage?: TtsLangCode,
   voice?: VoiceOverride
 ): string {
-  // Explicit override wins (kept for flexibility; no screen uses it today).
-  if (voice === "tom") return ELEVENLABS_TOM_VOICE;
-  if (voice === "liz") return lizElevenLabsVoiceId();
+  // An explicit override wins (speakerClone checks it first; no screen uses it today).
   // THE rule, confirmed by Tom in plain words (7/24): the voice follows the
   // SPEAKER. Liz speaks Spanish -> her English translation plays in LIZ's
   // clone (Tom hears Liz's voice speaking English). Tom speaks English -> his
@@ -105,11 +103,73 @@ export function elevenLabsVoiceId(
   // TTS model renders his voice in Mandarin just fine. Same for Liz's Spanish.
   // A speaker who is neither of them (e.g. a Mandarin guest) has no clone and
   // falls through to the default multilingual voice.
-  if (sourceLanguage === "en" && targetLanguage && targetLanguage !== "en") {
-    return ELEVENLABS_TOM_VOICE; // Tom speaking -> translation in Tom's voice
-  }
-  if (sourceLanguage === "es" && targetLanguage && targetLanguage !== "es") {
-    return lizElevenLabsVoiceId(); // Liz speaking -> translation in Liz's voice
-  }
+  const who = speakerClone(sourceLanguage, targetLanguage, voice);
+  if (who === "tom") return ELEVENLABS_TOM_VOICE; // Tom speaking -> translation in Tom's voice
+  if (who === "liz") return lizElevenLabsVoiceId(); // Liz speaking -> translation in Liz's voice
   return defaultElevenLabsVoiceId();
+}
+
+/**
+ * WHOSE clone a line should play in — the speaker rule above with the
+ * provider taken out, so ElevenLabs and Fish Audio can never disagree about
+ * it. `null` is "nobody's": a guest, or a same-language echo.
+ */
+export function speakerClone(
+  sourceLanguage?: TtsLangCode,
+  targetLanguage?: TtsLangCode,
+  voice?: VoiceOverride
+): VoiceOverride | null {
+  if (voice) return voice;
+  if (sourceLanguage === "en" && targetLanguage && targetLanguage !== "en") return "tom";
+  if (sourceLanguage === "es" && targetLanguage && targetLanguage !== "es") return "liz";
+  return null;
+}
+
+// ── Fish Audio (10/06) ─────────────────────────────────────────────────────
+// A second home for the same two clones, trained on Fish Audio
+// (fish.audio, account models "Tom" and "Lizma"). Configuration, like Liz's
+// ElevenLabs id above, for the same reason: a retrain is a dashboard edit.
+//
+// The value must be the model's 32-hex `_id`, NOT its title. The first setup
+// put the titles ("Tom", "Lizma") in these variables; Fish answers a title
+// with an error, so a non-id value is reported in the log and treated as
+// unset rather than sent.
+export const FISHAUDIO_TOM_VOICE_ENV = "FISHAUDIO_TOM_VOICEID";
+export const FISHAUDIO_LIZ_VOICE_ENV = "FISHAUDIO_LIZ_VOICEID";
+
+const FISH_MODEL_ID = /^[0-9a-f]{32}$/;
+
+function fishVoiceFromEnv(name: string): string | null {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    console.error(`[tts/voice] ${name} is not set — no Fish Audio clone for this speaker.`);
+    return null;
+  }
+  if (!FISH_MODEL_ID.test(value)) {
+    console.error(
+      `[tts/voice] ${name} is not a Fish Audio model id (got a ${value.length}-character value; ` +
+        `expected 32 hex characters — the model's _id, not its title). Treating it as unset.`
+    );
+    return null;
+  }
+  return value;
+}
+
+/**
+ * The Fish Audio clone for this line, or `null` when there isn't one to use:
+ * a locked phone, a speaker who is neither Tom nor Liz, or a variable that is
+ * missing or malformed. The route turns `null` into the ElevenLabs stock
+ * voice — Fish has no account-level "default voice" worth trusting blind.
+ */
+export function gatedFishAudioVoiceId(
+  unlocked: boolean,
+  sourceLanguage?: TtsLangCode,
+  targetLanguage?: TtsLangCode,
+  voice?: VoiceOverride
+): string | null {
+  if (!unlocked) return null;
+  const who = speakerClone(sourceLanguage, targetLanguage, voice);
+  if (who === "tom") return fishVoiceFromEnv(FISHAUDIO_TOM_VOICE_ENV);
+  if (who === "liz") return fishVoiceFromEnv(FISHAUDIO_LIZ_VOICE_ENV);
+  return null;
 }
