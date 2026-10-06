@@ -204,6 +204,12 @@ describe("/try — anonymous, on the allowance", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("may NOT have Fish Audio either — it is the clones' other home (10/06)", async () => {
+    const res = await ttsPost(jsonPost("/api/tts", { text: "hi", engine: "fishaudio" }, TRY));
+    expect(res.status).toBe(401);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("defaulting the engine does not sneak past it either", async () => {
     // The route's default is elevenlabs. An anonymous caller who simply omits
     // the field must not get the expensive one by accident.
@@ -308,12 +314,14 @@ describe("every route that spends money asks who is calling", () => {
   const PAID_PROVIDERS = [
     "api.openai.com",
     "api.elevenlabs.io",
+    "api.fish.audio",
     // Azure pronunciation scoring (/api/tutor/assess).
     "cognitiveservices",
     "tts.speech.microsoft.com",
     // Spending indirectly, through a lib that holds the fetch.
     "OPENAI_API_KEY",
     "ELEVENLABS_API_KEY",
+    "FISHAUDIO_API_KEY",
     "AZURE_SPEECH_KEY",
     "getOpenAIKey",
     "chatCompletion"

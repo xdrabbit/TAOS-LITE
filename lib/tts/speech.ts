@@ -45,7 +45,7 @@ export interface SpeechRequest {
   sourceLanguage?: string | null;
   /** What to speak. A tier-2 code here means no request is made at all. */
   targetLanguage?: string | null;
-  engine?: "elevenlabs" | "openai";
+  engine?: "elevenlabs" | "openai" | "fishaudio";
   /** /live trades clone fidelity for the fastest model. */
   latency?: "flash";
 }
