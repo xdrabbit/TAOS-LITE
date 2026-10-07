@@ -892,7 +892,7 @@ blank.
   No text, no email, no raw UA. Service-role only (RLS on, no policies). The
   write is fire-and-forget behind `waitUntil` with a 3s timeout; a failed
   insert is a warning, never a failed request. `tests/tts-request-log.test.ts`.
-  (shipped 2026-10-07, PR #TBD)
+  (shipped 2026-10-07, PR #87)
 
 - **The default voice is ElevenLabs again; Fish Audio stays for testing** —
   Tom's decision, 2026-10-07, on phone playback quality: Fish Audio sounded
