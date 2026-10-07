@@ -1,5 +1,6 @@
-// Fish Audio (10/06): a second home for Tom's and Liz's clones, and the home
-// screen's default engine for subscribers.
+// Fish Audio (10/06): a second home for Tom's and Liz's clones, selectable on
+// the home screen for testing. (It was the subscriber default for one day; the
+// default is ElevenLabs again — tests/tts-default-engine.test.ts.)
 //
 // Three things are pinned:
 //   1. Fish obeys the SAME speaker rule as ElevenLabs (tests/tts-voice.test.ts)

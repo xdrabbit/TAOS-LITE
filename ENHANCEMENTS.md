@@ -879,6 +879,20 @@ blank.
 
 ## Shipped
 
+- **The default voice is ElevenLabs again; Fish Audio stays for testing** —
+  Tom's decision, 2026-10-07, on phone playback quality: Fish Audio sounded
+  acceptable on a computer the night #85 made it the home screen's subscriber
+  default, and bad on the phone. A subscriber's home screen now starts on
+  ElevenLabs (`SUBSCRIBER_DEFAULT_ENGINE` in `lib/tts/engine.ts`); Fish is
+  still a pill on the voice-engine picker (moved second, behind ElevenLabs)
+  and is only reached by tapping it. Nothing else ever asked for Fish — every
+  other screen either names ElevenLabs/OpenAI or names nothing, which
+  `/api/tts` already reads as ElevenLabs. The engine choice is not stored, so
+  no phone carries a saved Fish preference past a reload.
+  `tests/tts-default-engine.test.ts` pins the default and that the cloned
+  voices go to ElevenLabs when no engine (or ElevenLabs) is named.
+  (shipped 2026-10-07, PR #86)
+
 - **Home follows the phone's owner, in one language** — Tom's decision,
   2026-10-04: home's chrome reads `copyFor(mine)` (`pair[0]`, the phone's
   owner) instead of the active speaker's language, the way `/call` and the #77

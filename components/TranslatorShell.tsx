@@ -19,6 +19,7 @@ import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { requestSpeech } from "@/lib/tts/speech";
+import { SUBSCRIBER_DEFAULT_ENGINE, type TtsEngine } from "@/lib/tts/engine";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
@@ -34,7 +35,7 @@ import { copyFor, fill } from "@/lib/chrome/copy";
 // lib/translate/pair.ts — /vision reads the same saved pair to decide what
 // language a photo comes back in.
 type LangCode = PairLangCode;
-type Engine = "elevenlabs" | "openai" | "fishaudio";
+type Engine = TtsEngine;
 
 // Brand names, so not in lib/chrome/copy.ts: they read the same in every language.
 const ENGINE_LABEL: Record<Engine, string> = {
@@ -240,15 +241,15 @@ export function TranslatorShell({
   // character and a fleet of testers would run up real cost. Default is
   // openai so a free user never touches ElevenLabs even during the
   // profile-load window; a subscriber's default upgrades once the profile
-  // resolves (unless they already tapped the toggle themselves). Since
-  // 10/06 that upgrade lands on Fish Audio, the clones' new home on trial;
-  // ElevenLabs stays one tap away beside it.
+  // resolves (unless they already tapped the toggle themselves). That upgrade
+  // is SUBSCRIBER_DEFAULT_ENGINE — ElevenLabs. It was Fish Audio for one day
+  // (10/06, #85) until the phone heard it; Fish stays on the picker to test.
   const [engine, setEngine] = useState<Engine>("openai");
   const engineTouchedRef = useRef(false);
   // The conversation the next saved turn belongs to; see lib/translate/session.ts.
   const sessionRef = useRef<ConversationSession | null>(null);
   useEffect(() => {
-    if (subscriber && !engineTouchedRef.current) setEngine("fishaudio");
+    if (subscriber && !engineTouchedRef.current) setEngine(SUBSCRIBER_DEFAULT_ENGINE);
   }, [subscriber]);
   const [autoPlay, setAutoPlay] = useState(true);
   const [autoDetect, setAutoDetect] = useState(true);
@@ -1607,7 +1608,7 @@ export function TranslatorShell({
             <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-full border border-white/10 bg-white/5 p-1">
               {/* Premium engines greyed (not hidden) for free-tier beta testers —
                   visible as a premium voice tier, unreachable as a cost. */}
-              {(["fishaudio", "elevenlabs", "openai"] as Engine[]).map((eng) => {
+              {(["elevenlabs", "fishaudio", "openai"] as Engine[]).map((eng) => {
                 const locked = eng !== "openai" && !subscriber;
                 return (
                   <button
