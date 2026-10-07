@@ -891,7 +891,7 @@ blank.
   no phone carries a saved Fish preference past a reload.
   `tests/tts-default-engine.test.ts` pins the default and that the cloned
   voices go to ElevenLabs when no engine (or ElevenLabs) is named.
-  (shipped 2026-10-07, PR #__PR__)
+  (shipped 2026-10-07, PR #86)
 
 - **Home follows the phone's owner, in one language** — Tom's decision,
   2026-10-04: home's chrome reads `copyFor(mine)` (`pair[0]`, the phone's
