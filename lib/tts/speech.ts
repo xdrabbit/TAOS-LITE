@@ -19,6 +19,7 @@ import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { personalVoiceHeaders } from "./personalVoiceClient";
 import { authHeaders } from "@/lib/authClient";
 import type { TtsEngine } from "./engine";
+import { ttsDeviceHeaders, type TtsSurface } from "./deviceHints";
 
 /**
  * The one sentence the app says about a tier-2 language, in both households'
@@ -59,6 +60,8 @@ export interface SpeechOptions {
   fetch?: FetchLike;
   /** What to throw when the provider genuinely fails, in the caller's voice. */
   failureMessage?: string;
+  /** Which screen is asking — for the request log only. */
+  surface?: TtsSurface;
 }
 
 /**
@@ -79,10 +82,14 @@ export async function requestSpeech(
 ): Promise<Blob | null> {
   if (isTextOnlyLanguage(req.targetLanguage)) return null;
 
-  const { fetch: fetchImpl = fetch, failureMessage = "Voice playback failed." } = options;
+  const {
+    fetch: fetchImpl = fetch,
+    failureMessage = "Voice playback failed.",
+    surface = "unknown"
+  } = options;
   const res = await fetchImpl("/api/tts", {
     method: "POST",
-    // Three separate things travel in these headers, and they are not
+    // Four separate things travel in these headers, and they are not
     // interchangeable:
     //   Authorization  — WHO is asking. /api/tts spends money and since 8/19
     //                    refuses a stranger (lib/spendGuard.ts). Every screen
@@ -94,10 +101,13 @@ export async function requestSpeech(
     //                    phone eligible for Tom's or Liz's clone. Absent on
     //                    every borrowed or shared phone, and then the reply is
     //                    the standard voice.
+    //   device hints   — WHERE it is being asked from (screen, installed or
+    //                    not), for the request log. Never change the answer.
     headers: {
       "Content-Type": "application/json",
       ...(await authHeaders()),
-      ...personalVoiceHeaders()
+      ...personalVoiceHeaders(),
+      ...ttsDeviceHeaders(surface)
     },
     // undefined fields drop out of JSON.stringify, so a caller that has no
     // opinion about a language sends no key and the server keeps its own.

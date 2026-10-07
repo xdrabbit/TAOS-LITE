@@ -308,7 +308,7 @@ function Drills({
         text: drill.en,
         engine: "openai",
         targetLanguage: DRILL_LANGUAGE
-      });
+      }, { surface: "tutor" });
       if (!blob) return;
       const url = URL.createObjectURL(blob);
       a.src = url;

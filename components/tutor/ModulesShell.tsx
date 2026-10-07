@@ -612,7 +612,7 @@ function Crawl({
       // voice-follows-speaker rule (lib/tts/voice.ts), and the speaker here is
       // the tutor — neither Tom nor Liz. Omitting it lands on the default
       // multilingual voice, which is what a Hindi lesson should sound like.
-      const blob = await requestSpeech({ text, engine, targetLanguage: target });
+      const blob = await requestSpeech({ text, engine, targetLanguage: target }, { surface: "tutor" });
       if (!blob) return; // tier 2 — the page says so already
       a.src = URL.createObjectURL(blob);
       await a.play();

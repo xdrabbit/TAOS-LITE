@@ -205,7 +205,10 @@ export function TabletopShell(): JSX.Element {
           // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
           // Spanish in Tom's clone) — identical on every screen.
         },
-        { fetch: (input, init) => fetchWithRetry(input, init, { retries: 1, timeoutMs: 30000 }) }
+        {
+          fetch: (input, init) => fetchWithRetry(input, init, { retries: 1, timeoutMs: 30000 }),
+          surface: "tabletop"
+        }
       );
       if (!blob) return;
       const url = URL.createObjectURL(blob);

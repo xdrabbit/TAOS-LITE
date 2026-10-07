@@ -558,7 +558,8 @@ export function TranslatorShell({
         { text, engine, sourceLanguage: src, targetLanguage: tgt },
         {
           fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
-          failureMessage: s.ttsFailed
+          failureMessage: s.ttsFailed,
+          surface: "home"
         }
       );
       // null = text only. The guard above already caught the languages the

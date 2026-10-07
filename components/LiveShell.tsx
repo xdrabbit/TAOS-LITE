@@ -242,7 +242,7 @@ export function LiveShell(): JSX.Element {
     playingRef.current = true;
     setSpeakingConcept(true);
 
-    requestSpeech({ text: next.text, latency: "flash", ...next.languages })
+    requestSpeech({ text: next.text, latency: "flash", ...next.languages }, { surface: "live" })
       .then((blob) => {
         // null = text only (lib/tts/speech.ts). The feed already has the
         // concept on screen, which on a tier-2 language IS the whole readout —

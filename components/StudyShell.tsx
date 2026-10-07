@@ -238,7 +238,10 @@ export function StudyShell(): JSX.Element {
       playing.current = audio;
       setSpeaking(true);
       try {
-        const blob = await requestSpeech({ text, sourceLanguage: lang, targetLanguage: lang, engine: "elevenlabs" });
+        const blob = await requestSpeech(
+          { text, sourceLanguage: lang, targetLanguage: lang, engine: "elevenlabs" },
+          { surface: "study" }
+        );
         if (!blob) return;
         audio.src = URL.createObjectURL(blob);
         audio.playbackRate = slow ? 0.75 : 1;
