@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGE_OPTIONS } from "@/lib/realtime/languages";
+import { ttsDeviceHeaders } from "@/lib/tts/deviceHints";
 
 function labelFor(code: string): string {
   return LANGUAGE_OPTIONS.find((o) => o.code === code)?.label ?? code.toUpperCase();
@@ -288,7 +289,7 @@ export function AtomShell(): JSX.Element {
       setIsSpeaking(true);
       const res = await fetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...ttsDeviceHeaders("try") },
         body: JSON.stringify({ text: translation, engine: "openai" })
       });
       if (!res.ok) {

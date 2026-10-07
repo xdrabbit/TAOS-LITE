@@ -173,3 +173,47 @@ export function gatedFishAudioVoiceId(
   if (who === "liz") return fishVoiceFromEnv(FISHAUDIO_LIZ_VOICE_ENV);
   return null;
 }
+
+// ── The resolved voice (10/07) ─────────────────────────────────────────────
+// One answer to "who spoke this line, in which voice": the provider that is
+// actually called, the exact id sent to it, and whose voice that id is. The
+// route speaks from it and the request log (lib/tts/requestLog.ts) records
+// it, so the log can never describe a different voice than the one played.
+
+export type VoiceRole = "tom" | "liz" | "stock";
+export type TtsProvider = "elevenlabs" | "openai" | "fishaudio";
+
+export interface ResolvedVoice {
+  /** Who is called. Fish with no clone for the line is "elevenlabs". */
+  provider: TtsProvider;
+  /** The id sent to that provider (an OpenAI voice name for openai). */
+  voiceId: string;
+  /** "stock" whenever the id is not a clone, whatever was asked for. */
+  role: VoiceRole;
+}
+
+export const DEFAULT_OPENAI_VOICE = "nova";
+
+export function openAiVoiceName(): string {
+  return process.env.OPENAI_TTS_VOICE?.trim() || DEFAULT_OPENAI_VOICE;
+}
+
+export function resolveTtsVoice(
+  engine: TtsProvider,
+  unlocked: boolean,
+  sourceLanguage?: TtsLangCode,
+  targetLanguage?: TtsLangCode,
+  voice?: VoiceOverride
+): ResolvedVoice {
+  if (engine === "openai") return { provider: "openai", voiceId: openAiVoiceName(), role: "stock" };
+  const who = unlocked ? speakerClone(sourceLanguage, targetLanguage, voice) : null;
+  if (engine === "fishaudio") {
+    const fishId = gatedFishAudioVoiceId(unlocked, sourceLanguage, targetLanguage, voice);
+    if (fishId && who) return { provider: "fishaudio", voiceId: fishId, role: who };
+  }
+  const voiceId = gatedElevenLabsVoiceId(unlocked, sourceLanguage, targetLanguage, voice);
+  // A missing ELEVENLABS_LIZ_VOICE_ID hands back the stock id: say "stock",
+  // because that is what was heard.
+  const role: VoiceRole = who && voiceId !== defaultElevenLabsVoiceId() ? who : "stock";
+  return { provider: "elevenlabs", voiceId, role };
+}

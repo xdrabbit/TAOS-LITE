@@ -628,7 +628,7 @@ export async function startCallInterpreter(
           // late is worse than a voice with slightly less character.
           latency: "flash"
         },
-        { failureMessage: "Interpreter voice failed." }
+        { failureMessage: "Interpreter voice failed.", surface: "call" }
       );
       spend = addTtsCharacters(spend, text.length);
       publishSpend();

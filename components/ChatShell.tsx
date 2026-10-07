@@ -389,7 +389,7 @@ export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Elem
           text: m.body_translated ?? "",
           sourceLanguage: m.source_lang,
           targetLanguage: m.target_lang
-        });
+        }, { surface: "chat" });
         if (!blob) return null;
         const url = URL.createObjectURL(blob);
         ttsUrlCacheRef.current.set(m.id, url);

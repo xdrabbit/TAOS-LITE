@@ -261,7 +261,7 @@ export function FastShell(): JSX.Element {
         text: translation,
         sourceLanguage: detected,
         targetLanguage: target
-      });
+      }, { surface: "fast" });
       // null = the language is text-only. `speakable` already hid the button
       // for those, so reaching this is the stale-client case: a phone holding
       // an old bundle after a tier flipped. Quiet either way — it is not an

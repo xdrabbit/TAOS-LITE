@@ -879,6 +879,21 @@ blank.
 
 ## Shipped
 
+- **Every TTS request is logged: engine, voice id, whose voice, which device** —
+  Tom, 2026-10-07: Fish Audio sounded like a different VOICE on his phone than
+  on his computer, and ElevenLabs the same on both; he wanted a log that says
+  "which voice id was used, when, from what device." `/api/tts` logged nothing
+  on success. Now every request writes a `[taos-tts]` line to the Vercel log
+  and a row to `public.taos_lite_tts_log`: the provider that actually spoke
+  (`engine`) beside the one asked for (`requested_engine`), the exact
+  `voice_id`, `voice_role` (tom/liz/stock), `unlocked` as the server saw it,
+  device family / browser parsed from the User-Agent, a 12-hex `ua_hash`, a
+  client `standalone` hint (Home Screen app vs Safari tab) and the `surface`.
+  No text, no email, no raw UA. Service-role only (RLS on, no policies). The
+  write is fire-and-forget behind `waitUntil` with a 3s timeout; a failed
+  insert is a warning, never a failed request. `tests/tts-request-log.test.ts`.
+  (shipped 2026-10-07, PR #87)
+
 - **The default voice is ElevenLabs again; Fish Audio stays for testing** —
   Tom's decision, 2026-10-07, on phone playback quality: Fish Audio sounded
   acceptable on a computer the night #85 made it the home screen's subscriber

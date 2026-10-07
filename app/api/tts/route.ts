@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import {
-  gatedElevenLabsVoiceId,
-  gatedFishAudioVoiceId,
+  resolveTtsVoice,
+  type ResolvedVoice,
   type TtsLangCode as LangCode,
   type VoiceOverride
 } from "@/lib/tts/voice";
 import { PERSONAL_VOICE_HEADER, personalVoiceUnlocked } from "@/lib/tts/personalVoice";
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
+import {
+  TTS_STANDALONE_HEADER,
+  TTS_SURFACE_HEADER,
+  parseStandalone,
+  parseSurface,
+  parseUserAgent,
+  uaHash,
+  writeTtsLog,
+  type TtsLogRecord
+} from "@/lib/tts/requestLog";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,13 +34,13 @@ function isTimeout(e: unknown): boolean {
   return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
 }
 
-const DEFAULT_OPENAI_VOICE = "nova";
-
 // X-TTS-Engine says which provider actually spoke. It matters for Fish
 // Audio, the one engine that can hand a line to another provider (see
 // fishAudio below): without it, "that didn't sound like Fish" has no answer
 // short of the server log.
-function audioResponse(buffer: ArrayBuffer, engine: Engine): NextResponse {
+function audioResponse(buffer: ArrayBuffer, engine: Engine, log: RequestLog): NextResponse {
+  log.audioBytes = buffer.byteLength;
+  log.audioMime = "audio/mpeg";
   return new NextResponse(buffer, {
     status: 200,
     headers: {
@@ -40,6 +51,28 @@ function audioResponse(buffer: ArrayBuffer, engine: Engine): NextResponse {
   });
 }
 
+// What the request log (lib/tts/requestLog.ts) learns along the way. Filled
+// in as the handler goes, written once by POST whatever the outcome.
+type RequestLog = Pick<
+  TtsLogRecord,
+  | "userId"
+  | "engine"
+  | "requestedEngine"
+  | "voiceId"
+  | "voiceRole"
+  | "unlocked"
+  | "lang"
+  | "sourceLang"
+  | "textChars"
+  | "errorCode"
+  | "audioBytes"
+  | "audioMime"
+>;
+
+function providerFailed(log: RequestLog, status: number): void {
+  log.errorCode = `provider_${status}`;
+}
+
 // Cloned-voice selection lives in lib/tts/voice.ts (voice follows the
 // SPEAKER — see the unit tests that pin the rule), behind the personal-voice
 // gate in lib/tts/personalVoice.ts. The clone ids are resolved HERE, on the
@@ -48,17 +81,16 @@ function audioResponse(buffer: ArrayBuffer, engine: Engine): NextResponse {
 
 async function elevenLabs(
   text: string,
-  unlocked: boolean,
-  sourceLanguage?: LangCode,
+  voiceId: string,
+  log: RequestLog,
   targetLanguage?: LangCode,
-  latency?: "flash",
-  voice?: VoiceOverride
+  latency?: "flash"
 ): Promise<NextResponse> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
+    log.errorCode = "missing_key";
     return NextResponse.json({ error: "Missing ELEVENLABS_API_KEY." }, { status: 500 });
   }
-  const voiceId = gatedElevenLabsVoiceId(unlocked, sourceLanguage, targetLanguage, voice);
   // /live sends latency:"flash" — trade a little clone fidelity for the
   // lowest-latency model so spoken concepts don't lag the conversation.
   // Cantonese output overrides both: turbo/flash don't speak Cantonese (they
@@ -93,18 +125,19 @@ async function elevenLabs(
 
   if (!res.ok) {
     const detail = await res.text().catch(() => `HTTP ${res.status}`);
+    providerFailed(log, res.status);
     return NextResponse.json({ error: "ElevenLabs TTS failed.", details: detail }, { status: 502 });
   }
-  return audioResponse(await res.arrayBuffer(), "elevenlabs");
+  return audioResponse(await res.arrayBuffer(), "elevenlabs", log);
 }
 
-async function openai(text: string): Promise<NextResponse> {
+async function openai(text: string, voice: string, log: RequestLog): Promise<NextResponse> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
+    log.errorCode = "missing_key";
     return NextResponse.json({ error: "Missing OPENAI_API_KEY." }, { status: 500 });
   }
   const model = process.env.OPENAI_TTS_MODEL?.trim() || "gpt-4o-mini-tts";
-  const voice = process.env.OPENAI_TTS_VOICE?.trim() || DEFAULT_OPENAI_VOICE;
 
   const res = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
@@ -119,9 +152,10 @@ async function openai(text: string): Promise<NextResponse> {
 
   if (!res.ok) {
     const detail = await res.text().catch(() => `HTTP ${res.status}`);
+    providerFailed(log, res.status);
     return NextResponse.json({ error: "OpenAI TTS failed.", details: detail }, { status: 502 });
   }
-  return audioResponse(await res.arrayBuffer(), "openai");
+  return audioResponse(await res.arrayBuffer(), "openai", log);
 }
 
 /**
@@ -135,21 +169,19 @@ async function openai(text: string): Promise<NextResponse> {
  * rescue from a failure: a Fish error is a Fish error and comes back as a 502,
  * because quietly answering in another provider's voice is how a "why does
  * it sound different?" report is born. X-TTS-Engine says who spoke.
+ *
+ * The hand-off itself is decided in resolveTtsVoice (lib/tts/voice.ts): this
+ * function is only reached when there IS a Fish clone for the line.
  */
 async function fishAudio(
   text: string,
-  unlocked: boolean,
-  sourceLanguage?: LangCode,
-  targetLanguage?: LangCode,
-  latency?: "flash",
-  voice?: VoiceOverride
+  referenceId: string,
+  log: RequestLog,
+  latency?: "flash"
 ): Promise<NextResponse> {
-  const referenceId = gatedFishAudioVoiceId(unlocked, sourceLanguage, targetLanguage, voice);
-  if (!referenceId) {
-    return elevenLabs(text, unlocked, sourceLanguage, targetLanguage, latency, voice);
-  }
   const apiKey = process.env.FISHAUDIO_API_KEY;
   if (!apiKey) {
+    log.errorCode = "missing_key";
     return NextResponse.json({ error: "Missing FISHAUDIO_API_KEY." }, { status: 500 });
   }
 
@@ -176,9 +208,10 @@ async function fishAudio(
     // app's credit, so a funded account can still be empty here.
     const detail = await res.text().catch(() => `HTTP ${res.status}`);
     console.error(`[tts/fishaudio] HTTP ${res.status}: ${detail.slice(0, 300)}`);
+    providerFailed(log, res.status);
     return NextResponse.json({ error: "Fish Audio TTS failed.", details: detail }, { status: 502 });
   }
-  return audioResponse(await res.arrayBuffer(), "fishaudio");
+  return audioResponse(await res.arrayBuffer(), "fishaudio", log);
 }
 
 /**
@@ -190,7 +223,53 @@ async function fishAudio(
  */
 const ANON_MAX_CHARS = 1000;
 
+/**
+ * Every request is logged — success, refusal and failure alike — AFTER the
+ * answer is decided, and without waiting on the write: waitUntil keeps the
+ * function alive for the insert, and writeTtsLog cannot throw.
+ */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const started = Date.now();
+  const log: RequestLog = {
+    userId: null,
+    engine: null,
+    requestedEngine: null,
+    voiceId: null,
+    voiceRole: "none",
+    unlocked: false,
+    lang: null,
+    sourceLang: null,
+    textChars: 0,
+    errorCode: null,
+    audioBytes: null,
+    audioMime: null
+  };
+  const res = await handle(req, log);
+  try {
+    const ua = req.headers.get("user-agent");
+    const { device, browser } = parseUserAgent(ua);
+    const record: TtsLogRecord = {
+      ...log,
+      surface: parseSurface(req.headers.get(TTS_SURFACE_HEADER)),
+      standalone: parseStandalone(req.headers.get(TTS_STANDALONE_HEADER)),
+      device,
+      browser,
+      uaHash: uaHash(ua),
+      status: res.status === 200 ? "ok" : "error",
+      httpStatus: res.status,
+      errorCode: res.status === 200 ? null : (log.errorCode ?? `http_${res.status}`),
+      latencyMs: Date.now() - started
+    };
+    // A request the spend guard turned away gets the log line but no row:
+    // a flood of strangers must not become a flood of inserts.
+    waitUntil(log.errorCode === "guard" ? writeTtsLog(record, null) : writeTtsLog(record));
+  } catch (e) {
+    console.warn(`[taos-tts] log skipped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return res;
+}
+
+async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> {
   try {
     // FIRST, before the body is even read and long before a provider is
     // called. Until 8/19 this route answered anyone — a bare curl got 14KB of
@@ -201,7 +280,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // that costs and what it does not buy. Everything expensive on this route
     // stays behind a real session — see the engine check below.
     const guard = await guardSpend(req, { allowAnonymous: true });
-    if (!guard.ok) return guard.response;
+    if (!guard.ok) {
+      log.errorCode = "guard";
+      return guard.response;
+    }
+    log.userId = guard.user?.id ?? null;
 
     const body = (await req.json().catch(() => ({}))) as {
       text?: string;
@@ -218,7 +301,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const voice: VoiceOverride | undefined =
       body.voice === "tom" || body.voice === "liz" ? body.voice : undefined;
 
+    log.requestedEngine = typeof body.engine === "string" ? body.engine.slice(0, 20) : null;
+    log.textChars = text.length;
+    log.lang = typeof body.targetLanguage === "string" ? body.targetLanguage.slice(0, 12) : null;
+    log.sourceLang =
+      typeof body.sourceLanguage === "string" ? body.sourceLanguage.slice(0, 12) : null;
+
     if (!text) {
+      log.errorCode = "text_required";
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
     }
 
@@ -231,9 +321,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // caller asked for is how a "why does it sound wrong?" report is born.
     if (guard.anonymous) {
       if (engine !== "openai") {
+        log.errorCode = "anon_engine";
         return NextResponse.json({ error: SIGN_IN_REQUIRED }, { status: 401 });
       }
       if (text.length > ANON_MAX_CHARS) {
+        log.errorCode = "anon_too_long";
         return NextResponse.json(
           { error: "That is too long for the free trial. Please sign in." },
           { status: 413 }
@@ -253,6 +345,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // pass-through behavior (default voice, no opinion) rather than becoming a
     // new way for an existing caller to start failing.
     if (isLanguageCode(body.targetLanguage) && !canSpeak(body.targetLanguage)) {
+      log.errorCode = "text_only";
       return NextResponse.json(
         { error: "This language is text only.", textOnly: true },
         { status: 422 }
@@ -266,21 +359,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       process.env.TAOS_PERSONAL_VOICE_CODE
     );
 
+    // Which provider, which id, whose voice — one decision, shared with the log.
+    const resolved: ResolvedVoice = resolveTtsVoice(
+      engine,
+      unlocked,
+      body.sourceLanguage,
+      body.targetLanguage,
+      voice
+    );
+    log.unlocked = unlocked;
+    log.engine = resolved.provider;
+    log.voiceId = resolved.voiceId;
+    log.voiceRole = resolved.role;
+
     // `await` (not a bare returned promise) so a thrown timeout lands in the
     // catch below rather than escaping the handler as a generic 500.
-    if (engine === "openai") return await openai(text);
-    if (engine === "fishaudio") {
-      return await fishAudio(text, unlocked, body.sourceLanguage, body.targetLanguage, latency, voice);
+    if (resolved.provider === "openai") return await openai(text, resolved.voiceId, log);
+    if (resolved.provider === "fishaudio") {
+      return await fishAudio(text, resolved.voiceId, log, latency);
     }
-    return await elevenLabs(text, unlocked, body.sourceLanguage, body.targetLanguage, latency, voice);
+    return await elevenLabs(text, resolved.voiceId, log, body.targetLanguage, latency);
   } catch (error) {
     if (isTimeout(error)) {
+      log.errorCode = "timeout";
       return NextResponse.json(
         { error: "The voice service took too long. Please try again." },
         { status: 504 }
       );
     }
     const message = error instanceof Error ? error.message : "Unexpected server error.";
+    log.errorCode = "exception";
     return NextResponse.json({ error: "TTS failed.", details: message }, { status: 500 });
   }
 }
