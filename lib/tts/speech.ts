@@ -18,6 +18,7 @@
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { personalVoiceHeaders } from "./personalVoiceClient";
 import { authHeaders } from "@/lib/authClient";
+import type { TtsEngine } from "./engine";
 
 /**
  * The one sentence the app says about a tier-2 language, in both households'
@@ -45,7 +46,7 @@ export interface SpeechRequest {
   sourceLanguage?: string | null;
   /** What to speak. A tier-2 code here means no request is made at all. */
   targetLanguage?: string | null;
-  engine?: "elevenlabs" | "openai" | "fishaudio";
+  engine?: TtsEngine;
   /** /live trades clone fidelity for the fastest model. */
   latency?: "flash";
 }
