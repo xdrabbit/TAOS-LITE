@@ -3,6 +3,7 @@ import { stripe } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
 import { trustedOrigin } from "@/lib/authRedirect";
+import { stripeLocale } from "@/lib/stripeLocale";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!user) {
       return NextResponse.json({ error: "Not signed in." }, { status: 401 });
     }
+
+    const body = (await req.json().catch(() => ({}))) as { lang?: string };
 
     const { data: profile } = await supabaseAdmin
       .from("profiles")
@@ -36,7 +39,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const origin = trustedOrigin(req.headers.get("origin"));
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: origin
+      return_url: origin,
+      // Stripe's page, in the language the paywall was just read in.
+      locale: stripeLocale(body.lang)
     });
 
     return NextResponse.json({ url: session.url });

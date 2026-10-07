@@ -819,6 +819,7 @@ export function TranslatorShell({
     return (
       <Paywall
         email={email}
+        mine={mine}
         currentTier={getTier(profile)}
         onClose={() => setShowPaywall(false)}
         onSignOut={onSignOut}

@@ -293,14 +293,16 @@ export function tutorSecondsLeft(p: Profile | null, u: MonthlyUsage | null): num
 }
 
 // Launch Stripe Checkout for a chosen plan; redirects the browser on success.
-export async function startCheckout(plan: "basic" | "premium" = "basic"): Promise<void> {
+// `lang` is the phone owner's language; the route turns it into the locale
+// Stripe draws Checkout in (lib/stripeLocale.ts). It never touches the price.
+export async function startCheckout(plan: "basic" | "premium" = "basic", lang?: string): Promise<void> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error("Please sign in again.");
   const res = await fetch("/api/stripe/checkout", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ plan })
+    body: JSON.stringify({ plan, lang })
   });
   const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!res.ok || !payload.url) throw new Error(payload.error || "Could not start checkout.");
@@ -308,14 +310,14 @@ export async function startCheckout(plan: "basic" | "premium" = "basic"): Promis
 }
 
 // Buy a one-time add-on minute pack (paid users only). Redirects to Stripe.
-export async function startPackCheckout(pack: "100" | "200" = "100"): Promise<void> {
+export async function startPackCheckout(pack: "100" | "200" = "100", lang?: string): Promise<void> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error("Please sign in again.");
   const res = await fetch("/api/stripe/pack", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ pack })
+    body: JSON.stringify({ pack, lang })
   });
   const payload = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!res.ok || !payload.url) throw new Error(payload.error || "Could not start checkout.");
