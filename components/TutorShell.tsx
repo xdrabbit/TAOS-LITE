@@ -22,7 +22,10 @@ import {
   type ConvState,
   type StopReason
 } from "@/lib/tutor/conversation";
+import { studyRefFromQuery, practiceStorageKey, readPracticeProgress, savePracticeProgress, freshPractice, type StudyPracticeRef } from "@/lib/tutor/studyPractice";
 import type { TutorLevel } from "@/lib/tutor/types";
+import { StudySentencePreview } from "./tutor/StudySentencePreview";
+import { PreparedStudyPicker } from "./tutor/PreparedStudyPicker";
 import { ModulesShell } from "./tutor/ModulesShell";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
@@ -156,6 +159,8 @@ export function TutorShell(): JSX.Element {
   // prompts inline when this month's tutor minutes run out.
   return (
     <TutorModes
+      key={session.user.id}
+      userId={session.user.id}
       profile={profile}
       email={session.user.email ?? ""}
       balance={balance}
@@ -165,17 +170,20 @@ export function TutorShell(): JSX.Element {
 }
 
 function TutorModes({
+  userId,
   profile,
   email,
   balance,
   onBalance
 }: {
+  userId: string;
   profile: Profile | null;
   email: string;
   balance: TutorBalanceView | null;
   onBalance: () => Promise<void>;
 }): JSX.Element {
-  const [mode, setMode] = useState<Mode>("modules");
+  const [study] = useState(() => studyRefFromQuery(new URLSearchParams(window.location.search)));
+  const [mode, setMode] = useState<Mode>(study ? "partner" : "modules");
   const header = <TutorHeader mode={mode} onMode={setMode} balance={balance} />;
   if (mode === "modules") {
     return <ModulesShell header={header} profile={profile} onBalance={onBalance} />;
@@ -184,6 +192,8 @@ function TutorModes({
     <Drills mode={mode} onMode={setMode} balance={balance} />
   ) : (
     <Conversation
+      study={study ?? undefined}
+      userId={userId}
       mode={mode}
       onMode={setMode}
       profile={profile}
@@ -570,6 +580,8 @@ function fmt(sec: number): string {
 }
 
 function Conversation({
+  study: entryStudy,
+  userId,
   mode,
   onMode,
   profile,
@@ -577,6 +589,8 @@ function Conversation({
   balance,
   onBalance
 }: {
+  study?: StudyPracticeRef;
+  userId: string;
   mode: Mode;
   onMode: (m: Mode) => void;
   profile: Profile | null;
@@ -603,6 +617,24 @@ function Conversation({
   const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
   const [level, setLevel] = useState<TutorLevel>("intermediate");
   const [focus, setFocus] = useState("");
+  const [study, setStudy] = useState(entryStudy);
+  const [studyPair] = useState(() => new URLSearchParams(window.location.search));
+  const target = entryStudy ? studyPair.get("target") ?? theirs : theirs;
+  const learner = entryStudy ? studyPair.get("learner") ?? mine : mine;
+  const storageKey = study ? practiceStorageKey(userId, study) : "";
+  const [practiceProgress, setPracticeProgress] = useState(() => storageKey ? readPracticeProgress(storageKey) : freshPractice());
+  const [studyPhrase, setStudyPhrase] = useState("");
+  const [studyReady, setStudyReady] = useState(!entryStudy);
+  const onStudyLoaded = useCallback((phrase: string) => {
+    setStudyPhrase(phrase);
+    setStudyReady(true);
+  }, []);
+  useEffect(() => {
+    if (!entryStudy) { setStudy(undefined); setStudyPhrase(""); }
+  }, [mine, theirs, entryStudy]);
+  useEffect(() => {
+    setPracticeProgress(storageKey ? readPracticeProgress(storageKey) : freshPractice());
+  }, [storageKey]);
 
   const [convState, setConvState] = useState<ConvState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -649,6 +681,7 @@ function Conversation({
     setElapsed(0);
     setMuted(false);
 
+    if (entryStudy && !studyReady) return;
     if (!usageReady) return; // wait until we know the remaining allowance
     if (quotaBlocked) return; // minutes used up — UI shows upgrade instead
 
@@ -663,8 +696,10 @@ function Conversation({
     try {
       const sess = await startConversation(
         {
-          target: theirs,
-          learner: mine,
+          target,
+          learner,
+          study,
+          studyProgress: practiceProgress,
           level,
           phase: "partner",
           focus: focus.trim(),
@@ -673,6 +708,11 @@ function Conversation({
           authToken
         },
         {
+          onStudyPhrase: setStudyPhrase,
+          onStudyProgress: (progress) => {
+            setPracticeProgress(progress);
+            savePracticeProgress(storageKey, progress);
+          },
           onState: setConvState,
           onError: (m) => setError(m),
           onUserTranscript: (t) => setLines((prev) => [...prev, { role: "user", text: t }]),
@@ -740,7 +780,7 @@ function Conversation({
   }
 
   const remaining = Math.max(0, grantedSec - elapsed);
-  const targetName = languageNative(theirs);
+  const targetName = languageNative(target);
 
   if (showPaywall) {
     return (
@@ -757,18 +797,26 @@ function Conversation({
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
         <TutorHeader mode={mode} onMode={onMode} balance={balance} />
+        {study ? <section className="rounded-2xl border border-amber-300/30 p-4 text-amber-100">
+          <a href="/study" className="underline">Back to Study</a>
+          <p className="mt-2 font-semibold">Practice from your Study sentence</p>
+          {entryStudy ? <StudySentencePreview userId={userId} selection={entryStudy} target={target} learner={learner} onLoaded={onStudyLoaded} />
+            : studyPhrase ? <p>{studyPhrase}</p> : null}
+          <p className="mt-2 text-sm">{practiceProgress.retry ? "Try the same idea again" : practiceProgress.stage === "construction" ? "Build the sentence" : "Use the pattern in a new situation"}</p>
+          {practiceProgress.error ? <p className="text-sm">Review: {practiceProgress.error}</p> : null}
+          <p className="text-xs">Progress is saved on this device. Pronunciation scores remain in Study’s Say it.</p>
+        </section> : null}
 
         {!active && !connecting ? (
           // ── Setup ──
           <section className="flex flex-1 flex-col gap-4">
             <div className="rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-5">
-              <h2 className="text-xl font-semibold text-white">Talk with your tutor</h2>
+              <h2 className="text-xl font-semibold text-white">{study ? "Practice with Tutor" : "Talk with your tutor"}</h2>
               <p className="mt-1 text-sm text-amber-50/70">
-                A hands-free voice conversation. The tutor listens, talks back, and corrects your
-                pronunciation as you go. Just start talking.
+                {study ? "One prompt at a time: understand your phrase, build it yourself, then try a small variation. Ask about anything you do not understand." : "A hands-free voice conversation. The tutor listens, talks back, and helps you as you go. Just start talking."}
               </p>
 
-              <div className="mt-5">
+              {!entryStudy ? <div className="mt-5">
                 <LanguagePillRow
                   pills={pills}
                   selected={theirs}
@@ -778,7 +826,12 @@ function Conversation({
                   onSelect={selectLanguage}
                   onOpenSheet={() => setSheetOpen(true)}
                 />
-              </div>
+              </div> : <p className="mt-4 text-sm text-amber-100">{languageNative(target)} · {languageNative(learner)}</p>}
+
+              {!entryStudy ? <PreparedStudyPicker target={target} learner={learner} selected={study} onSelect={(ref, phrase) => {
+                setStudy(ref);
+                setStudyPhrase(phrase);
+              }} /> : null}
 
               <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
                 Level
@@ -788,6 +841,7 @@ function Conversation({
                   <button
                     key={lv}
                     type="button"
+                    aria-pressed={level === lv}
                     onClick={() => setLevel(lv)}
                     className={`flex-1 rounded-2xl border px-2 py-2.5 text-xs font-medium capitalize transition ${
                       level === lv
@@ -800,6 +854,7 @@ function Conversation({
                 ))}
               </div>
 
+              {!study ? <>
               <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
                 Topic (optional)
               </label>
@@ -809,6 +864,7 @@ function Conversation({
                 placeholder="e.g. ordering at a restaurant, baseball"
                 className="mt-2 w-full rounded-2xl border border-white/10 bg-[rgba(36,30,24,0.8)] px-3 py-3 text-base text-white outline-none placeholder:text-amber-100/30 focus:border-amber-300/50"
               />
+              </> : null}
             </div>
 
             {error ? (
@@ -844,6 +900,7 @@ function Conversation({
                 <button
                   type="button"
                   onClick={() => void start()}
+                  disabled={!!entryStudy && !studyReady}
                   className="flex h-16 items-center justify-center gap-3 rounded-2xl border border-amber-300/30 bg-stone-50 text-lg font-semibold text-stone-900 transition active:scale-[0.99] hover:bg-white"
                 >
                   <span className="inline-block h-5 w-5 rounded-full bg-emerald-500" />
@@ -915,7 +972,7 @@ function Conversation({
 
             {/* Steering */}
             <div className="flex flex-wrap gap-1.5">
-              {STEER_CHIPS.map((c) => (
+              {(study ? [STEER_CHIPS[0], { label: `Explain in ${languageNative(learner)}`, directive: `Please explain briefly in ${languageNative(learner)}, then return to the current practice prompt.` }] : STEER_CHIPS).map((c) => (
                 <button
                   key={c.label}
                   type="button"

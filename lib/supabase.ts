@@ -137,6 +137,14 @@ export async function listStudyLessons(limit = 200): Promise<StudyLessonRow[]> {
   return (data ?? []) as StudyLessonRow[];
 }
 
+/** Read the selected owned lesson before a tutor session starts. RLS still applies. */
+export async function getStudyLesson(userId: string, key: string): Promise<StudyLessonRow | null> {
+  const { data, error } = await supabase.from(STUDY_TABLE).select("*")
+    .eq("user_id", userId).eq("lesson_key", key).maybeSingle();
+  if (error) throw error;
+  return data as StudyLessonRow | null;
+}
+
 export async function deleteStudyLesson(id: string): Promise<void> {
   const { error } = await supabase.from(STUDY_TABLE).delete().eq("id", id);
   if (error) throw error;

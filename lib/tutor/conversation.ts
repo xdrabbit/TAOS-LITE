@@ -1,5 +1,7 @@
 "use client";
 
+import { applyPracticeEvaluation, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
+
 // WebRTC client for the realtime conversation tutor. Unlike the (deprecated)
 // translator realtime path, here we PLAY the model's audio back to the learner
 // and surface live transcripts over the data channel. Guardrails: a hard
@@ -49,12 +51,16 @@ export interface ConversationConfig {
   /** The module in play. Absent for Conversation Partner. */
   moduleId?: string;
   focus?: string;
+  study?: StudyPracticeRef;
+  studyProgress?: StudyPracticeProgress;
   maxDurationMs?: number; // hard cap; default 10 min
   idleTimeoutMs?: number; // silence auto-off; default 20 s
   authToken?: string; // Supabase access token, for the server-side trial gate
 }
 
 export interface ConversationEvents {
+  onStudyProgress?: (progress: StudyPracticeProgress) => void;
+  onStudyPhrase?: (phrase: string) => void;
   onState?: (s: ConvState) => void;
   onError?: (msg: string) => void;
   onUserTranscript?: (text: string) => void; // finalized learner speech
@@ -91,6 +97,7 @@ const DEFAULT_MAX_MS = 10 * 60 * 1000;
 const DEFAULT_IDLE_MS = 20 * 1000;
 
 interface MintResponse {
+  studyPhrase?: string;
   sessionId?: string;
   clientSecret: string;
   callUrl: string;
@@ -132,6 +139,9 @@ export async function startConversation(
   // Where the client says the scene is. Empty for Conversation Partner, which
   // has no script to be at a position in.
   let scriptState = "";
+  let studyProgress = config.studyProgress ?? freshPractice();
+  const handledCalls = new Set<string>();
+  let canEvaluateStudyAnswer = false;
   // The server's id for this session (lib/tutor/meter.ts). Held so the end of
   // the call can be reported against the same id the mint was logged under —
   // phase 2 reconciles the two lines into billed minutes.
@@ -274,7 +284,8 @@ export async function startConversation(
     dc.send(
       JSON.stringify({
         type: "response.create",
-        response: { instructions: `${baseInstructions}\n\nFor this turn only: ${nudge}` }
+        response: { instructions: `${baseInstructions}\n\n${scriptState}\n\nFor this turn only: ${nudge}`,
+          ...(config.study ? { tool_choice: "none" } : {}) }
       })
     );
   };
@@ -315,7 +326,9 @@ export async function startConversation(
     if (greeted || !dc || dc.readyState !== "open") return;
     greeted = true;
     sendTurn(
-      config.phase === "walk"
+      config.study
+        ? "Open the selected Study practice. Follow APP PRACTICE STATE, introduce the selected phrase briefly and ask exactly one prompt. If a retry is pending, revisit that error first."
+        : config.phase === "walk"
         ? // Walk opens IN the scene. A "hello, how are you?" here would spend
           // the learner's first line on small talk the roleplay does not
           // contain.
@@ -355,6 +368,7 @@ export async function startConversation(
         phase: config.phase,
         moduleId: config.moduleId ?? null,
         focus: config.focus ?? "",
+        ...(config.study ? { study: config.study, studyProgress } : {}),
         capSeconds: Math.round(maxMs / 1000)
       })
     });
@@ -366,6 +380,7 @@ export async function startConversation(
       throw new Error(mint.details || mint.error || "Could not start the tutor session.");
     }
     baseInstructions = mint.instructions ?? "";
+    if (mint.studyPhrase) events.onStudyPhrase?.(mint.studyPhrase);
     sessionId = mint.sessionId ?? "";
 
     // What the meter actually reserved. A free learner with four minutes left
@@ -478,7 +493,42 @@ export async function startConversation(
         dbg(`evt: ${type}`);
       }
 
+      // Tools complete at response.done; replying earlier can collide with an
+      // active response. Deduplicate call ids so a repeated event cannot earn mastery.
+      if (type === "response.done" && config.study) {
+        const response = ev.response as { status?: string; output?: Array<{ type?: string; name?: string; call_id?: string; arguments?: string }> } | undefined;
+        let continueTurn = false;
+        for (const item of response?.status === "completed" ? response.output ?? [] : []) {
+          if (item.type !== "function_call" || item.name !== "evaluate_study_answer" || !item.call_id || handledCalls.has(item.call_id)) continue;
+          handledCalls.add(item.call_id);
+          let evaluation: unknown = null;
+          try { evaluation = JSON.parse(item.arguments ?? ""); } catch { /* ask model to clarify */ }
+          const next = canEvaluateStudyAnswer ? applyPracticeEvaluation(studyProgress, evaluation) : studyProgress;
+          canEvaluateStudyAnswer = false;
+          const accepted = next !== studyProgress;
+          if (next !== studyProgress) {
+            studyProgress = next;
+            events.onStudyProgress?.(next);
+          }
+          setScriptState(practiceStateBlock(studyProgress));
+          dc?.send(JSON.stringify({ type: "conversation.item.create", item: {
+            type: "function_call_output", call_id: item.call_id,
+            output: JSON.stringify({ accepted, state: practiceStateBlock(studyProgress) })
+          } }));
+          continueTurn = true;
+        }
+        if (continueTurn) {
+          events.onAssistantDone?.();
+          const ended = turnEnded(gate);
+          gate = ended.gate;
+          if (ended.stopNow) { void stop("cap"); return; }
+          sendTurn(`Give brief feedback for the evaluated answer and exactly one next prompt. ${practiceStateBlock(studyProgress)}`);
+          bumpIdle();
+          return;
+        }
+      }
       if (type === "input_audio_buffer.speech_started") {
+        canEvaluateStudyAnswer = true;
         bumpIdle();
         return;
       }
