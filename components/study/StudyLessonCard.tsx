@@ -8,6 +8,9 @@
 // SCORED out loud, through SayIt, on every sentence and every rung.
 
 import type { StudyLesson, StudySentence } from "@/lib/study/types";
+import Link from "next/link";
+import { tutorEnabled } from "@/lib/release";
+import { studyPracticeHref, studyContextKey } from "@/lib/tutor/studyPractice";
 import { SayIt } from "./SayIt";
 
 /** Section headings in the language the lesson is written in. */
@@ -80,7 +83,7 @@ interface PracticeProps {
 }
 
 /** Hear it, hear it slowly, say it — on one line of the lesson. */
-function Practice({ text, L, p }: { text: string; L: (typeof LABELS)["en"]; p: PracticeProps }): JSX.Element {
+function Practice({ text, L, p, sentenceIndex, chunkIndex, contextKey }: { sentenceIndex: number; chunkIndex?: number; contextKey: string; text: string; L: (typeof LABELS)["en"]; p: PracticeProps }): JSX.Element {
   const base =
     "min-h-[36px] rounded-full border px-3 text-[13px] transition disabled:opacity-50 " +
     "border-white/15 bg-white/[0.04] text-amber-100/85 hover:bg-amber-400/10";
@@ -92,6 +95,9 @@ function Practice({ text, L, p }: { text: string; L: (typeof LABELS)["en"]; p: P
       <button type="button" className={base} disabled={p.busy} onClick={() => p.onHear(text, true)} aria-label={`${L.slow}: ${text}`}>
         🐢 {L.slow}
       </button>
+      {tutorEnabled() ? <Link className={base + " inline-flex items-center"} href={studyPracticeHref({ lessonKey: p.lessonKey, sentenceIndex, chunkIndex, contextKey }, p.target, p.explain)} aria-label={`Practice with Tutor: ${text}`}>
+        {p.explain === "es" ? "Practicar con el tutor" : "Practice with Tutor"}
+      </Link> : null}
       <div className="-mt-1 basis-full">
         <SayIt text={text} lang={p.target} explain={p.explain} lessonKey={p.lessonKey} best={p.bests[text] ?? null} onScored={p.onScored} />
       </div>
@@ -99,13 +105,13 @@ function Practice({ text, L, p }: { text: string; L: (typeof LABELS)["en"]; p: P
   );
 }
 
-function Sentence({ s, tName, xName, L, p }: { s: StudySentence; tName: string; xName: string; L: (typeof LABELS)["en"]; p: PracticeProps }): JSX.Element {
+function Sentence({ sentenceIndex, s, tName, xName, L, p }: { sentenceIndex: number; s: StudySentence; tName: string; xName: string; L: (typeof LABELS)["en"]; p: PracticeProps }): JSX.Element {
   const notes = s.words.filter((w) => w.note);
   return (
     <section className="[&+&]:mt-7 [&+&]:border-t [&+&]:border-white/10 [&+&]:pt-5">
       <div className="text-2xl font-semibold leading-tight tracking-[-0.01em] text-white">{s.target}</div>
       <div className="mt-1 text-[15px] text-amber-100/65">{s.english}</div>
-      <Practice text={s.target} L={L} p={p} />
+      <Practice contextKey={studyContextKey(s)} sentenceIndex={sentenceIndex} text={s.target} L={L} p={p} />
       {s.as_said ? <div className="mt-2 text-xs text-amber-100/50">{L.captured(s.as_said)}</div> : null}
 
       <H4>{L.words}</H4>
@@ -177,7 +183,7 @@ function Sentence({ s, tName, xName, L, p }: { s: StudySentence; tName: string; 
             {s.chunks.map((c, i) => (
               <li key={`${c}-${i}`} className="text-base text-white">
                 <div>{c}</div>
-                <Practice text={c} L={L} p={p} />
+                <Practice contextKey={studyContextKey(s)} sentenceIndex={sentenceIndex} chunkIndex={i} text={c} L={L} p={p} />
               </li>
             ))}
           </ol>
@@ -216,7 +222,7 @@ export function StudyLessonCard({
   return (
     <div>
       {lesson.sentences.map((s, i) => (
-        <Sentence key={`${s.target}-${i}`} s={s} tName={tName} xName={xName} L={L} p={p} />
+        <Sentence sentenceIndex={i} key={`${s.target}-${i}`} s={s} tName={tName} xName={xName} L={L} p={p} />
       ))}
       {lesson.caveats ? (
         <div className="mt-5 text-xs text-amber-100/50">

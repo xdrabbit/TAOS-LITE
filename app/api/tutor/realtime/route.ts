@@ -1,3 +1,5 @@
+import { readStudyLesson } from "@/lib/study/lessonStore";
+import { parseStudyRef, resolveStudyContext, studyInstructions, STUDY_EVALUATION_TOOL, parsePracticeProgress, practiceStateBlock } from "@/lib/tutor/studyPractice";
 import { NextRequest, NextResponse } from "next/server";
 import { getUserFromRequest } from "@/lib/authServer";
 import { tutorEnabled } from "@/lib/release";
@@ -105,14 +107,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     phase?: string;
     moduleId?: string;
     capSeconds?: number;
+    study?: unknown;
+    studyProgress?: unknown;
   };
 
   const pair = resolvePair(body);
   if (!pair) {
     return NextResponse.json({ error: "Unsupported language pair." }, { status: 400 });
   }
+  let studyContext;
+  if (body.study !== undefined) {
+    const ref = parseStudyRef(body.study);
+    if (!ref) return NextResponse.json({ error: "Invalid Study selection." }, { status: 400 });
+    const saved = await readStudyLesson(user.id, ref.lessonKey);
+    studyContext = saved && saved.target_lang === pair.target && saved.explain_lang === pair.learner
+      ? resolveStudyContext(saved.lesson, ref) : null;
+    if (!studyContext) return NextResponse.json({ error: "Study sentence unavailable. Return to Study and select a saved lesson." }, { status: 404 });
+  }
   const level = toTutorLevel(body.level);
-  const phase = toTutorPhase(body.phase);
+  const phase = studyContext ? "partner" : toTutorPhase(body.phase);
   const focus = typeof body.focus === "string" ? body.focus.slice(0, 200).trim() : "";
   const mod = getTutorModule(String(body.moduleId ?? ""));
 
@@ -196,7 +209,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { sessionId, grantedSeconds } = reservation;
 
-  const instructions = buildTutorInstructions({
+  const instructions = studyContext
+    ? studyInstructions(studyContext, level, pair.target, pair.learner) + "\n" + practiceStateBlock(parsePracticeProgress(body.studyProgress))
+    : buildTutorInstructions({
     target: pair.target,
     learner: pair.learner,
     level,
@@ -213,6 +228,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // REQUIRED for spoken replies. Without this the model only transcribes the
     // learner and never talks back (it defaults to text-only for some models).
     output_modalities: ["audio"],
+    ...(studyContext ? { tools: [STUDY_EVALUATION_TOOL], tool_choice: "auto" } : {}),
     audio: {
       input: {
         transcription: { model: transcribeModel },
@@ -295,6 +311,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       phase,
       moduleId: mod?.id ?? null,
       lessonAvailable: Boolean(lesson),
+      ...(studyContext ? { studyPhrase: studyContext.phrase } : {}),
       focus,
       instructions,
       expiresAt,
