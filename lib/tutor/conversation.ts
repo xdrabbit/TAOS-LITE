@@ -284,7 +284,7 @@ export async function startConversation(
     dc.send(
       JSON.stringify({
         type: "response.create",
-        response: { instructions: `${baseInstructions}\n\n${scriptState}\n\nFor this turn only: ${nudge}`,
+        response: { instructions: `${baseInstructions}\n\n${scriptState}\n\n${steerNotes.length ? `Live directives from the student (follow these from now on): ${steerNotes.join(" ")}` : ""}\n\nFor this turn only: ${nudge}`,
           ...(config.study ? { tool_choice: "none" } : {}) }
       })
     );

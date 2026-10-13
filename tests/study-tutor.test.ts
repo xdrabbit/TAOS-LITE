@@ -3,7 +3,7 @@ import { applyPracticeEvaluation, freshPractice, parsePracticeProgress, parseStu
 import { lesson } from "./fixtures/study-tutor";
 
 const ref = { lessonKey: "saved-key", sentenceIndex: 0 };
-const answer = (result: string, stage = "construction") => ({ result, stage, error: "Use haya venido for this reaction", prompt: "Say I'm surprised that he came" });
+const answer = (result: string, stage = "construction") => ({ result, stage, meaningPreserved: true, tensePreserved: true, error: "Use haya venido for this reaction", prompt: "Say I'm surprised that he came" });
 describe("Study context", () => {
   it("carries full parent context when a ladder phrase is selected", () => {
     const context = resolveStudyContext(lesson, { ...ref, chunkIndex: 0 });
@@ -39,6 +39,28 @@ describe("adaptive retry and progress", () => {
     const transferMiss = applyPracticeEvaluation(passed, answer("incorrect", "transfer"));
     expect(transferMiss).toMatchObject({ stage: "transfer", retry: true, successes: 1 });
     expect(applyPracticeEvaluation(transferMiss, answer("correct", "transfer")).successes).toBe(2);
+  });
+  it("requires the requested tense and meaning on the retry before advancing", () => {
+    const p = applyPracticeEvaluation(freshPractice(), answer("incorrect"));
+    const wrongTense = applyPracticeEvaluation(p, { ...answer("correct"), tensePreserved: false });
+    expect(wrongTense).toMatchObject({ stage: "construction", retry: true, successes: 0 });
+    const wrongMeaning = applyPracticeEvaluation(wrongTense, { ...answer("correct"), meaningPreserved: false });
+    expect(wrongMeaning).toMatchObject({ stage: "construction", retry: true, successes: 0 });
+    const { tensePreserved, ...unconfirmed } = answer("correct");
+    expect(applyPracticeEvaluation(wrongMeaning, unconfirmed)).toMatchObject({ retry: true, successes: 0 });
+    expect(applyPracticeEvaluation(wrongMeaning, answer("correct"))).toMatchObject({ stage: "transfer", retry: false, successes: 1 });
+  });
+  it("teaches English while explaining and correcting in Spanish at every level", () => {
+    const context = resolveStudyContext(lesson, ref)!;
+    for (const level of ["beginner", "intermediate", "advanced"] as const) {
+      const instructions = studyInstructions(context, level, "en", "es");
+      expect(instructions).toContain("EXPLANATION LANGUAGE: Spanish");
+      expect(instructions).toContain("TEACHING TARGET: English");
+      expect(instructions).toContain("from the FIRST turn");
+      expect(instructions).toContain("Do not pair a correction with a new exercise");
+      expect(instructions).toContain("is not past-tense");
+      expect(instructions).not.toContain("Intermediate: mostly target language");
+    }
   });
   it("never awards mastery for ambiguous speech or invalid evaluation", () => {
     const p = freshPractice();

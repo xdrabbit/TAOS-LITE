@@ -7,7 +7,7 @@ const sent: Array<Record<string, any>> = [];
 const channel = { readyState: "open", onopen: null as (() => void) | null, onmessage: null as ((e: { data: string }) => void) | null, send: (data: string) => sent.push(JSON.parse(data)), close: vi.fn() };
 function event(value: unknown) { channel.onmessage?.({ data: JSON.stringify(value) }); }
 function evaluation(id: string, result: string, stage = "construction") {
-  event({ type: "response.done", response: { status: "completed", output: [{ type: "function_call", name: "evaluate_study_answer", call_id: id, arguments: JSON.stringify({ stage, result, error: "Use haya", prompt: "Say I'm surprised he came" }) }] } });
+  event({ type: "response.done", response: { status: "completed", output: [{ type: "function_call", name: "evaluate_study_answer", call_id: id, arguments: JSON.stringify({ stage, result, meaningPreserved: true, tensePreserved: true, error: "Use haya", prompt: "Say I'm surprised he came" }) }] } });
 }
 beforeEach(() => {
   sent.length = 0; vi.useFakeTimers();
@@ -34,10 +34,13 @@ describe("Study realtime event integration", () => {
     expect(onPhrase).toHaveBeenCalledWith("haya venido");
     channel.onopen?.();
     expect(sent.at(-1)?.response.instructions).toContain("selected Study practice");
+    active.steer("Please explain in Spanish throughout.");
+    expect(sent.at(-1)?.response.instructions).toContain("Live directives from the student");
     event({ type: "input_audio_buffer.speech_started" });
     evaluation("first", "partial");
     expect(onProgress.mock.calls[0][0]).toMatchObject({ retry: true, stage: "construction", successes: 0 });
     expect(sent.at(-1)?.response.instructions).toContain("Require a retry");
+    expect(sent.at(-1)?.response.instructions).toContain("Please explain in Spanish throughout.");
     expect(sent.at(-1)?.response.tool_choice).toBe("none");
     evaluation("first", "partial"); // duplicate id
     evaluation("extra", "correct"); // second evaluation without a learner turn
