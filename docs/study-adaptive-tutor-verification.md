@@ -25,6 +25,14 @@ that lesson without rewriting device preferences. Changing the pair while a
 lesson is open returns to the picker instead of presenting an old lesson under
 misleading language labels.
 
+Study-link entry now reads the owned saved lesson before Start, displays the
+selected sentence/phrase and parent meaning, and keeps Start disabled until
+loading succeeds. Missing lessons, wrong language pairs and changed content
+produce a specific recovery message before microphone acquisition. The sentence
+fingerprint recursively sorts object keys because PostgreSQL JSONB can reorder
+fields on save; array order and actual content changes still matter. After this
+fingerprint correction, reopen an old sentence from Study to obtain a fresh link.
+
 ## Teaching loop and memory
 
 - Exactly one practice prompt per tutor turn, then wait for the learner.
@@ -64,8 +72,8 @@ Validated locally:
 
 - `npm run typecheck`
 - `npm run lint`
-- `NODE_OPTIONS=--no-experimental-webstorage npm test`: 104 files passed;
-  1,705 tests passed, 9 skipped. Local Node 26's global Web Storage otherwise
+- `NODE_OPTIONS=--no-experimental-webstorage npm test`: 105 files passed;
+  1,710 tests passed, 9 skipped. Local Node 26's global Web Storage otherwise
   interferes with existing jsdom tests. CI uses Node 22.
 - `npm run build`
 

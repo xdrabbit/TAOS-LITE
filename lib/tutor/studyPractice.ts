@@ -52,7 +52,16 @@ export function studyRefFromQuery(q: URLSearchParams): StudyPracticeRef | null {
 /** Content fingerprint prevents regenerated lessons from inheriting stale retries. */
 export function studyContextKey(sentence: StudySentence): string {
   let hash = 2166136261;
-  for (const char of JSON.stringify(sentence)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  // JSONB changes object property order when a freshly generated lesson is saved.
+  // Canonicalize objects recursively; array order remains meaningful.
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") return Object.fromEntries(
+      Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, canonical(item)])
+    );
+    return value;
+  };
+  for (const char of JSON.stringify(canonical(sentence))) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 export function resolveStudyContext(lesson: StudyLesson, ref: StudyPracticeRef): StudyPracticeContext | null {

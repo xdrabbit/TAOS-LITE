@@ -24,6 +24,7 @@ import {
 } from "@/lib/tutor/conversation";
 import { studyRefFromQuery, practiceStorageKey, readPracticeProgress, savePracticeProgress, freshPractice, type StudyPracticeRef } from "@/lib/tutor/studyPractice";
 import type { TutorLevel } from "@/lib/tutor/types";
+import { StudySentencePreview } from "./tutor/StudySentencePreview";
 import { PreparedStudyPicker } from "./tutor/PreparedStudyPicker";
 import { ModulesShell } from "./tutor/ModulesShell";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
@@ -623,6 +624,11 @@ function Conversation({
   const storageKey = study ? practiceStorageKey(userId, study) : "";
   const [practiceProgress, setPracticeProgress] = useState(() => storageKey ? readPracticeProgress(storageKey) : freshPractice());
   const [studyPhrase, setStudyPhrase] = useState("");
+  const [studyReady, setStudyReady] = useState(!entryStudy);
+  const onStudyLoaded = useCallback((phrase: string) => {
+    setStudyPhrase(phrase);
+    setStudyReady(true);
+  }, []);
   useEffect(() => {
     if (!entryStudy) { setStudy(undefined); setStudyPhrase(""); }
   }, [mine, theirs, entryStudy]);
@@ -675,6 +681,7 @@ function Conversation({
     setElapsed(0);
     setMuted(false);
 
+    if (entryStudy && !studyReady) return;
     if (!usageReady) return; // wait until we know the remaining allowance
     if (quotaBlocked) return; // minutes used up — UI shows upgrade instead
 
@@ -793,7 +800,8 @@ function Conversation({
         {study ? <section className="rounded-2xl border border-amber-300/30 p-4 text-amber-100">
           <a href="/study" className="underline">Back to Study</a>
           <p className="mt-2 font-semibold">Practice from your Study sentence</p>
-          {studyPhrase ? <p>{studyPhrase}</p> : null}
+          {entryStudy ? <StudySentencePreview userId={userId} selection={entryStudy} target={target} learner={learner} onLoaded={onStudyLoaded} />
+            : studyPhrase ? <p>{studyPhrase}</p> : null}
           <p className="mt-2 text-sm">{practiceProgress.retry ? "Try the same idea again" : practiceProgress.stage === "construction" ? "Build the sentence" : "Use the pattern in a new situation"}</p>
           {practiceProgress.error ? <p className="text-sm">Review: {practiceProgress.error}</p> : null}
           <p className="text-xs">Progress is saved on this device. Pronunciation scores remain in Study’s Say it.</p>
@@ -892,6 +900,7 @@ function Conversation({
                 <button
                   type="button"
                   onClick={() => void start()}
+                  disabled={!!entryStudy && !studyReady}
                   className="flex h-16 items-center justify-center gap-3 rounded-2xl border border-amber-300/30 bg-stone-50 text-lg font-semibold text-stone-900 transition active:scale-[0.99] hover:bg-white"
                 >
                   <span className="inline-block h-5 w-5 rounded-full bg-emerald-500" />
