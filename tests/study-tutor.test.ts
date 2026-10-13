@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPracticeEvaluation, freshPractice, parsePracticeProgress, parseStudyRef, practiceStateBlock, practiceStorageKey, resolveStudyContext, studyInstructions, studyContextKey, studyPracticeHref, studyRefFromQuery } from "@/lib/tutor/studyPractice";
+import { applyPracticeEvaluation, isEnglishHintRequest, freshPractice, parsePracticeProgress, parseStudyRef, practiceStateBlock, practiceStorageKey, resolveStudyContext, studyInstructions, studyContextKey, studyPracticeHref, studyRefFromQuery } from "@/lib/tutor/studyPractice";
 import { lesson } from "./fixtures/study-tutor";
 
 const ref = { lessonKey: "saved-key", sentenceIndex: 0 };
@@ -61,6 +61,18 @@ describe("adaptive retry and progress", () => {
       expect(instructions).toContain("is not past-tense");
       expect(instructions).not.toContain("Intermediate: mostly target language");
     }
+  });
+  it("keeps a requested English hint from consuming an attempt or clearing a retry", () => {
+    const pending = applyPracticeEvaluation(freshPractice(), answer("incorrect"));
+    expect(applyPracticeEvaluation(pending, answer("help"))).toBe(pending);
+    expect(isEnglishHintRequest("Give me a brief hint in English")).toBe(true);
+    expect(isEnglishHintRequest("Una pista en inglés, por favor")).toBe(true);
+    expect(isEnglishHintRequest("Speak slower")).toBe(false);
+    const instructions = studyInstructions(resolveStudyContext(lesson, ref)!, "beginner", "en", "es");
+    expect(instructions).toContain("DEFAULT EXPLANATION LANGUAGE: Spanish");
+    expect(instructions).toContain("ONE brief English hint");
+    expect(instructions).toContain("re-ask the SAME pending prompt");
+    expect(instructions).toContain("never a permanent switch");
   });
   it("never awards mastery for ambiguous speech or invalid evaluation", () => {
     const p = freshPractice();

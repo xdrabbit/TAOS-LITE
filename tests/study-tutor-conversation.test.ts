@@ -42,13 +42,28 @@ describe("Study realtime event integration", () => {
     expect(sent.at(-1)?.response.instructions).toContain("Require a retry");
     expect(sent.at(-1)?.response.instructions).toContain("Please explain in Spanish throughout.");
     expect(sent.at(-1)?.response.tool_choice).toBe("none");
+    active.steer("Give me a hint in English for this retry.");
+    expect(sent.at(-1)?.response.instructions).toContain("one short English clue");
+    expect(sent.at(-1)?.response.instructions).toContain("Require a retry");
+    expect(onProgress).toHaveBeenCalledTimes(1);
     evaluation("first", "partial"); // duplicate id
     evaluation("extra", "correct"); // second evaluation without a learner turn
     expect(onProgress).toHaveBeenCalledTimes(1);
     event({ type: "input_audio_buffer.speech_started" }); evaluation("retry", "correct");
+    expect(sent.at(-1)?.response.instructions).not.toContain("Give me a hint in English for this retry.");
     expect(onProgress.mock.calls[1][0]).toMatchObject({ retry: false, stage: "transfer", successes: 1, attempts: 2 });
     event({ type: "input_audio_buffer.speech_started" }); evaluation("transfer", "incorrect", "transfer");
     expect(onProgress.mock.calls[2][0]).toMatchObject({ retry: true, stage: "transfer", successes: 1 });
+  });
+  it("handles spoken help without treating it as an answer or clearing a retry", async () => {
+    const onProgress = vi.fn();
+    const pending = { ...freshPractice(), retry: true, attempts: 1, error: "past tense", prompt: "Say I needed" };
+    active = await startConversation({ target: "en", learner: "es", level: "beginner", phase: "partner", study: { lessonKey: "saved", sentenceIndex: 0 }, studyProgress: pending }, { onStudyProgress: onProgress });
+    event({ type: "input_audio_buffer.speech_started" });
+    evaluation("hint", "help");
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(sent.at(-1)?.response.instructions).toContain("Give the requested brief hint");
+    expect(sent.at(-1)?.response.instructions).toContain("Require a retry");
   });
   it("ignores malformed tool data without awarding progress", async () => {
     const onProgress = vi.fn();

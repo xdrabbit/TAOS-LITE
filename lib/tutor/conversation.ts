@@ -1,6 +1,6 @@
 "use client";
 
-import { applyPracticeEvaluation, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
+import { applyPracticeEvaluation, isEnglishHintRequest, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
 
 // WebRTC client for the realtime conversation tutor. Unlike the (deprecated)
 // translator realtime path, here we PLAY the model's audio back to the learner
@@ -308,6 +308,10 @@ export async function startConversation(
   const steer = (text: string) => {
     const t = text.trim();
     if (!t) return;
+    if (config.study && isEnglishHintRequest(t)) {
+      sendTurn(`The learner requests a brief English hint: "${t}". Give one short English clue, then return to the default explanation language and request the SAME pending answer. Preserve all practice state, especially a pending retry. This is help, not an answer or a persistent language switch.`);
+      return;
+    }
     steerNotes.push(t);
     pushSessionUpdate();
     // Nudge the tutor to acknowledge the change right away.
@@ -498,11 +502,13 @@ export async function startConversation(
       if (type === "response.done" && config.study) {
         const response = ev.response as { status?: string; output?: Array<{ type?: string; name?: string; call_id?: string; arguments?: string }> } | undefined;
         let continueTurn = false;
+        let requestedHelp = false;
         for (const item of response?.status === "completed" ? response.output ?? [] : []) {
           if (item.type !== "function_call" || item.name !== "evaluate_study_answer" || !item.call_id || handledCalls.has(item.call_id)) continue;
           handledCalls.add(item.call_id);
           let evaluation: unknown = null;
           try { evaluation = JSON.parse(item.arguments ?? ""); } catch { /* ask model to clarify */ }
+          requestedHelp = requestedHelp || (evaluation as { result?: string } | null)?.result === "help";
           const next = canEvaluateStudyAnswer ? applyPracticeEvaluation(studyProgress, evaluation) : studyProgress;
           canEvaluateStudyAnswer = false;
           const accepted = next !== studyProgress;
@@ -522,7 +528,7 @@ export async function startConversation(
           const ended = turnEnded(gate);
           gate = ended.gate;
           if (ended.stopNow) { void stop("cap"); return; }
-          sendTurn(`Give brief feedback for the evaluated answer and exactly one next prompt. ${practiceStateBlock(studyProgress)}`);
+          sendTurn(`${requestedHelp ? "Give the requested brief hint, return to the default explanation language, and re-ask the SAME pending prompt without advancing." : "Give brief feedback for the evaluated answer and exactly one next prompt."} ${practiceStateBlock(studyProgress)}`);
           bumpIdle();
           return;
         }
