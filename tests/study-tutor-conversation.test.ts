@@ -43,7 +43,7 @@ describe("Study realtime event integration", () => {
     expect(sent.at(-1)?.response.instructions).toContain("Please explain in Spanish throughout.");
     expect(sent.at(-1)?.response.tool_choice).toBe("none");
     active.steer("Give me a hint in English for this retry.");
-    expect(sent.at(-1)?.response.instructions).toContain("one short English clue");
+    expect(sent.at(-1)?.response.instructions).toContain("ONE short clue in the configured EXPLAINED-IN language");
     expect(sent.at(-1)?.response.instructions).toContain("Require a retry");
     expect(onProgress).toHaveBeenCalledTimes(1);
     evaluation("first", "partial"); // duplicate id

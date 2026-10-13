@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPracticeEvaluation, isEnglishHintRequest, freshPractice, parsePracticeProgress, parseStudyRef, practiceStateBlock, practiceStorageKey, resolveStudyContext, studyInstructions, studyContextKey, studyPracticeHref, studyRefFromQuery } from "@/lib/tutor/studyPractice";
+import { applyPracticeEvaluation, isStudyHelpRequest, freshPractice, parsePracticeProgress, parseStudyRef, practiceStateBlock, practiceStorageKey, resolveStudyContext, studyInstructions, studyContextKey, studyPracticeHref, studyRefFromQuery } from "@/lib/tutor/studyPractice";
 import { lesson } from "./fixtures/study-tutor";
 
 const ref = { lessonKey: "saved-key", sentenceIndex: 0 };
@@ -50,29 +50,34 @@ describe("adaptive retry and progress", () => {
     expect(applyPracticeEvaluation(wrongMeaning, unconfirmed)).toMatchObject({ retry: true, successes: 0 });
     expect(applyPracticeEvaluation(wrongMeaning, answer("correct"))).toMatchObject({ stage: "transfer", retry: false, successes: 1 });
   });
-  it("teaches English while explaining and correcting in Spanish at every level", () => {
+  it("increases teaching in the learned language while hints use the other language", () => {
     const context = resolveStudyContext(lesson, ref)!;
     for (const level of ["beginner", "intermediate", "advanced"] as const) {
       const instructions = studyInstructions(context, level, "en", "es");
-      expect(instructions).toContain("EXPLANATION LANGUAGE: Spanish");
-      expect(instructions).toContain("TEACHING TARGET: English");
-      expect(instructions).toContain("from the FIRST turn");
+      expect(instructions).toContain("EXPLAINED-IN LANGUAGE: Spanish");
+      expect(instructions).toContain("LEARNED/TAUGHT LANGUAGE: English");
+      expect(instructions).toContain("Every learner turn MUST first call evaluate_study_answer");
       expect(instructions).toContain("Do not pair a correction with a new exercise");
       expect(instructions).toContain("is not past-tense");
-      expect(instructions).not.toContain("Intermediate: mostly target language");
+      expect(instructions).toContain("As app-recorded successes grow");
+      expect(instructions).toContain("Never create a repeated pronunciation drill");
+      const reverse = studyInstructions(context, level, "es", "en");
+      expect(reverse).toContain("LEARNED/TAUGHT LANGUAGE: Spanish");
+      expect(reverse).toContain("EXPLAINED-IN LANGUAGE: English");
+      expect(reverse).toContain("ONE short clue in English");
     }
   });
-  it("keeps a requested English hint from consuming an attempt or clearing a retry", () => {
+  it("keeps a requested hint from consuming an attempt or clearing a retry", () => {
     const pending = applyPracticeEvaluation(freshPractice(), answer("incorrect"));
     expect(applyPracticeEvaluation(pending, answer("help"))).toBe(pending);
-    expect(isEnglishHintRequest("Give me a brief hint in English")).toBe(true);
-    expect(isEnglishHintRequest("Una pista en inglés, por favor")).toBe(true);
-    expect(isEnglishHintRequest("Speak slower")).toBe(false);
+    expect(isStudyHelpRequest("Give me a brief hint in English")).toBe(true);
+    expect(isStudyHelpRequest("Una pista en inglés, por favor")).toBe(true);
+    expect(isStudyHelpRequest("Speak slower")).toBe(false);
     const instructions = studyInstructions(resolveStudyContext(lesson, ref)!, "beginner", "en", "es");
-    expect(instructions).toContain("DEFAULT EXPLANATION LANGUAGE: Spanish");
-    expect(instructions).toContain("ONE brief English hint");
-    expect(instructions).toContain("re-ask the SAME pending prompt");
-    expect(instructions).toContain("never a permanent switch");
+    expect(instructions).toContain("EXPLAINED-IN LANGUAGE: Spanish");
+    expect(instructions).toContain("ONE short clue in Spanish");
+    expect(instructions).toContain("the SAME pending practice prompt");
+    expect(instructions).toContain("Do not permanently switch");
   });
   it("never awards mastery for ambiguous speech or invalid evaluation", () => {
     const p = freshPractice();
@@ -94,7 +99,7 @@ describe("adaptive retry and progress", () => {
       expect(prompt).toContain("exactly ONE prompt");
       expect(prompt).toContain("smallest meaningful error");
       expect(prompt).toContain("Never invent an Azure score");
-      expect(prompt).toContain("reduce after repeated errors");
+      expect(prompt).toContain("After repeated difficulty simplify");
       expect(prompt).toContain(context.sentence.context_meaning);
     }
   });

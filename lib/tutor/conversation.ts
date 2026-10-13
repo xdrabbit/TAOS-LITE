@@ -1,6 +1,6 @@
 "use client";
 
-import { applyPracticeEvaluation, isEnglishHintRequest, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
+import { applyPracticeEvaluation, isStudyHelpRequest, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
 
 // WebRTC client for the realtime conversation tutor. Unlike the (deprecated)
 // translator realtime path, here we PLAY the model's audio back to the learner
@@ -308,8 +308,8 @@ export async function startConversation(
   const steer = (text: string) => {
     const t = text.trim();
     if (!t) return;
-    if (config.study && isEnglishHintRequest(t)) {
-      sendTurn(`The learner requests a brief English hint: "${t}". Give one short English clue, then return to the default explanation language and request the SAME pending answer. Preserve all practice state, especially a pending retry. This is help, not an answer or a persistent language switch.`);
+    if (config.study && isStudyHelpRequest(t)) {
+      sendTurn(`The learner requests help: "${t}". Give ONE short clue in the configured EXPLAINED-IN language, then return to the LEARNED/TAUGHT language and request the SAME pending answer. Preserve all practice state, especially a pending retry. This is help, not an answer or a persistent language switch.`);
       return;
     }
     steerNotes.push(t);
@@ -528,7 +528,7 @@ export async function startConversation(
           const ended = turnEnded(gate);
           gate = ended.gate;
           if (ended.stopNow) { void stop("cap"); return; }
-          sendTurn(`${requestedHelp ? "Give the requested brief hint, return to the default explanation language, and re-ask the SAME pending prompt without advancing." : "Give brief feedback for the evaluated answer and exactly one next prompt."} ${practiceStateBlock(studyProgress)}`);
+          sendTurn(`${requestedHelp ? "Give the requested brief hint in the EXPLAINED-IN language, then return to the LEARNED/TAUGHT language and re-ask the SAME pending prompt without advancing." : "Give brief feedback for the evaluated answer and exactly one next prompt."} ${practiceStateBlock(studyProgress)}`);
           bumpIdle();
           return;
         }
