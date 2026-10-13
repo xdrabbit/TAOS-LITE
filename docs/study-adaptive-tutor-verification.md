@@ -13,6 +13,18 @@ grammar explanations, word notes and ladder remain available to the tutor even
 when entering from a short phrase. Missing saved lessons fail with a return-to-
 Study message; ordinary Partner, Walk and Run retain their existing personas.
 
+Partner opened directly now includes a **Prepared Study sentence** chooser. It
+lists owned sentences matching the current learning/explanation language pair;
+selecting one shows the prepared sentence before starting and uses the same
+contextual tutoring loop as a Study link. Free conversation remains an explicit
+choice. Flipping the pair clears the old selection. If that account has no saved
+lesson for the pair, the chooser links back to Study to prepare one.
+
+Opening a saved Study lesson synchronizes the displayed language selectors to
+that lesson without rewriting device preferences. Changing the pair while a
+lesson is open returns to the picker instead of presenting an old lesson under
+misleading language labels.
+
 ## Teaching loop and memory
 
 - Exactly one practice prompt per tutor turn, then wait for the learner.
@@ -52,8 +64,8 @@ Validated locally:
 
 - `npm run typecheck`
 - `npm run lint`
-- `NODE_OPTIONS=--no-experimental-webstorage npm test`: 102 files passed;
-  1,698 tests passed, 9 skipped. Local Node 26's global Web Storage otherwise
+- `NODE_OPTIONS=--no-experimental-webstorage npm test`: 104 files passed;
+  1,705 tests passed, 9 skipped. Local Node 26's global Web Storage otherwise
   interferes with existing jsdom tests. CI uses Node 22.
 - `npm run build`
 
@@ -62,7 +74,12 @@ package manifest directly depends on Linux SWC. No dependency/lockfile changes.
 
 ## Tom's voice review after preview deployment
 
-1. With the existing tutor flag on and a signed-in account, open a saved Study
+1. Open Partner directly from an English account. Set learning to English and
+   explanation to Spanish; choose an English sentence in **Prepared Study
+   sentence**. Confirm it appears before Start and is what the tutor teaches.
+   Switch back to Spanish and check that the old selection clears and only
+   sentences for the new direction are offered.
+2. With the existing tutor flag on and a signed-in account, open a saved Study
    sentence. Confirm all explanations, ladder rungs, audio and Say it remain.
 2. Choose Practice with Tutor on a sentence, then separately on an early rung.
    Confirm the language pair, selected phrase and its parent meaning are used.

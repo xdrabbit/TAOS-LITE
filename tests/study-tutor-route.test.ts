@@ -32,6 +32,16 @@ describe("owned Study practice mint", () => {
     expect(mint.instructions).toContain("Reaction to an event");
     expect((await res.json()).studyPhrase).toBe("haya venido");
   });
+  it("teaches a prepared English sentence in Spanish independently of account defaults", async () => {
+    const englishLesson = { ...lesson, target_language: "en", explain_language: "es", sentences: [{ ...lesson.sentences[0], target: "I'm surprised that he came.", english: "Me sorprende que haya venido.", chunks: ["he came"] }] };
+    mocks.read.mockResolvedValue({ lesson: englishLesson, target_lang: "en", explain_lang: "es" });
+    const res = await POST(request({ ...body, target: "en", learner: "es" }));
+    expect(res.status).toBe(200);
+    const mint = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).session;
+    expect(mint.instructions).toContain("teaching English to a Spanish speaker");
+    expect(mint.instructions).toContain("I'm surprised that he came.");
+    expect((await res.json()).studyPhrase).toBe("he came");
+  });
   it("refuses missing/other-user lessons and invalid selections before reserving minutes", async () => {
     mocks.read.mockResolvedValue(null);
     expect((await POST(request())).status).toBe(404);

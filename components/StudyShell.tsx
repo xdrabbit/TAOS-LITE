@@ -201,6 +201,9 @@ export function StudyShell(): JSX.Element {
   );
 
   const openSaved = useCallback((row: StudyLessonRow) => {
+    // The selectors describe the open lesson, not the account/device defaults.
+    setLearn(row.target_lang);
+    setExplain(row.explain_lang);
     setLesson({
       id: row.id,
       key: row.lesson_key,
@@ -292,6 +295,10 @@ export function StudyShell(): JSX.Element {
               value={learn}
               onChange={(e) => {
                 setLearn(e.target.value);
+                if (view === "lesson") {
+                  setLesson(null);
+                  setView("pick");
+                }
                 writePref(LEARN_KEY, e.target.value);
                 if (e.target.value === explain) {
                   const other = options.find((c) => c !== e.target.value) ?? "en";
@@ -314,6 +321,10 @@ export function StudyShell(): JSX.Element {
               value={explain}
               onChange={(e) => {
                 setExplain(e.target.value);
+                if (view === "lesson") {
+                  setLesson(null);
+                  setView("pick");
+                }
                 writePref(EXPLAIN_KEY, e.target.value);
               }}
             >

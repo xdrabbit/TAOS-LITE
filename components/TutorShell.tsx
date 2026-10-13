@@ -24,6 +24,7 @@ import {
 } from "@/lib/tutor/conversation";
 import { studyRefFromQuery, practiceStorageKey, readPracticeProgress, savePracticeProgress, freshPractice, type StudyPracticeRef } from "@/lib/tutor/studyPractice";
 import type { TutorLevel } from "@/lib/tutor/types";
+import { PreparedStudyPicker } from "./tutor/PreparedStudyPicker";
 import { ModulesShell } from "./tutor/ModulesShell";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
@@ -578,7 +579,7 @@ function fmt(sec: number): string {
 }
 
 function Conversation({
-  study,
+  study: entryStudy,
   userId,
   mode,
   onMode,
@@ -615,12 +616,19 @@ function Conversation({
   const { mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair();
   const [level, setLevel] = useState<TutorLevel>("intermediate");
   const [focus, setFocus] = useState("");
+  const [study, setStudy] = useState(entryStudy);
   const [studyPair] = useState(() => new URLSearchParams(window.location.search));
-  const target = study ? studyPair.get("target") ?? theirs : theirs;
-  const learner = study ? studyPair.get("learner") ?? mine : mine;
+  const target = entryStudy ? studyPair.get("target") ?? theirs : theirs;
+  const learner = entryStudy ? studyPair.get("learner") ?? mine : mine;
   const storageKey = study ? practiceStorageKey(userId, study) : "";
   const [practiceProgress, setPracticeProgress] = useState(() => storageKey ? readPracticeProgress(storageKey) : freshPractice());
   const [studyPhrase, setStudyPhrase] = useState("");
+  useEffect(() => {
+    if (!entryStudy) { setStudy(undefined); setStudyPhrase(""); }
+  }, [mine, theirs, entryStudy]);
+  useEffect(() => {
+    setPracticeProgress(storageKey ? readPracticeProgress(storageKey) : freshPractice());
+  }, [storageKey]);
 
   const [convState, setConvState] = useState<ConvState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -800,7 +808,7 @@ function Conversation({
                 {study ? "One prompt at a time: understand your phrase, build it yourself, then try a small variation. Ask about anything you do not understand." : "A hands-free voice conversation. The tutor listens, talks back, and helps you as you go. Just start talking."}
               </p>
 
-              {!study ? <div className="mt-5">
+              {!entryStudy ? <div className="mt-5">
                 <LanguagePillRow
                   pills={pills}
                   selected={theirs}
@@ -811,6 +819,11 @@ function Conversation({
                   onOpenSheet={() => setSheetOpen(true)}
                 />
               </div> : <p className="mt-4 text-sm text-amber-100">{languageNative(target)} · {languageNative(learner)}</p>}
+
+              {!entryStudy ? <PreparedStudyPicker target={target} learner={learner} selected={study} onSelect={(ref, phrase) => {
+                setStudy(ref);
+                setStudyPhrase(phrase);
+              }} /> : null}
 
               <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-emerald-100/50">
                 Level
