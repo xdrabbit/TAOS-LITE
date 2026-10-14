@@ -57,13 +57,25 @@ describe("Study realtime event integration", () => {
   });
   it("handles spoken help without treating it as an answer or clearing a retry", async () => {
     const onProgress = vi.fn();
-    const pending = { ...freshPractice(), retry: true, attempts: 1, error: "past tense", prompt: "Say I needed" };
+    const pending = { ...freshPractice(), retry: true, attempts: 1, error: "past tense", prompt: "Say I needed that break" };
     active = await startConversation({ target: "en", learner: "es", level: "beginner", phase: "partner", study: { lessonKey: "saved", sentenceIndex: 0 }, studyProgress: pending }, { onStudyProgress: onProgress });
     event({ type: "input_audio_buffer.speech_started" });
     evaluation("hint", "help");
     expect(onProgress).not.toHaveBeenCalled();
     expect(sent.at(-1)?.response.instructions).toContain("Give the requested brief hint");
+    expect(sent.at(-1)?.response.instructions).toContain('Repeat this exact pending prompt verbatim: "Say I needed that break"');
+    expect(sent.at(-1)?.response.instructions).toContain("do not change break to rest");
+    expect(sent.at(-1)?.response.instructions).not.toContain('Repeat this exact pending prompt verbatim: "Say I\'m surprised he came"');
     expect(sent.at(-1)?.response.instructions).toContain("Require a retry");
+  });
+  it("pins spoken hints to the evaluated current prompt when no retry is saved", async () => {
+    const onProgress = vi.fn();
+    active = await startConversation({ target: "en", learner: "es", level: "intermediate", phase: "partner", study: { lessonKey: "saved", sentenceIndex: 0 }, studyProgress: { ...freshPractice(), stage: "transfer", successes: 1 } }, { onStudyProgress: onProgress });
+    event({ type: "input_audio_buffer.speech_started" });
+    evaluation("help-transfer", "help", "transfer");
+    expect(sent.at(-1)?.response.instructions).toContain(`Repeat this exact pending prompt verbatim: "Say I'm surprised he came"`);
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(sent.at(-1)?.response.tool_choice).toBe("none");
   });
   it("ignores malformed tool data without awarding progress", async () => {
     const onProgress = vi.fn();
