@@ -33,6 +33,19 @@ fingerprint recursively sorts object keys because PostgreSQL JSONB can reorder
 fields on save; array order and actual content changes still matter. After this
 fingerprint correction, reopen an old sentence from Study to obtain a fresh link.
 
+## Teaching and support languages
+
+The learned/taught language is used for phrases, learner answers and practice
+prompts, increasingly for teaching as successful answers accumulate. The
+explained-in language is used for hints and support. An English lesson explained
+in Spanish uses English teaching and Spanish hints; the reverse uses Spanish
+teaching and English hints. Help preserves the pending objective and retry.
+
+Automatic Study learner turns require a structured evaluation first; the app
+applies it before requesting the spoken reply. This keeps recorded progress and
+the next spoken objective aligned. A correct meaning/tense is not blocked by an
+imperfect accent, and pronunciation drills remain separate in Azure Say it.
+
 ## Teaching loop and memory
 
 - Exactly one practice prompt per tutor turn, then wait for the learner.

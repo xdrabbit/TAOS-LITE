@@ -27,6 +27,7 @@ describe("owned Study practice mint", () => {
     expect(mocks.read).toHaveBeenCalledWith("tom", "saved-key");
     expect(mocks.begin).toHaveBeenCalledWith(expect.objectContaining({ phase: "partner", target: "es", level: "beginner" }));
     const mint = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).session;
+    expect(mint.tool_choice).toBe("required");
     expect(mint.tools[0].name).toBe("evaluate_study_answer");
     expect(mint.instructions).toContain("haya venido");
     expect(mint.instructions).toContain("Reaction to an event");

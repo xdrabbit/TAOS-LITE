@@ -228,7 +228,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // REQUIRED for spoken replies. Without this the model only transcribes the
     // learner and never talks back (it defaults to text-only for some models).
     output_modalities: ["audio"],
-    ...(studyContext ? { tools: [STUDY_EVALUATION_TOOL], tool_choice: "auto" } : {}),
+    ...(studyContext ? { tools: [STUDY_EVALUATION_TOOL], tool_choice: "required" } : {}),
     audio: {
       input: {
         transcription: { model: transcribeModel },

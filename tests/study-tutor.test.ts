@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyPracticeEvaluation, freshPractice, parsePracticeProgress, parseStudyRef, practiceStateBlock, practiceStorageKey, resolveStudyContext, studyInstructions, studyContextKey, studyPracticeHref, studyRefFromQuery } from "@/lib/tutor/studyPractice";
+import { applyPracticeEvaluation, isStudyHelpRequest, freshPractice, parsePracticeProgress, parseStudyRef, practiceStateBlock, practiceStorageKey, resolveStudyContext, studyInstructions, studyContextKey, studyPracticeHref, studyRefFromQuery } from "@/lib/tutor/studyPractice";
 import { lesson } from "./fixtures/study-tutor";
 
 const ref = { lessonKey: "saved-key", sentenceIndex: 0 };
-const answer = (result: string, stage = "construction") => ({ result, stage, error: "Use haya venido for this reaction", prompt: "Say I'm surprised that he came" });
+const answer = (result: string, stage = "construction") => ({ result, stage, meaningPreserved: true, tensePreserved: true, error: "Use haya venido for this reaction", prompt: "Say I'm surprised that he came" });
 describe("Study context", () => {
   it("carries full parent context when a ladder phrase is selected", () => {
     const context = resolveStudyContext(lesson, { ...ref, chunkIndex: 0 });
@@ -40,6 +40,45 @@ describe("adaptive retry and progress", () => {
     expect(transferMiss).toMatchObject({ stage: "transfer", retry: true, successes: 1 });
     expect(applyPracticeEvaluation(transferMiss, answer("correct", "transfer")).successes).toBe(2);
   });
+  it("requires the requested tense and meaning on the retry before advancing", () => {
+    const p = applyPracticeEvaluation(freshPractice(), answer("incorrect"));
+    const wrongTense = applyPracticeEvaluation(p, { ...answer("correct"), tensePreserved: false });
+    expect(wrongTense).toMatchObject({ stage: "construction", retry: true, successes: 0 });
+    const wrongMeaning = applyPracticeEvaluation(wrongTense, { ...answer("correct"), meaningPreserved: false });
+    expect(wrongMeaning).toMatchObject({ stage: "construction", retry: true, successes: 0 });
+    const { tensePreserved, ...unconfirmed } = answer("correct");
+    expect(applyPracticeEvaluation(wrongMeaning, unconfirmed)).toMatchObject({ retry: true, successes: 0 });
+    expect(applyPracticeEvaluation(wrongMeaning, answer("correct"))).toMatchObject({ stage: "transfer", retry: false, successes: 1 });
+  });
+  it("increases teaching in the learned language while hints use the other language", () => {
+    const context = resolveStudyContext(lesson, ref)!;
+    for (const level of ["beginner", "intermediate", "advanced"] as const) {
+      const instructions = studyInstructions(context, level, "en", "es");
+      expect(instructions).toContain("EXPLAINED-IN LANGUAGE: Spanish");
+      expect(instructions).toContain("LEARNED/TAUGHT LANGUAGE: English");
+      expect(instructions).toContain("Every learner turn MUST first call evaluate_study_answer");
+      expect(instructions).toContain("Do not pair a correction with a new exercise");
+      expect(instructions).toContain("is not past-tense");
+      expect(instructions).toContain("As app-recorded successes grow");
+      expect(instructions).toContain("Never create a repeated pronunciation drill");
+      const reverse = studyInstructions(context, level, "es", "en");
+      expect(reverse).toContain("LEARNED/TAUGHT LANGUAGE: Spanish");
+      expect(reverse).toContain("EXPLAINED-IN LANGUAGE: English");
+      expect(reverse).toContain("ONE short clue in English");
+    }
+  });
+  it("keeps a requested hint from consuming an attempt or clearing a retry", () => {
+    const pending = applyPracticeEvaluation(freshPractice(), answer("incorrect"));
+    expect(applyPracticeEvaluation(pending, answer("help"))).toBe(pending);
+    expect(isStudyHelpRequest("Give me a brief hint in English")).toBe(true);
+    expect(isStudyHelpRequest("Una pista en inglés, por favor")).toBe(true);
+    expect(isStudyHelpRequest("Speak slower")).toBe(false);
+    const instructions = studyInstructions(resolveStudyContext(lesson, ref)!, "beginner", "en", "es");
+    expect(instructions).toContain("EXPLAINED-IN LANGUAGE: Spanish");
+    expect(instructions).toContain("ONE short clue in Spanish");
+    expect(instructions).toContain("the SAME pending practice prompt");
+    expect(instructions).toContain("Do not permanently switch");
+  });
   it("never awards mastery for ambiguous speech or invalid evaluation", () => {
     const p = freshPractice();
     expect(applyPracticeEvaluation(p, answer("ambiguous"))).toBe(p);
@@ -60,7 +99,7 @@ describe("adaptive retry and progress", () => {
       expect(prompt).toContain("exactly ONE prompt");
       expect(prompt).toContain("smallest meaningful error");
       expect(prompt).toContain("Never invent an Azure score");
-      expect(prompt).toContain("reduce after repeated errors");
+      expect(prompt).toContain("After repeated difficulty simplify");
       expect(prompt).toContain(context.sentence.context_meaning);
     }
   });
