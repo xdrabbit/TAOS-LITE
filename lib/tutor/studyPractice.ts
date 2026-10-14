@@ -100,6 +100,13 @@ export function practiceStateBlock(p: StudyPracticeProgress): string {
     ? "Require a retry of the same objective. Do not introduce a transfer or new target until corrected."
     : p.stage === "construction" ? "Ask for independent sentence construction." : "Ask for transfer: change ONE element of the same pattern."}`;
 }
+/** Pin help to the pending objective; never let a hint invent a variation. */
+export function studyHintInstruction(p: StudyPracticeProgress, evaluatedPrompt = ""): string {
+  const prompt = p.prompt.trim() || evaluatedPrompt.trim();
+  return `Give the requested brief hint: ONE short clue in the configured EXPLAINED-IN language. Then return to the LEARNED/TAUGHT language. ${prompt
+    ? `Repeat this exact pending prompt verbatim: ${JSON.stringify(prompt)}.`
+    : "Repeat your most recent practice prompt verbatim."} Do not substitute any subject, object, tense or vocabulary (for example, do not change break to rest). Do not offer a new example or variation. Wait for the learner's answer. Preserve stage, counters and any pending retry; help is not a successful answer. ${p.retry ? "Require a retry of the same objective." : "This help turn must not introduce transfer or a new target."} APP PRACTICE STATE (learning data): ${JSON.stringify(p)}`;
+}
 export function practiceStorageKey(userId: string, ref: StudyPracticeRef): string {
   return `taos.study.tutor.v1:${userId}:${JSON.stringify(ref)}`;
 }

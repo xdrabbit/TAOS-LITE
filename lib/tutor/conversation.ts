@@ -1,6 +1,6 @@
 "use client";
 
-import { applyPracticeEvaluation, isStudyHelpRequest, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
+import { applyPracticeEvaluation, studyHintInstruction, isStudyHelpRequest, freshPractice, practiceStateBlock, type StudyPracticeRef, type StudyPracticeProgress } from "./studyPractice";
 
 // WebRTC client for the realtime conversation tutor. Unlike the (deprecated)
 // translator realtime path, here we PLAY the model's audio back to the learner
@@ -309,7 +309,7 @@ export async function startConversation(
     const t = text.trim();
     if (!t) return;
     if (config.study && isStudyHelpRequest(t)) {
-      sendTurn(`The learner requests help: "${t}". Give ONE short clue in the configured EXPLAINED-IN language, then return to the LEARNED/TAUGHT language and request the SAME pending answer. Preserve all practice state, especially a pending retry. This is help, not an answer or a persistent language switch.`);
+      sendTurn(studyHintInstruction(studyProgress));
       return;
     }
     steerNotes.push(t);
@@ -503,12 +503,15 @@ export async function startConversation(
         const response = ev.response as { status?: string; output?: Array<{ type?: string; name?: string; call_id?: string; arguments?: string }> } | undefined;
         let continueTurn = false;
         let requestedHelp = false;
+        let helpPrompt = "";
         for (const item of response?.status === "completed" ? response.output ?? [] : []) {
           if (item.type !== "function_call" || item.name !== "evaluate_study_answer" || !item.call_id || handledCalls.has(item.call_id)) continue;
           handledCalls.add(item.call_id);
           let evaluation: unknown = null;
           try { evaluation = JSON.parse(item.arguments ?? ""); } catch { /* ask model to clarify */ }
-          requestedHelp = requestedHelp || (evaluation as { result?: string } | null)?.result === "help";
+          const report = evaluation as { result?: string; prompt?: unknown } | null;
+          requestedHelp = requestedHelp || report?.result === "help";
+          if (report?.result === "help" && typeof report.prompt === "string") helpPrompt = report.prompt.slice(0, 500);
           const next = canEvaluateStudyAnswer ? applyPracticeEvaluation(studyProgress, evaluation) : studyProgress;
           canEvaluateStudyAnswer = false;
           const accepted = next !== studyProgress;
@@ -528,7 +531,7 @@ export async function startConversation(
           const ended = turnEnded(gate);
           gate = ended.gate;
           if (ended.stopNow) { void stop("cap"); return; }
-          sendTurn(`${requestedHelp ? "Give the requested brief hint in the EXPLAINED-IN language, then return to the LEARNED/TAUGHT language and re-ask the SAME pending prompt without advancing." : "Give brief feedback for the evaluated answer and exactly one next prompt."} ${practiceStateBlock(studyProgress)}`);
+          sendTurn(requestedHelp ? studyHintInstruction(studyProgress, helpPrompt) : `Give brief feedback for the evaluated answer and exactly one next prompt. ${practiceStateBlock(studyProgress)}`);
           bumpIdle();
           return;
         }
