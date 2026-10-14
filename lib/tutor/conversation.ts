@@ -142,6 +142,9 @@ export async function startConversation(
   let studyProgress = config.studyProgress ?? freshPractice();
   const handledCalls = new Set<string>();
   let canEvaluateStudyAnswer = false;
+  let micRequested = true;
+  let studyPlayback = false;
+  let playbackTailTimer: ReturnType<typeof setTimeout> | null = null;
   // The server's id for this session (lib/tutor/meter.ts). Held so the end of
   // the call can be reported against the same id the mint was logged under —
   // phase 2 reconciles the two lines into billed minutes.
@@ -184,6 +187,7 @@ export async function startConversation(
     } catch {
       /* ignore */
     }
+    if (playbackTailTimer) clearTimeout(playbackTailTimer);
     localStream?.getTracks().forEach((t) => t.stop());
     if (audioEl) {
       audioEl.pause();
@@ -318,10 +322,14 @@ export async function startConversation(
     sendTurn(`The student just asked: "${t}". Briefly acknowledge and adjust.`);
   };
 
-  const setMicEnabled = (on: boolean) => {
+  const syncMic = () => {
     localStream?.getAudioTracks().forEach((tr) => {
-      tr.enabled = on;
+      tr.enabled = micRequested && !studyPlayback;
     });
+  };
+  const setMicEnabled = (on: boolean) => {
+    micRequested = on;
+    syncMic();
   };
 
   // Greet first so the learner isn't met with silence. Fires once, as soon as
@@ -497,6 +505,29 @@ export async function startConversation(
         dbg(`evt: ${type}`);
       }
 
+      // Study uses turn-taking: tutor playback must not become learner input.
+      // response.done means generation ended, not that audio finished playing.
+      if (config.study && type === "output_audio_buffer.started") {
+        if (playbackTailTimer) clearTimeout(playbackTailTimer);
+        studyPlayback = true;
+        canEvaluateStudyAnswer = false;
+        syncMic();
+        bumpIdle();
+        return;
+      }
+      if (config.study && (type === "output_audio_buffer.stopped" || type === "output_audio_buffer.cleared")) {
+        if (playbackTailTimer) clearTimeout(playbackTailTimer);
+        // Allow the speaker's final syllable/room echo to decay before listening.
+        playbackTailTimer = setTimeout(() => {
+          playbackTailTimer = null;
+          if (stopped) return;
+          dc?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+          studyPlayback = false;
+          syncMic();
+          bumpIdle();
+        }, 300);
+        return;
+      }
       // Tools complete at response.done; replying earlier can collide with an
       // active response. Deduplicate call ids so a repeated event cannot earn mastery.
       if (type === "response.done" && config.study) {
@@ -537,7 +568,7 @@ export async function startConversation(
         }
       }
       if (type === "input_audio_buffer.speech_started") {
-        canEvaluateStudyAnswer = true;
+        canEvaluateStudyAnswer = !studyPlayback;
         bumpIdle();
         return;
       }

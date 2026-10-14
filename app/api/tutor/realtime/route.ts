@@ -231,7 +231,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ...(studyContext ? { tools: [STUDY_EVALUATION_TOOL], tool_choice: "required" } : {}),
     audio: {
       input: {
-        transcription: { model: transcribeModel },
+        transcription: { model: transcribeModel,
+          ...(studyContext && /^gpt-4o-(mini-)?transcribe(?:-|$)/.test(transcribeModel) && !transcribeModel.includes("diarize") ? {
+            prompt: "Transcribe only the learner’s audible words, including incomplete phrases, mistakes and language switches. Do not finish a sentence, correct grammar, or add words from the tutor’s example. If the learner stops after two words, transcribe only those two words."
+          } : {}) },
         // Server VAD = hands-free: the tutor auto-replies when the learner stops
         // talking. ~700ms of silence ends a turn; create_response makes the
         // model answer each turn without an explicit response.create.

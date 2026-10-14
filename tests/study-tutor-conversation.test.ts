@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startConversation, type ActiveConversation } from "@/lib/tutor/conversation";
 import { freshPractice } from "@/lib/tutor/studyPractice";
 let active: ActiveConversation | undefined;
+const micTrack = { enabled: true, stop: vi.fn() };
 const sent: Array<Record<string, any>> = [];
 const channel = { readyState: "open", onopen: null as (() => void) | null, onmessage: null as ((e: { data: string }) => void) | null, send: (data: string) => sent.push(JSON.parse(data)), close: vi.fn() };
 function event(value: unknown) { channel.onmessage?.({ data: JSON.stringify(value) }); }
@@ -10,10 +11,10 @@ function evaluation(id: string, result: string, stage = "construction") {
   event({ type: "response.done", response: { status: "completed", output: [{ type: "function_call", name: "evaluate_study_answer", call_id: id, arguments: JSON.stringify({ stage, result, meaningPreserved: true, tensePreserved: true, error: "Use haya", prompt: "Say I'm surprised he came" }) }] } });
 }
 beforeEach(() => {
-  sent.length = 0; vi.useFakeTimers();
+  sent.length = 0; micTrack.enabled = true; vi.useFakeTimers();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.stubGlobal("isSecureContext", true);
-  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [], getAudioTracks: () => [] }) } });
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [micTrack], getAudioTracks: () => [micTrack] }) } });
   vi.stubGlobal("RTCPeerConnection", class {
     addTrack() {} getSenders() { return []; } close() {}
     createDataChannel() { return channel; }
@@ -76,6 +77,35 @@ describe("Study realtime event integration", () => {
     expect(sent.at(-1)?.response.instructions).toContain(`Repeat this exact pending prompt verbatim: "Say I'm surprised he came"`);
     expect(onProgress).not.toHaveBeenCalled();
     expect(sent.at(-1)?.response.tool_choice).toBe("none");
+  });
+  it("blocks Study speaker echo until playback drains, without overriding manual mute", async () => {
+    const onProgress = vi.fn();
+    active = await startConversation({ target: "en", learner: "es", level: "intermediate", phase: "partner", study: { lessonKey: "saved", sentenceIndex: 0 } }, { onStudyProgress: onProgress });
+    event({ type: "output_audio_buffer.started" });
+    expect(micTrack.enabled).toBe(false);
+    event({ type: "input_audio_buffer.speech_started" });
+    evaluation("echo", "correct");
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(micTrack.enabled).toBe(false); // response.done must not reopen the mic
+    event({ type: "output_audio_buffer.stopped" });
+    vi.advanceTimersByTime(299);
+    expect(micTrack.enabled).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(micTrack.enabled).toBe(true);
+    expect(sent.at(-1)?.type).toBe("input_audio_buffer.clear");
+    event({ type: "input_audio_buffer.speech_started" });
+    evaluation("incomplete", "partial");
+    expect(onProgress.mock.calls[0][0]).toMatchObject({ retry: true, successes: 0, attempts: 1 });
+    active.setMicEnabled(false);
+    event({ type: "output_audio_buffer.started" });
+    event({ type: "output_audio_buffer.cleared" });
+    vi.advanceTimersByTime(300);
+    expect(micTrack.enabled).toBe(false);
+  });
+  it("keeps ordinary Partner microphone behavior unchanged", async () => {
+    active = await startConversation({ target: "en", learner: "es", level: "beginner", phase: "partner" }, {});
+    event({ type: "output_audio_buffer.started" });
+    expect(micTrack.enabled).toBe(true);
   });
   it("ignores malformed tool data without awarding progress", async () => {
     const onProgress = vi.fn();
