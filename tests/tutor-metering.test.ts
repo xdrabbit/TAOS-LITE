@@ -27,6 +27,7 @@ import {
   wavSeconds
 } from "@/lib/tutor/meter";
 import { QUOTAS, type Tier } from "@/lib/supabase";
+import { copyFor } from "@/lib/chrome/copy";
 import {
   TURN_GRACE_SECONDS,
   WARN_LEAD_SECONDS,
@@ -74,9 +75,17 @@ describe("plan allowances", () => {
   });
 
   it("is stated in the landing and paywall copy the customer actually reads", () => {
+    // The paywall's words moved into lib/chrome/copy.ts on 2026-10-04 so it
+    // could read in the phone owner's language. The fence follows them: the
+    // numbers must be right in EVERY language the paywall is written in, and
+    // the paywall must still be the screen that prints those two keys.
     const paywall = readFileSync(new URL("../components/Paywall.tsx", import.meta.url), "utf8");
-    expect(paywall).toContain(`${TUTOR_PLAN_SECONDS.basic / MIN} tutor minutes`);
-    expect(paywall).toContain(`${TUTOR_PLAN_SECONDS.premium / MIN} tutor minutes`);
+    expect(paywall).toContain('text: "paywallTutorBasic", tutor: true');
+    expect(paywall).toContain('text: "paywallTutorPremium", tutor: true');
+    expect(copyFor("en").paywallTutorBasic).toContain(`${TUTOR_PLAN_SECONDS.basic / MIN} tutor minutes`);
+    expect(copyFor("en").paywallTutorPremium).toContain(`${TUTOR_PLAN_SECONDS.premium / MIN} tutor minutes`);
+    expect(copyFor("es").paywallTutorBasic).toContain(`${TUTOR_PLAN_SECONDS.basic / MIN} minutos de tutor`);
+    expect(copyFor("es").paywallTutorPremium).toContain(`${TUTOR_PLAN_SECONDS.premium / MIN} minutos de tutor`);
   });
 });
 
