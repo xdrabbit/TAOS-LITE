@@ -16,6 +16,55 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Practica con Liz — ACTIVE; spike dispatched 2026-10-18** — a
+  scene-based conversational tutor with one live face. The learner picks the
+  language they want to practise and enters a real-life scene — airport,
+  rental car, gas station, Zion entrance, diner, pharmacy counter. Liz is the
+  only face and the guide: she explains and corrects in the learner's own
+  language, then hands the conversation to voice-only AI characters. It is a
+  video call FROM the place, with Liz in a small window over a real background
+  she can shoot herself, not a composited scene.
+  → A **trip** is about five scenes in order. The first one is free; later
+  trips are paid **trip packs**. This tutor is the on-ramp to the translator,
+  not a replacement for it.
+  → The first trip is **Llegada a Utah** for a Spanish speaker learning
+  English: SLC airport → rental car → gas station → Zion → diner. Founders
+  only, behind a flag, with sessions held to about five minutes.
+  → The voice is an ElevenLabs conversational agent using Liz's clone
+  (`tpOaz7u8rY4nup9rRUmh`); whether that agent can hand NPCs distinct voices
+  still needs proving. The face provider stays pluggable. Candidates from the
+  akapulu.com pricing index read in 2026-09: Anam, with ElevenLabs passthrough,
+  about 30 free minutes/month and roughly $0.16→$0.11/min; Simli, BYO voice,
+  about 50 free minutes/month. Tavus at $0.37/min is too expensive.
+  → The working economic frame is **about 60 paid face-minutes/month and about
+  five lifetime-free**, because the face alone costs roughly $0.11–0.19/min.
+  Meter it from day one, and let scenes reach a natural ending so a session
+  stays near five minutes rather than cutting somebody off.
+  → **Consent blocks the door.** Liz's explicit permission for both her face
+  and cloned voice was asked for and is still pending. The spike also needs a
+  few minutes of her on camera and her review of the first trip's scenes.
+  Nothing public without her approval; remove it if she asks.
+  → Scope stays one trip, five scenes and one target language first. It runs
+  beside — not instead of — the 2026-09-28 business plan.
+  (added 2026-10-18)
+
+- **Share translated audio from the home result card — IN PROGRESS;
+  dispatched 2026-10-18** — the Share control hands the already-fetched
+  target-language MP3 to the phone's native share sheet through Web Share
+  file sharing, producing a playable audio attachment in Messages or
+  WhatsApp. If "Reproducir voz" was off, it fetches once at share time; it
+  must never make a second TTS call. Browsers without file sharing, including
+  desktop Chrome, get a download fallback. Home result card only.
+  → The honest limit is an audio-file bubble, not the native voice-memo
+  waveform: third-party apps cannot produce that. Playing TAOS audio while
+  Messages records cannot work around it on iOS either — one app owns the mic
+  and phones expose no loopback.
+  → Open product call: free users should get it **(recommended yes)** because
+  the audio has already been paid for and the attachment is the word-of-mouth
+  feature. Before it ships, verify the whole handoff on a real iPhone,
+  including TAOS installed to the Home Screen.
+  (added 2026-10-18)
+
 - **Chrome language should be its own setting, not the translation pair** —
   The next step after PR #68, and named as out of scope there on purpose. Every
   screen picks its chrome language off the shared pair today: home follows the
@@ -298,6 +347,40 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   the product. (added 2026-08-25)
 
 ## Ideas
+
+- **TAOS as a WhatsApp translation contact — PARKED.** The TAOS WhatsApp
+  number described in `claude/whatsapp-bridge.md` becomes a forward-based
+  translator: send it a voice note or text and get translated text plus a
+  voice note back. The user starts every exchange, so there is no 24-hour
+  window or template problem; the Business API still cannot join a group.
+  Every exchange costs a Meta conversation fee plus STT and TTS, so it needs
+  a per-user cap. It fits crews already living in WhatsApp and gives Liz a
+  strong 30-second demo, but the home-card share above supersedes it for
+  personal use.
+  → Do not rebuild what the phones now ship free. WhatsApp added on-device
+  text translation in 2025-09 for EN↔ES on iOS and Android, plus voice-note
+  transcripts. iOS 26 Live Translation covers typed Messages and live Phone
+  and FaceTime on iPhone 15 Pro and newer with Apple Intelligence.
+  (added 2026-10-18)
+
+- **Counter / tablet mode — PARKED pending Liz's five-business list.** Field
+  observation, 2026-10-16, in a Utah insurance-office lobby: three Spanish
+  speakers could not get served, and handing them TAOS by QR failed because
+  they could not scan it or did not know how. The buyer is the business. Put
+  a tablet on the counter that the clerk turns toward the customer; nobody
+  downloads anything. Start with independent pharmacies and other small,
+  owner-on-site businesses, not chains.
+  → Before a pitch, prove the existing screens flow works as a single-device,
+  two-way counter mode rather than the two-phone flow it was built for, and
+  have a precise answer to **"do you keep transcripts?"** before putting it
+  in front of a pharmacy.
+  (added 2026-10-18)
+
+- **Choose the TTS engine per target language — PARKED.** Fish Audio's clone
+  sounds fine in Chinese and bad in Spanish, verified in
+  `taos_lite_tts_log` on 2026-10-07; see `claude/tts-log.md`. The small build,
+  when it is worth doing, is Fish for `zh` and ElevenLabs for everything
+  else. Not now. (added 2026-10-18)
 
 - **TAOS "even liter" offline mode — Gemma 4 E2B on-device** — Tom (9/6):
   asked whether TAOS-LITE could run standalone on his iPhone 15 Pro Max with
