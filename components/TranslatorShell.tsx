@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import {
   getMonthlyUsage,
   getTier,
@@ -224,11 +225,13 @@ const NAV_ICON_PATHS = {
 export function TranslatorShell({
   email,
   profile,
-  onSignOut
+  onSignOut,
+  practicaEnabled = false
 }: {
   email: string;
   profile: Profile | null;
   onSignOut: () => void;
+  practicaEnabled?: boolean;
 }): JSX.Element {
   const subscriber = isSubscriber(profile);
   const [usage, setUsage] = useState<MonthlyUsage | null>(null);
@@ -306,6 +309,7 @@ export function TranslatorShell({
   // Same shape as callVisible, and for the same reason: /fast is founders OR
   // everyone once NEXT_PUBLIC_ENABLE_FAST ships it.
   const fastVisible = fastVisibleTo(email);
+  const practicaVisible = practicaEnabled && founder;
 
   // Which tile in the launcher is the screen you are already on. The header
   // only renders on "/" today, so this is "/" every time — it is read from the
@@ -1452,6 +1456,18 @@ export function TranslatorShell({
             ) : null}
           </nav>
         </header>
+
+        {practicaVisible ? (
+          <nav aria-label={nav.navPractica}>
+            <Link
+              href="/practica"
+              className="flex min-h-[44px] items-center justify-between rounded-2xl border border-amber-300/25 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-100 transition hover:bg-amber-400/15"
+            >
+              <span>✦ {nav.navPractica}</span>
+              <span aria-hidden="true">→</span>
+            </Link>
+          </nav>
+        ) : null}
 
         {/* One-time "add to home screen" nudge (hides itself once installed
             or dismissed). Inline, above the trial banner — never floating over
