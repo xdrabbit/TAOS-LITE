@@ -12,6 +12,8 @@
     "icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
+    "@anam-ai/js-sdk": "^4.29.0",
+    "@elevenlabs/client": "^1.28.0",
     "@next/swc-linux-x64-gnu": "^14.2.33",
     "@supabase/supabase-js": "^2.45.0",
     "@vercel/functions": "^1.6.0",
