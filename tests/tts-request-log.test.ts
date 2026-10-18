@@ -310,6 +310,18 @@ describe("POST /api/tts — the request log", () => {
     });
   });
 
+  it("marks a home Share cache miss on the existing TTS log line", async () => {
+    await POST(
+      ttsRequest(
+        { text: "hi", engine: "openai", sourceLanguage: "en", targetLanguage: "es" },
+        { surface: "home-share" }
+      )
+    );
+    await Promise.all(pending);
+    expect(insertSpy.mock.calls[0][0]).toMatchObject({ surface: "home-share" });
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("surface=home-share"));
+  });
+
   it("a provider failure is logged as an error with its code", async () => {
     fetchSpy.mockImplementationOnce(async () => new Response("no credit", { status: 402 }));
     const res = await POST(

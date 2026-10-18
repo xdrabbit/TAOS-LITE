@@ -11,6 +11,7 @@
 
 export const TTS_SURFACES = [
   "home",
+  "home-share",
   "call",
   "live",
   "tabletop",

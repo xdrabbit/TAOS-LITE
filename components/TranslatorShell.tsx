@@ -19,12 +19,13 @@ import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { requestSpeech } from "@/lib/tts/speech";
+import { shareAudioFile } from "@/lib/tts/shareAudio";
 import { SUBSCRIBER_DEFAULT_ENGINE, type TtsEngine } from "@/lib/tts/engine";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
-import { canSpeak, languageNative } from "@/lib/languages/catalog";
+import { canSpeak, languageLabel, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
@@ -259,6 +260,8 @@ export function TranslatorShell({
   const [translation, setTranslation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isAudioFetching, setIsAudioFetching] = useState(false);
+  const [resultAudio, setResultAudio] = useState<{ generation: number; blob: Blob } | null>(null);
   const [wrappingUp, setWrappingUp] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   // Two menus, and the names say which is which now: the nine-dot GRID is the
@@ -281,6 +284,9 @@ export function TranslatorShell({
   const lastMimeRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const resultAudioRef = useRef<Blob | null>(null);
+  const resultAudioRequestRef = useRef<Promise<Blob | null> | null>(null);
+  const resultAudioGenerationRef = useRef(0);
   const wakeStopRef = useRef<(() => void) | null>(null);
   const maxStopTimerRef = useRef<number | null>(null);
   // Visual ramp state (drives the record button directly, no re-render per frame).
@@ -336,6 +342,7 @@ export function TranslatorShell({
         setSource(next[0]);
         setOriginal("");
         setTranslation("");
+        clearResultAudio();
         setError(null);
         if (status !== "recording") setStatus("idle");
       }
@@ -541,6 +548,52 @@ export function TranslatorShell({
     stopRamp();
   }
 
+  function clearResultAudio() {
+    resultAudioGenerationRef.current += 1;
+    resultAudioRef.current = null;
+    resultAudioRequestRef.current = null;
+    setResultAudio(null);
+    setIsAudioFetching(false);
+  }
+
+  async function audioForResult(
+    text: string,
+    src: LangCode,
+    tgt: LangCode,
+    surface: "home" | "home-share"
+  ): Promise<Blob | null> {
+    const generation = resultAudioGenerationRef.current;
+    if (resultAudio?.generation === generation) return resultAudio.blob;
+    if (resultAudioRef.current) return resultAudioRef.current;
+    if (resultAudioRequestRef.current) return resultAudioRequestRef.current;
+
+    setIsAudioFetching(true);
+    const request = requestSpeech(
+      { text, engine, sourceLanguage: src, targetLanguage: tgt },
+      {
+        fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+        failureMessage: s.ttsFailed,
+        surface
+      }
+    ).then((blob) => {
+      // A pair change or a new translation can finish while TTS is in flight.
+      // Never attach that older line's audio to the new result card.
+      if (generation !== resultAudioGenerationRef.current) return null;
+      if (blob) {
+        resultAudioRef.current = blob;
+        setResultAudio({ generation, blob });
+      }
+      return blob;
+    });
+    resultAudioRequestRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (resultAudioRequestRef.current === request) resultAudioRequestRef.current = null;
+      if (generation === resultAudioGenerationRef.current) setIsAudioFetching(false);
+    }
+  }
+
   async function speak(text: string, src: LangCode = source, tgt: LangCode = target) {
     if (!text) return;
     // Tier 2 (lib/languages/catalog.ts): nothing in the pipeline can say this
@@ -554,14 +607,7 @@ export function TranslatorShell({
     if (!a) return;
     try {
       setIsSpeaking(true);
-      const blob = await requestSpeech(
-        { text, engine, sourceLanguage: src, targetLanguage: tgt },
-        {
-          fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
-          failureMessage: s.ttsFailed,
-          surface: "home"
-        }
-      );
+      const blob = await audioForResult(text, src, tgt, "home");
       // null = text only. The guard above already caught the languages the
       // catalog knows about; this is the same answer arriving from the server.
       if (!blob) {
@@ -579,6 +625,25 @@ export function TranslatorShell({
       setIsSpeaking(false);
       // A dead connection surfaces as Safari's bare "Load failed" — swap in a
       // message that actually tells the person what to do.
+      setError(isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.ttsFailed);
+    }
+  }
+
+  async function shareTranslationAudio() {
+    if (!translation || !canSpeak(target)) return;
+    try {
+      // Await inside this click handler and hand the File to navigator.share
+      // as the very next operation. If Safari has dropped user activation in
+      // the meantime, shareAudioFile recovers by downloading the same File.
+      const blob = await audioForResult(translation, source, target, "home-share");
+      if (!blob) return;
+      const targetName = languageLabel(target);
+      await shareAudioFile(blob, {
+        fileName: `TAOS · ${targetName}.mp3`,
+        title: `TAOS · ${targetName}`
+      });
+    } catch (e) {
+      console.error("[tts] share failed", e);
       setError(isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.ttsFailed);
     }
   }
@@ -697,6 +762,7 @@ export function TranslatorShell({
   async function translateBlob(blob: Blob, mime: string, src: string, tgt: string) {
     setOriginal("");
     setTranslation("");
+    clearResultAudio();
     setStatus("processing");
     try {
       const form = new FormData();
@@ -808,6 +874,7 @@ export function TranslatorShell({
     setSource((prev) => (prev === pair[0] ? pair[1] : pair[0]));
     setOriginal("");
     setTranslation("");
+    clearResultAudio();
     setError(null);
     if (status !== "recording") setStatus("idle");
   }
@@ -1508,20 +1575,32 @@ export function TranslatorShell({
                     // does nothing when tapped is worse than no control.
                     <TextOnlyNote />
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        blessAudio();
-                        void speak(translation);
-                      }}
-                      className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
-                        isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
-                      }`}
-                      aria-label={s.playAria}
-                    >
-                      <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
-                      <span className="text-[11px]">{s.play}</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void shareTranslationAudio()}
+                        disabled={isAudioFetching}
+                        className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-emerald-100 transition disabled:opacity-50"
+                        aria-label={s.share}
+                      >
+                        <span aria-hidden="true" className="text-base">↗</span>
+                        <span className="text-[11px]">{s.share}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          blessAudio();
+                          void speak(translation);
+                        }}
+                        className={`flex items-center gap-1 rounded-full border border-white/10 px-3 py-1 text-emerald-100 transition ${
+                          isSpeaking ? "bg-emerald-400/30" : "bg-white/5"
+                        }`}
+                        aria-label={s.playAria}
+                      >
+                        <span className="text-base">{isSpeaking ? "🔊" : "🔈"}</span>
+                        <span className="text-[11px]">{s.play}</span>
+                      </button>
+                    </>
                   )}
                 </div>
               ) : null}
