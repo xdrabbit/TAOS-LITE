@@ -73,6 +73,7 @@ const EN = {
   flipTitle: "Wrong direction? Re-translate the same recording the other way",
   play: "Play",
   playAria: "Play translation",
+  share: "Share",
   // The free-trial banner. {count} is a slot, not a seam (see fill below);
   // the singular is its own key because a language may change more than the
   // noun when there is only one left — Spanish changes the verb too.
@@ -343,6 +344,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     flipTitle: "¿Dirección equivocada? Vuelve a traducir la misma grabación al revés",
     play: "Oír",
     playAria: "Reproducir traducción",
+    share: "Compartir",
     trialLeft: "Gratis · quedan {count} traducciones este mes",
     trialLeftOne: "Gratis · queda 1 traducción este mes",
     trialUsedUp: "Se acabaron las traducciones de este mes",
@@ -533,6 +535,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     idle: "Dodirni mikrofon, izgovori cijelu misao, pa dodirni ponovo.",
     heard: "Čulo se",
     translationLabel: "Prijevod",
+    share: "Podijeli",
     wrapUp: "Završavam — automatsko zaustavljanje i prijevod za nekoliko sekundi…",
     micUnavailable:
       "Mikrofon nije dostupan. Otvori ovu stranicu preko HTTPS-a u Safariju i dozvoli pristup mikrofonu.",
@@ -555,6 +558,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     idle: "Tocca il microfono, di' un pensiero completo, tocca di nuovo.",
     heard: "Sentito",
     translationLabel: "Traduzione",
+    share: "Condividi",
     wrapUp: "Sto per finire — si ferma e traduce tra pochi secondi…",
     micUnavailable:
       "Microfono non disponibile. Apri questa pagina in HTTPS su Safari e consenti l'accesso al microfono.",
@@ -577,6 +581,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     idle: "点击麦克风，说完整的一句话，再点一次。",
     heard: "听到",
     translationLabel: "翻译",
+    share: "分享",
     wrapUp: "即将结束 — 几秒后自动停止并翻译…",
     micUnavailable: "麦克风不可用。请在 Safari 中通过 HTTPS 打开此页面并允许使用麦克风。",
     micDenied: "麦克风权限被拒绝。请在 Safari 设置中开启后重试。",
@@ -597,6 +602,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     idle: "撳一下咪高峰，講完一句嘢，再撳一下。",
     heard: "聽到",
     translationLabel: "翻譯",
+    share: "分享",
     wrapUp: "就快完 — 幾秒後自動停低並翻譯…",
     micUnavailable: "用唔到咪高峰。請喺 Safari 用 HTTPS 開呢頁，並允許使用咪高峰。",
     micDenied: "咪高峰權限被拒。請喺 Safari 設定入面開返，再試多次。",
