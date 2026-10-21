@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { GOOGLE_TTS_TIMEOUT_MS, googleTtsTier, googleVoiceFor } from "@/lib/tts/google";
+import {
+  GOOGLE_TTS_TIMEOUT_MS,
+  googleChirp3Voice,
+  googleTtsTier,
+  googleVoiceFor
+} from "@/lib/tts/google";
 
 vi.mock("@/lib/authServer", () => ({
   getUserFromRequest: async () => ({ id: "founder-1", email: "xdrabbit@gmail.com" })
@@ -43,6 +48,7 @@ beforeEach(() => {
   process.env.GOOGLE_TTS_API_KEY = "test-google-key";
   process.env.TAOS_TTS_GOOGLE_ENABLED = "1";
   delete process.env.GOOGLE_TTS_TIER;
+  delete process.env.GOOGLE_TTS_CHIRP3_VOICE;
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -69,26 +75,43 @@ function sent(): { url: string; init: RequestInit; body: Record<string, unknown>
 }
 
 describe("Google Cloud TTS voice selection", () => {
-  it("defaults to Neural2 and accepts only the three named tiers", () => {
-    expect(googleTtsTier()).toBe("neural2");
+  it("defaults to Chirp 3 and accepts only the four named tiers", () => {
+    expect(googleTtsTier()).toBe("chirp3");
     expect(googleTtsTier(" standard ")).toBe("standard");
     expect(googleTtsTier("WAVENET")).toBe("wavenet");
     expect(googleTtsTier("NEURAL2")).toBe("neural2");
-    expect(googleTtsTier("studio")).toBe("neural2");
+    expect(googleTtsTier("CHIRP3")).toBe("chirp3");
+    expect(googleTtsTier("studio")).toBe("chirp3");
   });
 
-  it("uses verified female Neural2 voices and falls back where a tier is unavailable", () => {
+  it("uses Fenrir for verified English and Spanish Chirp 3 locales", () => {
     expect(googleVoiceFor("en")).toEqual({
       languageCode: "en-US",
-      voiceName: "en-US-Neural2-F"
+      voiceName: "en-US-Chirp3-HD-Fenrir"
     });
     expect(googleVoiceFor("es")).toEqual({
       languageCode: "es-US",
-      voiceName: "es-US-Neural2-A"
+      voiceName: "es-US-Chirp3-HD-Fenrir"
     });
-    expect(googleVoiceFor("pt")).toEqual({
-      languageCode: "pt-BR",
-      voiceName: "pt-BR-Neural2-A"
+  });
+
+  it("reads the shared Chirp 3 voice name from the environment", () => {
+    process.env.GOOGLE_TTS_CHIRP3_VOICE = " Aoede ";
+    expect(googleChirp3Voice()).toBe("Aoede");
+    expect(googleVoiceFor("es")).toEqual({
+      languageCode: "es-US",
+      voiceName: "es-US-Chirp3-HD-Aoede"
+    });
+  });
+
+  it("falls back through the existing Neural2 entry where Chirp 3 is unavailable", () => {
+    expect(googleVoiceFor("tl")).toEqual({
+      languageCode: "fil-PH",
+      voiceName: "fil-ph-Neural2-A"
+    });
+    expect(googleVoiceFor("ms")).toEqual({
+      languageCode: "ms-MY",
+      voiceName: "ms-MY-Wavenet-A"
     });
     expect(googleVoiceFor("yue", "neural2")).toEqual({
       languageCode: "yue-HK",
@@ -119,7 +142,7 @@ describe("POST /api/tts with engine: google", () => {
     expect(init.headers).toMatchObject({ "x-goog-api-key": "test-google-key" });
     expect(body).toEqual({
       input: { text: "buenas noches" },
-      voice: { languageCode: "es-US", name: "es-US-Neural2-A" },
+      voice: { languageCode: "es-US", name: "es-US-Chirp3-HD-Fenrir" },
       audioConfig: { audioEncoding: "MP3" }
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -129,11 +152,13 @@ describe("POST /api/tts with engine: google", () => {
     expect(insertSpy.mock.calls[0][0]).toMatchObject({
       engine: "google",
       requested_engine: "google",
-      voice_id: "es-US-Neural2-A",
+      voice_id: "es-US-Chirp3-HD-Fenrir",
       voice_role: "stock"
     });
     expect(console.log).toHaveBeenCalledWith(
-      expect.stringMatching(/\[taos-tts\].*engine=google.*voice_id=es-US-Neural2-A voice_role=stock/)
+      expect.stringMatching(
+        /\[taos-tts\].*engine=google.*voice_id=es-US-Chirp3-HD-Fenrir voice_role=stock/
+      )
     );
   });
 
