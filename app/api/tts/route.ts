@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import {
+  defaultElevenLabsVoiceId,
   resolveTtsVoice,
   type ResolvedVoice,
   type TtsLangCode as LangCode,
@@ -29,6 +30,14 @@ type Engine = "elevenlabs" | "openai" | "fishaudio";
 // provider must become a fast, retryable JSON error, not a hung request the
 // phone eventually reports as Safari's opaque "Load failed".
 const SYNTH_TIMEOUT_MS = 45000;
+const DEFAULT_OPENAI_TTS_TIMEOUT_MS = 8000;
+
+function openAiTtsTimeoutMs(): number {
+  const configured = Number(process.env.OPENAI_TTS_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_OPENAI_TTS_TIMEOUT_MS;
+}
 
 function isTimeout(e: unknown): boolean {
   return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
@@ -131,31 +140,97 @@ async function elevenLabs(
   return audioResponse(await res.arrayBuffer(), "elevenlabs", log);
 }
 
-async function openai(text: string, voice: string, log: RequestLog): Promise<NextResponse> {
+type OpenAiAttempt =
+  | { ok: true; buffer: ArrayBuffer }
+  | { ok: false; response: NextResponse; errorCode: string; fallbackCode: string };
+
+async function openaiAttempt(text: string, voice: string, log: RequestLog): Promise<OpenAiAttempt> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     log.errorCode = "missing_key";
-    return NextResponse.json({ error: "Missing OPENAI_API_KEY." }, { status: 500 });
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Missing OPENAI_API_KEY." }, { status: 500 }),
+      errorCode: "missing_key",
+      fallbackCode: "missing_key"
+    };
   }
   const model = process.env.OPENAI_TTS_MODEL?.trim() || "gpt-4o-mini-tts";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), openAiTtsTimeoutMs());
 
-  const res = await fetch("https://api.openai.com/v1/audio/speech", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ model, voice, input: text, response_format: "mp3" }),
-    cache: "no-store",
-    signal: AbortSignal.timeout(SYNTH_TIMEOUT_MS)
-  });
+  try {
+    const res = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ model, voice, input: text, response_format: "mp3" }),
+      cache: "no-store",
+      signal: controller.signal
+    });
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => `HTTP ${res.status}`);
-    providerFailed(log, res.status);
-    return NextResponse.json({ error: "OpenAI TTS failed.", details: detail }, { status: 502 });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => `HTTP ${res.status}`);
+      return {
+        ok: false,
+        response: NextResponse.json({ error: "OpenAI TTS failed.", details: detail }, { status: 502 }),
+        errorCode: `provider_${res.status}`,
+        fallbackCode: `openai_${res.status}_fallback`
+      };
+    }
+    return { ok: true, buffer: await res.arrayBuffer() };
+  } catch (error) {
+    if (!controller.signal.aborted && !isTimeout(error)) throw error;
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "The voice service took too long. Please try again." },
+        { status: 504 }
+      ),
+      errorCode: "openai_timeout",
+      fallbackCode: "openai_timeout_fallback"
+    };
+  } finally {
+    clearTimeout(timer);
   }
-  return audioResponse(await res.arrayBuffer(), "openai", log);
+}
+
+async function openai(
+  text: string,
+  voice: string,
+  log: RequestLog,
+  targetLanguage?: LangCode
+): Promise<NextResponse> {
+  const attempt = await openaiAttempt(text, voice, log);
+  if (attempt.ok) return audioResponse(attempt.buffer, "openai", log);
+
+  // A missing key is local configuration, not an unhealthy OpenAI response.
+  // Preserve the existing error instead of spending ElevenLabs credit too.
+  if (attempt.errorCode === "missing_key") return attempt.response;
+
+  const stockVoiceId = defaultElevenLabsVoiceId();
+  log.engine = "elevenlabs";
+  log.voiceId = stockVoiceId;
+  log.voiceRole = "stock";
+  log.errorCode = attempt.fallbackCode;
+
+  try {
+    const fallback = await elevenLabs(text, stockVoiceId, log, targetLanguage);
+    if (fallback.ok) {
+      // elevenLabs leaves a successful log code alone; assign again to make
+      // that contract explicit at the hand-off boundary.
+      log.errorCode = attempt.fallbackCode;
+      return fallback;
+    }
+  } catch {
+    // Return the OpenAI failure below. The fallback is deliberately invisible
+    // to the caller unless it succeeds with playable audio.
+  }
+
+  log.errorCode = attempt.errorCode;
+  return attempt.response;
 }
 
 /**
@@ -257,7 +332,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       uaHash: uaHash(ua),
       status: res.status === 200 ? "ok" : "error",
       httpStatus: res.status,
-      errorCode: res.status === 200 ? null : (log.errorCode ?? `http_${res.status}`),
+      errorCode: log.errorCode ?? (res.status === 200 ? null : `http_${res.status}`),
       latencyMs: Date.now() - started
     };
     // A request the spend guard turned away gets the log line but no row:
@@ -312,13 +387,11 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
       return NextResponse.json({ error: "Text is required." }, { status: 400 });
     }
 
-    // What the /try funnel is allowed to buy: OpenAI's voice, a sentence at a
-    // time. ElevenLabs costs several times more per character and is the only
-    // engine that can reach the clones at all, so it takes an account — which
-    // is also what the free tier already promises on screen (a plain OpenAI
-    // voice; the paid app uses the cloned voices). Refused rather than
-    // silently downgraded: quietly answering in a different voice than the
-    // caller asked for is how a "why does it sound wrong?" report is born.
+    // What the /try funnel is allowed to request: OpenAI's voice, a sentence
+    // at a time. The guarded request may use one ElevenLabs STOCK fallback
+    // when OpenAI fails, but an anonymous caller can never select ElevenLabs
+    // directly or reach a clone. That keeps the fallback inside the same
+    // per-IP/global allowance instead of creating an unmetered second path.
     if (guard.anonymous) {
       if (engine !== "openai") {
         log.errorCode = "anon_engine";
@@ -374,7 +447,9 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
 
     // `await` (not a bare returned promise) so a thrown timeout lands in the
     // catch below rather than escaping the handler as a generic 500.
-    if (resolved.provider === "openai") return await openai(text, resolved.voiceId, log);
+    if (resolved.provider === "openai") {
+      return await openai(text, resolved.voiceId, log, body.targetLanguage);
+    }
     if (resolved.provider === "fishaudio") {
       return await fishAudio(text, resolved.voiceId, log, latency);
     }
