@@ -1,7 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { startTabletopLive, type ActiveTabletopLive } from "@/lib/tabletop/live";
+import type { TabletopLiveState } from "@/lib/tabletop/live";
+import {
+  BRAIN_STORAGE_KEY,
+  resolveBrain,
+  TABLETOP_BRAINS,
+  type ActiveTabletopBrain,
+  type StartTabletopBrain,
+  type TabletopBrainKind
+} from "@/lib/tabletop/brain";
+import { startOpenAIBrain } from "@/lib/tabletop/openaiBrain";
+import { startGeminiBrain } from "@/lib/tabletop/geminiBrain";
+import { ensureTabletopAudioContext } from "@/lib/tabletop/audio";
+import {
+  addSegment,
+  emptyTally,
+  summarize,
+  type TabletopSessionSummary,
+  type TabletopSessionTally
+} from "@/lib/tabletop/metrics";
+import { isFounder } from "@/lib/release";
+import { supabase } from "@/lib/supabase";
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
 import { holdWake, keepWake } from "@/lib/wakeLock";
@@ -14,7 +34,7 @@ import { languageNative } from "@/lib/languages/catalog";
 // so a turn's target is the OTHER side of the pair — which is also the code
 // the tier check reads before asking /api/tts for a voice.
 import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
-import { authHeaders } from "@/lib/authClient";
+import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import { copyFor } from "@/lib/chrome/copy";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
@@ -72,6 +92,32 @@ const MAX_TURN_SEC_LIVE = 120;
 // listening line names the OTHER SIDE ("Listening to the other side…"), which
 // the home screen's plain "Listening…" would get wrong.
 
+// ── The brain A/B (Tom, 2026-10-21), founders only ─────────────────────────
+// Which realtime brain the live engine runs on (lib/tabletop/brain.ts). A
+// founder sees two chips and a one-line card with the last session's numbers;
+// everyone else sees nothing new and is locked to openai.
+const BRAIN_STARTERS: Record<TabletopBrainKind, StartTabletopBrain> = {
+  openai: startOpenAIBrain,
+  gemini: startGeminiBrain
+};
+const BRAIN_LABEL: Record<TabletopBrainKind, string> = { openai: "OpenAI", gemini: "Gemini" };
+const LAST_SESSION_KEY = "taos.tabletop.lastSession";
+
+function readLastSession(): TabletopSessionSummary | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_SESSION_KEY);
+    return raw ? (JSON.parse(raw) as TabletopSessionSummary) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One brain session's numbers, collected until the brain goes idle. */
+interface MeteredSession {
+  tally: TabletopSessionTally;
+  finished: boolean;
+}
+
 function pickRecordingMime(): string {
   if (typeof MediaRecorder === "undefined") return "";
   for (const m of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]) {
@@ -80,7 +126,12 @@ function pickRecordingMime(): string {
   return "";
 }
 
-export function TabletopShell(): JSX.Element {
+export function TabletopShell({
+  defaultBrain = "openai"
+}: {
+  /** TAOS_TABLETOP_BRAIN, read on the server. Founders only; see brain.ts. */
+  defaultBrain?: TabletopBrainKind;
+} = {}): JSX.Element {
   // The pair IS the table (lib/translate/useLanguagePair.ts): `theirs` faces
   // the rotated TOP end, `mine` faces the phone's owner at the bottom. It is
   // the same pair /translate and /live hold, so a phone already set to
@@ -123,12 +174,74 @@ export function TabletopShell(): JSX.Element {
   const cancelledRef = useRef(false);
   const playerRef = useRef<HTMLAudioElement | null>(null);
   const voiceOnRef = useRef(true);
-  const liveRef = useRef<ActiveTabletopLive | null>(null);
+  const liveRef = useRef<ActiveTabletopBrain | null>(null);
+  // ── Brain A/B state (founders only) ──
+  const [founder, setFounder] = useState(false);
+  const [brain, setBrain] = useState<TabletopBrainKind>("openai");
+  const [brainLive, setBrainLive] = useState(false);
+  const [lastSession, setLastSession] = useState<TabletopSessionSummary | null>(null);
+  const meteredRef = useRef<MeteredSession | null>(null);
   const turnRef = useRef<TurnState>({ kind: "idle" });
 
   useEffect(() => {
     turnRef.current = turn;
   }, [turn]);
+
+  // Who is holding the phone decides whether the brain is a choice at all.
+  // A non-founder never leaves "openai" — resolveBrain refuses them anything
+  // else — and never gets the chips or the card.
+  useEffect(() => {
+    let active = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      const isF = isFounder(data.session?.user?.email);
+      setFounder(isF);
+      let stored: string | null = null;
+      try {
+        stored = window.localStorage.getItem(BRAIN_STORAGE_KEY);
+      } catch {
+        /* private mode */
+      }
+      setBrain(resolveBrain({ founder: isF, stored, envDefault: defaultBrain }));
+      if (isF) setLastSession(readLastSession());
+    });
+    return () => {
+      active = false;
+    };
+  }, [defaultBrain]);
+
+  // A brain session ended (idle, cap, failure, the end chip, leaving): its
+  // numbers become the card, and — founders only — one [taos-tabletop] line
+  // in the Vercel log. Numbers only; no transcript goes anywhere.
+  const finishMetered = useCallback(
+    (m: MeteredSession) => {
+      if (m.finished) return;
+      m.finished = true;
+      if (meteredRef.current === m) meteredRef.current = null;
+      setBrainLive(false);
+      if (!founder) return;
+      const summary = summarize(m.tally, Date.now());
+      setLastSession(summary);
+      try {
+        window.localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(summary));
+      } catch {
+        /* the log line still goes */
+      }
+      void jsonAuthHeaders()
+        .then((headers) =>
+          fetch("/api/tabletop/metrics", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(summary),
+            keepalive: true
+          })
+        )
+        .catch(() => {
+          /* the card has it */
+        });
+    },
+    [founder]
+  );
 
   useEffect(() => {
     voiceOnRef.current = voiceOn;
@@ -252,16 +365,34 @@ export function TabletopShell(): JSX.Element {
       try {
         if (!liveRef.current) {
           setTurn({ kind: "connecting", side });
-          liveRef.current = await startTabletopLive(
+          const m: MeteredSession = { tally: emptyTally(brain, Date.now()), finished: false };
+          meteredRef.current = m;
+          setBrainLive(true);
+          liveRef.current = await BRAIN_STARTERS[brain](
             {
-              onError: (msg) => setError(msg),
-              onState: (s) => {
+              onError: (msg) => {
+                m.tally = { ...m.tally, errors: m.tally.errors + 1 };
+                setError(msg);
+              },
+              onState: (s: TabletopLiveState) => {
                 // The session auto-disconnects after long idle; reflect nothing
                 // in the UI unless a turn is active (next tap reconnects).
-                if (s === "idle") liveRef.current = null;
+                if (s === "idle") {
+                  liveRef.current = null;
+                  finishMetered(m);
+                }
               },
               onHeard: (text) => setLiveHeard(text),
-              onTranslationDelta: (d) => setLiveTranslation((t) => t + d)
+              onPartial: (d) => setLiveTranslation((t) => t + d),
+              onSegmentDone: (_text, meta) => {
+                if (meta) m.tally = addSegment(m.tally, meta);
+              },
+              onReconnect: () => {
+                m.tally = { ...m.tally, reconnects: m.tally.reconnects + 1 };
+              },
+              onSpend: (usd) => {
+                m.tally = { ...m.tally, estUsd: usd };
+              }
             },
             direction
           );
@@ -283,7 +414,7 @@ export function TabletopShell(): JSX.Element {
         setError((prev) => prev ?? "Live mode failed — try classic mode.");
       }
     },
-    [pair, startTimer, stopTimer]
+    [pair, brain, finishMetered, startTimer, stopTimer]
   );
 
   const endLiveTurn = useCallback(
@@ -441,6 +572,9 @@ export function TabletopShell(): JSX.Element {
       // prior request was denied. The effect above refreshes and releases it;
       // a tap that never opens a turn is dropped by the idle cap.
       holdWake("tabletop-turn");
+      // The Gemini brain reads the mic through WebAudio, and iOS only lets a
+      // context start inside a gesture — this one (lib/tabletop/audio.ts).
+      if (engine === "live" && brain === "gemini") ensureTabletopAudioContext();
       const t = turnRef.current;
       if (t.kind === "idle") {
         if (engine === "live") void startLiveTurn(side);
@@ -453,8 +587,33 @@ export function TabletopShell(): JSX.Element {
         }
       }
     },
-    [engine, startLiveTurn, startClassicTurn, endLiveTurn]
+    [engine, brain, startLiveTurn, startClassicTurn, endLiveTurn]
   );
+
+  // Founder chips: a new brain is a new session, so the old one is closed
+  // (and its numbers logged) before the next tap mints the other.
+  const chooseBrain = useCallback(
+    (next: TabletopBrainKind) => {
+      if (!founder || turnRef.current.kind !== "idle") return;
+      try {
+        window.localStorage.setItem(BRAIN_STORAGE_KEY, next);
+      } catch {
+        /* this tap still counts */
+      }
+      if (next !== brain) {
+        liveRef.current?.stop();
+        liveRef.current = null;
+      }
+      setBrain(next);
+    },
+    [founder, brain]
+  );
+
+  const endBrainSession = useCallback(() => {
+    if (turnRef.current.kind !== "idle") return;
+    liveRef.current?.stop();
+    liveRef.current = null;
+  }, []);
 
   const switchEngine = useCallback(() => {
     if (turnRef.current.kind !== "idle") return;
@@ -642,6 +801,16 @@ export function TabletopShell(): JSX.Element {
         </button>
         {error ? <span className="max-w-[40%] truncate text-xs text-red-300">{error}</span> : null}
         </div>
+        {founder && engine === "live" ? (
+          <BrainBar
+            brain={brain}
+            disabled={turn.kind !== "idle"}
+            live={brainLive}
+            last={lastSession}
+            onChoose={chooseBrain}
+            onEnd={endBrainSession}
+          />
+        ) : null}
       </div>
 
       {renderPane(bottomLang, false)}
@@ -656,5 +825,66 @@ export function TabletopShell(): JSX.Element {
         onClose={() => setSheetOpen(false)}
       />
     </main>
+  );
+}
+
+// The founder-only strip under the middle bar: the two brain chips, an end
+// button (a session's numbers are only final once it ends), and the last
+// session's numbers in one line, readable right after a run.
+function BrainBar({
+  brain,
+  disabled,
+  live,
+  last,
+  onChoose,
+  onEnd
+}: {
+  brain: TabletopBrainKind;
+  disabled: boolean;
+  live: boolean;
+  last: TabletopSessionSummary | null;
+  onChoose: (b: TabletopBrainKind) => void;
+  onEnd: () => void;
+}): JSX.Element {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="flex items-center justify-center gap-2">
+        <span className="text-[10px] uppercase tracking-widest text-amber-100/40">brain</span>
+        {TABLETOP_BRAINS.map((b) => (
+          <button
+            key={b}
+            type="button"
+            onClick={() => onChoose(b)}
+            disabled={disabled}
+            aria-pressed={brain === b}
+            className={`rounded-full px-3 py-0.5 text-xs disabled:opacity-40 ${
+              brain === b
+                ? "bg-emerald-400 text-stone-950"
+                : "border border-white/10 bg-white/5 text-amber-100/70"
+            }`}
+          >
+            {BRAIN_LABEL[b]}
+          </button>
+        ))}
+        {live ? (
+          <button
+            type="button"
+            onClick={onEnd}
+            disabled={disabled}
+            className="rounded-full border border-white/10 bg-white/5 px-3 py-0.5 text-xs text-amber-100/70 disabled:opacity-40"
+          >
+            ⏹ end session
+          </button>
+        ) : null}
+      </div>
+      {last ? (
+        <div className="text-center font-mono text-[10px] leading-tight text-amber-100/50">
+          last: {BRAIN_LABEL[last.brain]} · {last.seconds}s · {last.segments} seg · first{" "}
+          {last.first_partial_ms_p50}/{last.first_partial_ms_p95}ms · done {last.segment_done_ms_p50}/
+          {last.segment_done_ms_p95}ms · err {last.errors} · rc {last.reconnects} · $
+          {last.est_usd.toFixed(4)}
+        </div>
+      ) : null}
+    </div>
   );
 }
