@@ -1,24 +1,27 @@
 import type { TtsLangCode } from "./voice";
 
-export type GoogleTtsTier = "standard" | "wavenet" | "neural2";
+export type GoogleTtsTier = "standard" | "wavenet" | "neural2" | "chirp3";
 
 export interface GoogleVoice {
   languageCode: string;
   voiceName: string;
 }
 
-type VoiceNames = Record<GoogleTtsTier, string>;
+type LegacyGoogleTtsTier = Exclude<GoogleTtsTier, "chirp3">;
+type VoiceNames = Record<LegacyGoogleTtsTier, string>;
 
 interface GoogleVoiceRow {
   languageCode: string;
   voices: VoiceNames;
+  supportsChirp3: boolean;
 }
 
 /**
- * One female Google voice for every TAOS spoken language Google covers in the
- * three selectable families. Some languages do not have all three families;
- * those entries repeat the best available lower-cost voice so changing the
- * tier never makes a language that Google can speak disappear.
+ * One Google voice for every TAOS spoken language Google covers. Some
+ * languages do not have all three legacy families; those entries repeat the
+ * best available lower-cost voice so changing the tier never makes a language
+ * that Google can speak disappear. Chirp 3 HD names are shared across locales,
+ * but only locales where the live API listed Fenrir are marked as supported.
  *
  * Verified against Google's public voice list on 2026-10-21. Croatian has no
  * Standard/WaveNet/Neural2 voice, and Bosnian's catalog hint is Croatian, so
@@ -47,11 +50,11 @@ const GOOGLE_VOICES: Partial<Record<TtsLangCode, GoogleVoiceRow>> = {
   yue: voices("yue-HK", "yue-HK-Standard-A", "yue-HK-Standard-A", "yue-HK-Standard-A"),
   cs: voices("cs-CZ", "cs-CZ-Standard-B", "cs-CZ-Wavenet-B", "cs-CZ-Wavenet-B"),
   da: voices("da-DK", "da-DK-Standard-F", "da-DK-Wavenet-F", "da-DK-Neural2-F"),
-  tl: voices("fil-PH", "fil-PH-Standard-A", "fil-PH-Wavenet-A", "fil-ph-Neural2-A"),
+  tl: voices("fil-PH", "fil-PH-Standard-A", "fil-PH-Wavenet-A", "fil-ph-Neural2-A", false),
   fi: voices("fi-FI", "fi-FI-Standard-B", "fi-FI-Wavenet-B", "fi-FI-Wavenet-B"),
   el: voices("el-GR", "el-GR-Standard-B", "el-GR-Wavenet-B", "el-GR-Wavenet-B"),
   hu: voices("hu-HU", "hu-HU-Standard-B", "hu-HU-Wavenet-B", "hu-HU-Wavenet-B"),
-  ms: voices("ms-MY", "ms-MY-Standard-A", "ms-MY-Wavenet-A", "ms-MY-Wavenet-A"),
+  ms: voices("ms-MY", "ms-MY-Standard-A", "ms-MY-Wavenet-A", "ms-MY-Wavenet-A", false),
   no: voices("nb-NO", "nb-NO-Standard-F", "nb-NO-Wavenet-F", "nb-NO-Wavenet-F"),
   ro: voices("ro-RO", "ro-RO-Standard-B", "ro-RO-Wavenet-B", "ro-RO-Wavenet-B"),
   sk: voices("sk-SK", "sk-SK-Standard-B", "sk-SK-Wavenet-B", "sk-SK-Wavenet-B"),
@@ -63,14 +66,21 @@ function voices(
   languageCode: string,
   standard: string,
   wavenet: string,
-  neural2: string
+  neural2: string,
+  supportsChirp3 = true
 ): GoogleVoiceRow {
-  return { languageCode, voices: { standard, wavenet, neural2 } };
+  return { languageCode, voices: { standard, wavenet, neural2 }, supportsChirp3 };
 }
 
 export function googleTtsTier(value = process.env.GOOGLE_TTS_TIER): GoogleTtsTier {
   const tier = value?.trim().toLowerCase();
-  return tier === "standard" || tier === "wavenet" || tier === "neural2" ? tier : "neural2";
+  return tier === "standard" || tier === "wavenet" || tier === "neural2" || tier === "chirp3"
+    ? tier
+    : "chirp3";
+}
+
+export function googleChirp3Voice(value = process.env.GOOGLE_TTS_CHIRP3_VOICE): string {
+  return value?.trim() || "Fenrir";
 }
 
 export function googleVoiceFor(
@@ -80,7 +90,11 @@ export function googleVoiceFor(
   if (!language) return null;
   const row = GOOGLE_VOICES[language];
   if (!row) return null;
-  return { languageCode: row.languageCode, voiceName: row.voices[tier] };
+  const voiceName =
+    tier === "chirp3" && row.supportsChirp3
+      ? `${row.languageCode}-Chirp3-HD-${googleChirp3Voice()}`
+      : row.voices[tier === "chirp3" ? "neural2" : tier];
+  return { languageCode: row.languageCode, voiceName };
 }
 
 export const GOOGLE_TTS_TIMEOUT_MS = 8000;
