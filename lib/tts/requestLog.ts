@@ -30,6 +30,7 @@ export {
 
 export type DeviceFamily = "iPhone" | "iPad" | "Android" | "Mac" | "Windows" | "Linux" | "other";
 export type BrowserFamily = "Safari" | "Chrome" | "Firefox" | "other";
+export type LoggedTtsProvider = TtsProvider | "google";
 
 /**
  * Device and browser from a User-Agent, coarse on purpose.
@@ -80,7 +81,7 @@ export interface TtsLogRecord {
   userId: string | null;
   surface: TtsSurface;
   /** The provider that actually spoke (Fish with no clone is elevenlabs). */
-  engine: TtsProvider | null;
+  engine: LoggedTtsProvider | null;
   /** The engine the client asked for, when it differs from `engine`. */
   requestedEngine: string | null;
   voiceId: string | null;

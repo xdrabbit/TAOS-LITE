@@ -42,8 +42,10 @@ type Engine = TtsEngine;
 const ENGINE_LABEL: Record<Engine, string> = {
   fishaudio: "Fish Audio",
   elevenlabs: "ElevenLabs",
-  openai: "OpenAI"
+  openai: "OpenAI",
+  google: "Google"
 };
+const BASE_ENGINE_CHOICES = ["elevenlabs", "fishaudio", "openai"] as Engine[];
 type Status = "idle" | "recording" | "processing" | "done" | "error";
 
 interface Speaker {
@@ -224,11 +226,13 @@ const NAV_ICON_PATHS = {
 export function TranslatorShell({
   email,
   profile,
-  onSignOut
+  onSignOut,
+  googleTtsEnabled = false
 }: {
   email: string;
   profile: Profile | null;
   onSignOut: () => void;
+  googleTtsEnabled?: boolean;
 }): JSX.Element {
   const subscriber = isSubscriber(profile);
   const [usage, setUsage] = useState<MonthlyUsage | null>(null);
@@ -299,6 +303,10 @@ export function TranslatorShell({
   // v1 release gate: Call and Video links only render for founders
   // (lib/release.ts — the pages themselves are wrapped in FounderGate too).
   const founder = isFounder(email);
+  const engineChoices: Engine[] =
+    googleTtsEnabled && founder
+      ? [...BASE_ENGINE_CHOICES, "google"]
+      : BASE_ENGINE_CHOICES;
   // /call asks its own question rather than reusing `founder`: it is founders
   // OR everyone, once NEXT_PUBLIC_ENABLE_CALL ships it, and the nav must not
   // be the surface that forgets the second half.
@@ -1685,11 +1693,15 @@ export function TranslatorShell({
               what ate taps in PR #53. */}
           <div className="flex items-center justify-between gap-3 text-sm">
             <span className="shrink-0 text-amber-100/70">{s.voiceEngine}</span>
-            <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-full border border-white/10 bg-white/5 p-1">
+            <div
+              className={`grid min-w-0 flex-1 gap-1 rounded-full border border-white/10 bg-white/5 p-1 ${
+                engineChoices.length === 4 ? "grid-cols-4" : "grid-cols-3"
+              }`}
+            >
               {/* Premium engines greyed (not hidden) for free-tier beta testers —
                   visible as a premium voice tier, unreachable as a cost. */}
-              {(["elevenlabs", "fishaudio", "openai"] as Engine[]).map((eng) => {
-                const locked = eng !== "openai" && !subscriber;
+              {engineChoices.map((eng) => {
+                const locked = eng !== "openai" && eng !== "google" && !subscriber;
                 return (
                   <button
                     key={eng}

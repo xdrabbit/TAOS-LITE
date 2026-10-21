@@ -2,7 +2,7 @@
 // lib/tts/speech.ts, so a screen test that mocks the speech request still
 // sees the real default.
 
-export type TtsEngine = "elevenlabs" | "openai" | "fishaudio";
+export type TtsEngine = "elevenlabs" | "openai" | "fishaudio" | "google";
 
 /**
  * The engine a subscriber's home screen starts on. ElevenLabs again since
