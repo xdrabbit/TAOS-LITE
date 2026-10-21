@@ -21,7 +21,7 @@ interface GoogleVoiceRow {
  * languages do not have all three legacy families; those entries repeat the
  * best available lower-cost voice so changing the tier never makes a language
  * that Google can speak disappear. Chirp 3 HD names are shared across locales,
- * but only locales where the live API listed Fenrir are marked as supported.
+ * but only locales where the live API listed Kore are marked as supported.
  *
  * Verified against Google's public voice list on 2026-10-21. Croatian has no
  * Standard/WaveNet/Neural2 voice, and Bosnian's catalog hint is Croatian, so
@@ -80,7 +80,7 @@ export function googleTtsTier(value = process.env.GOOGLE_TTS_TIER): GoogleTtsTie
 }
 
 export function googleChirp3Voice(value = process.env.GOOGLE_TTS_CHIRP3_VOICE): string {
-  return value?.trim() || "Fenrir";
+  return value?.trim() || "Kore";
 }
 
 export function googleVoiceFor(
