@@ -84,14 +84,14 @@ describe("Google Cloud TTS voice selection", () => {
     expect(googleTtsTier("studio")).toBe("chirp3");
   });
 
-  it("uses Fenrir for verified English and Spanish Chirp 3 locales", () => {
+  it("uses Kore for verified English and Spanish Chirp 3 locales", () => {
     expect(googleVoiceFor("en")).toEqual({
       languageCode: "en-US",
-      voiceName: "en-US-Chirp3-HD-Fenrir"
+      voiceName: "en-US-Chirp3-HD-Kore"
     });
     expect(googleVoiceFor("es")).toEqual({
       languageCode: "es-US",
-      voiceName: "es-US-Chirp3-HD-Fenrir"
+      voiceName: "es-US-Chirp3-HD-Kore"
     });
   });
 
@@ -142,7 +142,7 @@ describe("POST /api/tts with engine: google", () => {
     expect(init.headers).toMatchObject({ "x-goog-api-key": "test-google-key" });
     expect(body).toEqual({
       input: { text: "buenas noches" },
-      voice: { languageCode: "es-US", name: "es-US-Chirp3-HD-Fenrir" },
+      voice: { languageCode: "es-US", name: "es-US-Chirp3-HD-Kore" },
       audioConfig: { audioEncoding: "MP3" }
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -152,12 +152,12 @@ describe("POST /api/tts with engine: google", () => {
     expect(insertSpy.mock.calls[0][0]).toMatchObject({
       engine: "google",
       requested_engine: "google",
-      voice_id: "es-US-Chirp3-HD-Fenrir",
+      voice_id: "es-US-Chirp3-HD-Kore",
       voice_role: "stock"
     });
     expect(console.log).toHaveBeenCalledWith(
       expect.stringMatching(
-        /\[taos-tts\].*engine=google.*voice_id=es-US-Chirp3-HD-Fenrir voice_role=stock/
+        /\[taos-tts\].*engine=google.*voice_id=es-US-Chirp3-HD-Kore voice_role=stock/
       )
     );
   });
