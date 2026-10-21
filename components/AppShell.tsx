@@ -7,7 +7,7 @@ import { SignIn } from "./SignIn";
 import { Landing } from "./Landing";
 import { TranslatorShell } from "./TranslatorShell";
 
-export function AppShell(): JSX.Element {
+export function AppShell({ googleTtsEnabled = false }: { googleTtsEnabled?: boolean }): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
@@ -82,6 +82,11 @@ export function AppShell(): JSX.Element {
   // Everyone signed in enters at their tier (free included). Upgrade prompts are
   // shown inline by TranslatorShell / TutorShell when a quota runs out.
   return (
-    <TranslatorShell email={session.user.email ?? ""} profile={profile} onSignOut={signOut} />
+    <TranslatorShell
+      email={session.user.email ?? ""}
+      profile={profile}
+      onSignOut={signOut}
+      googleTtsEnabled={googleTtsEnabled}
+    />
   );
 }

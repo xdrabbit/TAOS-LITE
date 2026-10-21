@@ -8,6 +8,12 @@ import {
   type VoiceOverride
 } from "@/lib/tts/voice";
 import { PERSONAL_VOICE_HEADER, personalVoiceUnlocked } from "@/lib/tts/personalVoice";
+import {
+  decodeGoogleAudio,
+  googleVoiceFor,
+  synthesizeGoogle,
+  type GoogleVoice
+} from "@/lib/tts/google";
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
 import {
@@ -24,7 +30,7 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-type Engine = "elevenlabs" | "openai" | "fishaudio";
+type Engine = "elevenlabs" | "openai" | "fishaudio" | "google";
 
 // Bound the upstream synthesis call well under maxDuration (60s): a stalled
 // provider must become a fast, retryable JSON error, not a hung request the
@@ -233,6 +239,98 @@ async function openai(
   return attempt.response;
 }
 
+type GoogleAttempt =
+  | { ok: true; buffer: ArrayBuffer }
+  | { ok: false; response: NextResponse; errorCode: string; fallbackCode: string };
+
+async function googleAttempt(text: string, voice: GoogleVoice, log: RequestLog): Promise<GoogleAttempt> {
+  const apiKey = process.env.GOOGLE_TTS_API_KEY;
+  if (!apiKey) {
+    log.errorCode = "missing_key";
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Missing GOOGLE_TTS_API_KEY." }, { status: 500 }),
+      errorCode: "missing_key",
+      fallbackCode: "missing_key"
+    };
+  }
+
+  try {
+    const res = await synthesizeGoogle(text, voice, apiKey);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => `HTTP ${res.status}`);
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "Google Cloud TTS failed.", details: detail },
+          { status: 502 }
+        ),
+        errorCode: `provider_${res.status}`,
+        fallbackCode: `google_${res.status}_fallback`
+      };
+    }
+
+    const payload = (await res.json().catch(() => null)) as { audioContent?: unknown } | null;
+    const audio = decodeGoogleAudio(payload?.audioContent);
+    if (!audio) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "Google Cloud TTS returned no audio." },
+          { status: 502 }
+        ),
+        errorCode: "provider_payload",
+        fallbackCode: "google_payload_fallback"
+      };
+    }
+    return { ok: true, buffer: audio };
+  } catch (error) {
+    if (!isTimeout(error)) throw error;
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "The voice service took too long. Please try again." },
+        { status: 504 }
+      ),
+      errorCode: "google_timeout",
+      fallbackCode: "google_timeout_fallback"
+    };
+  }
+}
+
+async function googleCloud(
+  text: string,
+  voice: GoogleVoice,
+  log: RequestLog,
+  targetLanguage?: LangCode
+): Promise<NextResponse> {
+  const attempt = await googleAttempt(text, voice, log);
+  if (attempt.ok) return audioResponse(attempt.buffer, "google", log);
+
+  // Match the OpenAI leash: configuration errors stay errors, while a real
+  // provider failure gets one attempt in ElevenLabs' stock voice.
+  if (attempt.errorCode === "missing_key") return attempt.response;
+
+  const stockVoiceId = defaultElevenLabsVoiceId();
+  log.engine = "elevenlabs";
+  log.voiceId = stockVoiceId;
+  log.voiceRole = "stock";
+  log.errorCode = attempt.fallbackCode;
+
+  try {
+    const fallback = await elevenLabs(text, stockVoiceId, log, targetLanguage);
+    if (fallback.ok) {
+      log.errorCode = attempt.fallbackCode;
+      return fallback;
+    }
+  } catch {
+    // As with OpenAI, expose the original Google failure if fallback fails.
+  }
+
+  log.errorCode = attempt.errorCode;
+  return attempt.response;
+}
+
 /**
  * Fish Audio (fish.audio) — a second home for Tom's and Liz's clones, tried
  * as the home screen's default on 10/06.
@@ -370,8 +468,13 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
       voice?: string;
     };
     const text = typeof body.text === "string" ? body.text.trim() : "";
+    const googleEnabled = process.env.TAOS_TTS_GOOGLE_ENABLED === "1";
     const engine: Engine =
-      body.engine === "openai" || body.engine === "fishaudio" ? body.engine : "elevenlabs";
+      body.engine === "openai" ||
+      body.engine === "fishaudio" ||
+      (body.engine === "google" && googleEnabled)
+        ? body.engine
+        : "elevenlabs";
     const latency = body.latency === "flash" ? ("flash" as const) : undefined;
     const voice: VoiceOverride | undefined =
       body.voice === "tom" || body.voice === "liz" ? body.voice : undefined;
@@ -431,6 +534,22 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
       req.headers.get(PERSONAL_VOICE_HEADER),
       process.env.TAOS_PERSONAL_VOICE_CODE
     );
+
+    if (engine === "google") {
+      const googleVoice = googleVoiceFor(body.targetLanguage);
+      if (!googleVoice) {
+        log.errorCode = "text_only";
+        return NextResponse.json(
+          { error: "This language is text only.", textOnly: true },
+          { status: 422 }
+        );
+      }
+      log.unlocked = unlocked;
+      log.engine = "google";
+      log.voiceId = googleVoice.voiceName;
+      log.voiceRole = "stock";
+      return await googleCloud(text, googleVoice, log, body.targetLanguage);
+    }
 
     // Which provider, which id, whose voice — one decision, shared with the log.
     const resolved: ResolvedVoice = resolveTtsVoice(
