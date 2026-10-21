@@ -69,17 +69,26 @@ function sent(): { url: string; init: RequestInit; body: Record<string, unknown>
 }
 
 describe("Google Cloud TTS voice selection", () => {
-  it("defaults to WaveNet and accepts only the three named tiers", () => {
-    expect(googleTtsTier()).toBe("wavenet");
+  it("defaults to Neural2 and accepts only the three named tiers", () => {
+    expect(googleTtsTier()).toBe("neural2");
     expect(googleTtsTier(" standard ")).toBe("standard");
+    expect(googleTtsTier("WAVENET")).toBe("wavenet");
     expect(googleTtsTier("NEURAL2")).toBe("neural2");
-    expect(googleTtsTier("studio")).toBe("wavenet");
+    expect(googleTtsTier("studio")).toBe("neural2");
   });
 
-  it("uses US Spanish and falls back within Google where a tier is unavailable", () => {
-    expect(googleVoiceFor("es", "wavenet")).toEqual({
+  it("uses verified female Neural2 voices and falls back where a tier is unavailable", () => {
+    expect(googleVoiceFor("en")).toEqual({
+      languageCode: "en-US",
+      voiceName: "en-US-Neural2-F"
+    });
+    expect(googleVoiceFor("es")).toEqual({
       languageCode: "es-US",
-      voiceName: "es-US-Wavenet-A"
+      voiceName: "es-US-Neural2-A"
+    });
+    expect(googleVoiceFor("pt")).toEqual({
+      languageCode: "pt-BR",
+      voiceName: "pt-BR-Neural2-A"
     });
     expect(googleVoiceFor("yue", "neural2")).toEqual({
       languageCode: "yue-HK",
@@ -110,7 +119,7 @@ describe("POST /api/tts with engine: google", () => {
     expect(init.headers).toMatchObject({ "x-goog-api-key": "test-google-key" });
     expect(body).toEqual({
       input: { text: "buenas noches" },
-      voice: { languageCode: "es-US", name: "es-US-Wavenet-A" },
+      voice: { languageCode: "es-US", name: "es-US-Neural2-A" },
       audioConfig: { audioEncoding: "MP3" }
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -120,11 +129,11 @@ describe("POST /api/tts with engine: google", () => {
     expect(insertSpy.mock.calls[0][0]).toMatchObject({
       engine: "google",
       requested_engine: "google",
-      voice_id: "es-US-Wavenet-A",
+      voice_id: "es-US-Neural2-A",
       voice_role: "stock"
     });
     expect(console.log).toHaveBeenCalledWith(
-      expect.stringMatching(/\[taos-tts\].*engine=google.*voice_id=es-US-Wavenet-A voice_role=stock/)
+      expect.stringMatching(/\[taos-tts\].*engine=google.*voice_id=es-US-Neural2-A voice_role=stock/)
     );
   });
 

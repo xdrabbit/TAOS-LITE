@@ -30,7 +30,7 @@ const GOOGLE_VOICES: Partial<Record<TtsLangCode, GoogleVoiceRow>> = {
   zh: voices("cmn-CN", "cmn-CN-Standard-A", "cmn-CN-Wavenet-A", "cmn-CN-Wavenet-A"),
   hi: voices("hi-IN", "hi-IN-Standard-A", "hi-IN-Wavenet-A", "hi-IN-Neural2-A"),
   ar: voices("ar-XA", "ar-XA-Standard-A", "ar-XA-Wavenet-A", "ar-XA-Wavenet-A"),
-  pt: voices("pt-PT", "pt-PT-Standard-E", "pt-PT-Wavenet-E", "pt-PT-Wavenet-E"),
+  pt: voices("pt-BR", "pt-BR-Standard-A", "pt-BR-Wavenet-A", "pt-BR-Neural2-A"),
   ru: voices("ru-RU", "ru-RU-Standard-A", "ru-RU-Wavenet-A", "ru-RU-Wavenet-A"),
   ja: voices("ja-JP", "ja-JP-Standard-B", "ja-JP-Wavenet-B", "ja-JP-Neural2-B"),
   de: voices("de-DE", "de-DE-Standard-G", "de-DE-Wavenet-G", "de-DE-Neural2-G"),
@@ -70,7 +70,7 @@ function voices(
 
 export function googleTtsTier(value = process.env.GOOGLE_TTS_TIER): GoogleTtsTier {
   const tier = value?.trim().toLowerCase();
-  return tier === "standard" || tier === "neural2" ? tier : "wavenet";
+  return tier === "standard" || tier === "wavenet" || tier === "neural2" ? tier : "neural2";
 }
 
 export function googleVoiceFor(
