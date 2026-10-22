@@ -15,6 +15,7 @@ import { languageNative } from "@/lib/languages/catalog";
 import { pairDirection, type PairDirection, type PairLangCode, type PairSide } from "@/lib/translate/pair";
 import { onDeviceSttEnabled } from "@/lib/release";
 import { jsonAuthHeaders } from "@/lib/authClient";
+import { NewestFirstStack } from "./NewestFirstStack";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -757,8 +758,12 @@ export function LiveShell(): JSX.Element {
   const readLanguage = engine === "ambient" ? mine : spoken.targetLanguage;
 
   return (
-    <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
-      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
+    // One screen tall, so the concept feed below can be its own scroll pane —
+    // a newest-first stack (components/NewestFirstStack.tsx) needs a box of
+    // its own to hold still in. A short phone still scrolls the page to reach
+    // START; the feed never shrinks below 38vh.
+    <main className="h-[100dvh] overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
+      <div className="mx-auto flex min-h-full max-w-md flex-col gap-4">
         <header className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
           <a
@@ -881,7 +886,7 @@ export function LiveShell(): JSX.Element {
         ) : null}
 
         {/* Concept feed — the star of the screen */}
-        <section className="flex flex-1 flex-col gap-2">
+        <section className="flex min-h-0 flex-1 flex-col gap-2">
           <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-emerald-100/50">
             <span>Concepts</span>
             <div className="flex items-center gap-2">
@@ -917,7 +922,7 @@ export function LiveShell(): JSX.Element {
             </div>
           </div>
 
-          <div className="flex min-h-[38vh] flex-1 flex-col gap-2">
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
             {/* Live status card */}
             {running ? (
               <div className="flex items-center gap-2 rounded-2xl border border-emerald-300/20 bg-emerald-400/5 px-4 py-3">
@@ -938,55 +943,64 @@ export function LiveShell(): JSX.Element {
               </div>
             ) : null}
 
-            {/* Streaming summary (ambient) renders as a draft card up top */}
-            {draft ? (
-              <div className="rounded-3xl border border-emerald-300/30 bg-emerald-400/[0.06] p-5">
-                <p className="text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight text-emerald-50">
-                  {draft}
-                  <span className="animate-pulse">▍</span>
-                </p>
-              </div>
-            ) : null}
+            {/* The feed is a stack, newest on top: the streaming summary is
+                the top item and grows in place, each finished one lands
+                above the last, and the oldest slide off the bottom. Holding
+                the reader's place while that happens is the stack's job. */}
+            <NewestFirstStack
+              className="flex min-h-[38vh] flex-1 basis-0 flex-col gap-2"
+              contentKey={`${feed[0]?.id ?? 0}:${feed.length}:${draft.length}`}
+            >
+              {draft ? (
+                <div data-stack-item className="rounded-3xl border border-emerald-300/30 bg-emerald-400/[0.06] p-5">
+                  <p className="text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight text-emerald-50">
+                    {draft}
+                    <span className="animate-pulse">▍</span>
+                  </p>
+                </div>
+              ) : null}
 
-            {feed.length === 0 && !draft ? (
-              <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-white/10 px-5 py-10 text-center text-amber-100/40">
-                {running
-                  ? "Waiting for speech…"
-                  : "Tap START, then let it listen — summaries will appear here."}
-              </div>
-            ) : (
-              <ol className="flex flex-col gap-2">
-                {feed.map((entry) => (
-                  <li
-                    key={entry.id}
-                    className={`rounded-3xl border p-5 ${
-                      entry.isGuess
-                        ? "border-amber-300/20 bg-amber-400/[0.04]"
-                        : "border-white/10 bg-[rgba(18,44,36,0.7)]"
-                    }`}
-                  >
-                    <div className="mb-1.5 flex items-center gap-2">
-                      {entry.isGuess ? (
-                        <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-200/80">
-                          guess
-                        </span>
-                      ) : null}
-                      <span className="text-[10px] tracking-wider text-white/25">
-                        {formatTime(entry.at)}
-                      </span>
-                    </div>
-                    <p
-                      className={`text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight ${
-                        entry.isGuess ? "italic text-amber-100/70" : "text-white"
+              {feed.length === 0 && !draft ? (
+                <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-white/10 px-5 py-10 text-center text-amber-100/40">
+                  {running
+                    ? "Waiting for speech…"
+                    : "Tap START, then let it listen — summaries will appear here."}
+                </div>
+              ) : (
+                <ol className="flex flex-col gap-2">
+                  {feed.map((entry) => (
+                    <li
+                      key={entry.id}
+                      data-stack-item
+                      className={`rounded-3xl border p-5 ${
+                        entry.isGuess
+                          ? "border-amber-300/20 bg-amber-400/[0.04]"
+                          : "border-white/10 bg-[rgba(18,44,36,0.7)]"
                       }`}
                     >
-                      {entry.isGuess ? "~ " : ""}
-                      {entry.concept}
-                    </p>
-                  </li>
-                ))}
-              </ol>
-            )}
+                      <div className="mb-1.5 flex items-center gap-2">
+                        {entry.isGuess ? (
+                          <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-200/80">
+                            guess
+                          </span>
+                        ) : null}
+                        <span className="text-[10px] tracking-wider text-white/25">
+                          {formatTime(entry.at)}
+                        </span>
+                      </div>
+                      <p
+                        className={`text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight ${
+                          entry.isGuess ? "italic text-amber-100/70" : "text-white"
+                        }`}
+                      >
+                        {entry.isGuess ? "~ " : ""}
+                        {entry.concept}
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </NewestFirstStack>
           </div>
         </section>
 
