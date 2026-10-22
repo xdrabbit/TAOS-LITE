@@ -28,6 +28,12 @@ export interface TabletopLiveEvents {
   onHeard?: (text: string) => void;
   /** Streaming chunk of translated text for the current turn. */
   onTranslationDelta?: (delta: string) => void;
+  /**
+   * Every server event, read-only, before it is handled — the brain A/B's
+   * measurement tap (lib/tabletop/openaiBrain.ts). It may only LOOK: nothing
+   * sent to the session depends on it, so the control arm stays what it was.
+   */
+  onRealtimeEvent?: (ev: Readonly<Record<string, unknown>>) => void;
 }
 
 export interface TurnResult {
@@ -224,6 +230,11 @@ export async function startTabletopLive(
         ev = JSON.parse(String(data)) as Record<string, unknown>;
       } catch {
         return;
+      }
+      try {
+        events.onRealtimeEvent?.(ev);
+      } catch {
+        /* a measuring hook must never break the table */
       }
       const type = typeof ev.type === "string" ? ev.type : "";
 

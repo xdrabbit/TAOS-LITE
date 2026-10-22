@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { SessionGate } from "@/components/SessionGate";
 import { TabletopShell } from "@/components/TabletopShell";
+import { brainEnvDefault } from "@/lib/tabletop/brain";
 
 export const metadata: Metadata = {
   title: "Tabletop · TAOS",
@@ -13,7 +14,9 @@ export default function TabletopPage(): JSX.Element {
   // /tabletop note in lib/release.ts for why it came out of HELD_BACK_V1.
   return (
     <SessionGate>
-      <TabletopShell />
+      {/* TAOS_TABLETOP_BRAIN is server-only; it reaches the shell as a prop,
+          and only a founder's shell ever reads it (lib/tabletop/brain.ts). */}
+      <TabletopShell defaultBrain={brainEnvDefault()} />
     </SessionGate>
   );
 }
