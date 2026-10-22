@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TabletopLiveState } from "@/lib/tabletop/live";
 import {
   BRAIN_STORAGE_KEY,
@@ -28,6 +28,7 @@ import { holdWake, keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { TextOnlyNote } from "./TextOnly";
+import { NewestFirstStack } from "./NewestFirstStack";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { languageNative } from "@/lib/languages/catalog";
 // Two people, two languages: what one says is always spoken to the other,
@@ -627,15 +628,12 @@ export function TabletopShell({
     });
   }, []);
 
-  // Latest lines relevant to a pane, in ITS language.
-  const paneLines = useCallback(
-    (lang: Lang): { theirs: Exchange | null; mine: Exchange | null } => {
-      const theirs = [...exchanges].reverse().find((e) => e.from !== lang) ?? null;
-      const mine = [...exchanges].reverse().find((e) => e.from === lang) ?? null;
-      return { theirs, mine };
-    },
-    [exchanges]
-  );
+  // A pane's history, NEWEST FIRST (components/NewestFirstStack.tsx): the
+  // other end's turns as translations into this pane's language, this end's
+  // own turns as what was heard. Before 10/22 a pane held only the latest of
+  // each and a long one ran off the bottom; now each new turn lands on top
+  // and pushes the older ones down.
+  const paneHistory = useMemo(() => [...exchanges].reverse(), [exchanges]);
 
   const renderPane = (lang: Lang, rotated: boolean): JSX.Element => {
     const t = copyFor(lang);
@@ -644,14 +642,15 @@ export function TabletopShell({
     // words still cross the table — they just arrive silently, and the pane
     // says so instead of leaving someone waiting on audio.
     const paneTextOnly = isTextOnlyLanguage(lang);
-    const { theirs, mine } = paneLines(lang);
     const isConnecting = turn.kind === "connecting" && turn.side === lang;
     const isRecording = turn.kind === "recording" && turn.side === lang;
     const isProcessing = turn.kind === "processing" && turn.side === lang;
     const otherBusy = turn.kind !== "idle" && turn.side !== lang;
     // Live streaming: while the OTHER side talks, this pane streams the
     // translation as it is generated.
-    const streamingIn = engine === "live" && otherBusy && liveTranslation;
+    const streamingIn = Boolean(engine === "live" && otherBusy && liveTranslation);
+    // ...and while THIS side talks, what it is heard saying.
+    const heardIn = Boolean(isRecording && engine === "live" && liveHeard);
     const cap = engine === "live" ? MAX_TURN_SEC_LIVE : MAX_TURN_SEC_CLASSIC;
 
     return (
@@ -673,48 +672,74 @@ export function TabletopShell({
           ) : null}
         </div>
 
-        {/* What the other person said (or is saying), in MY language. */}
-        <div className="flex-1 overflow-y-auto">
-          {streamingIn ? (
-            <>
-              <div className="text-[11px] uppercase tracking-widest text-emerald-300/70">
-                {t.theySaid} · live
+        {/* The pane's stack, newest on top. In the rotated pane "top" is
+            the top as the person across reads it — the whole section turns,
+            so the DOM's first item is still the one nearest their eyes. The
+            turn in progress is the first item and grows in place. */}
+        <NewestFirstStack
+          className="min-h-0 flex-1"
+          contentKey={`${exchanges.length}:${exchanges[exchanges.length - 1]?.at ?? 0}:${
+            streamingIn ? liveTranslation.length : -1
+          }:${heardIn ? liveHeard.length : -1}`}
+        >
+          <div className="divide-y divide-white/10">
+            {heardIn ? (
+              <div data-stack-item data-testid="pane-item" className="py-3 first:pt-0">
+                <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
+                  {t.youSaid}
+                </div>
+                <div className="text-sm text-amber-100/60">{liveHeard}</div>
               </div>
-              <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
-                {liveTranslation}
-                <span className="animate-pulse text-emerald-300">▍</span>
+            ) : null}
+            {streamingIn ? (
+              <div data-stack-item data-testid="pane-item" className="py-3 first:pt-0">
+                <div className="text-[11px] uppercase tracking-widest text-emerald-300/70">
+                  {t.theySaid} · live
+                </div>
+                <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
+                  {liveTranslation}
+                  <span className="animate-pulse text-emerald-300">▍</span>
+                </div>
               </div>
-            </>
-          ) : theirs ? (
-            <>
-              <div className="text-[11px] uppercase tracking-widest text-amber-100/40">
-                {t.theySaid}
-              </div>
-              <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
-                {theirs.translation}
-              </div>
-            </>
-          ) : (
+            ) : null}
+            {paneHistory.map((ex) =>
+              ex.from !== lang ? (
+                ex.translation ? (
+                  <div
+                    key={ex.at}
+                    data-stack-item
+                    data-testid="pane-item"
+                    className="py-3 first:pt-0"
+                  >
+                    <div className="text-[11px] uppercase tracking-widest text-amber-100/40">
+                      {t.theySaid}
+                    </div>
+                    <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
+                      {ex.translation}
+                    </div>
+                  </div>
+                ) : null
+              ) : ex.original ? (
+                <div
+                  key={ex.at}
+                  data-stack-item
+                  data-testid="pane-item"
+                  className="py-3 first:pt-0"
+                >
+                  <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
+                    {t.youSaid}
+                  </div>
+                  <div className="text-sm text-amber-100/60">{ex.original}</div>
+                </div>
+              ) : null
+            )}
+          </div>
+          {!paneHistory.length && !streamingIn && !heardIn ? (
             <div className="flex h-full items-center justify-center text-center text-sm text-amber-100/30">
               {t.idleHint}
             </div>
-          )}
-          {isRecording && engine === "live" && liveHeard ? (
-            <div className="mt-3 border-t border-white/10 pt-2">
-              <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
-                {t.youSaid}
-              </div>
-              <div className="text-sm text-amber-100/60">{liveHeard}</div>
-            </div>
-          ) : !streamingIn && mine ? (
-            <div className="mt-3 border-t border-white/10 pt-2">
-              <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
-                {t.youSaid}
-              </div>
-              <div className="text-sm text-amber-100/60">{mine.original}</div>
-            </div>
           ) : null}
-        </div>
+        </NewestFirstStack>
 
         <button
           type="button"
