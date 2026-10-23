@@ -45,6 +45,7 @@ import { isTextOnlyLanguage, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { jsonAuthHeaders } from "@/lib/authClient";
 import { keepWake, onWakeLog } from "@/lib/wakeLock";
 import { copyFor, fill, splitAround, type ChromeCopy, type ChromeKey } from "@/lib/chrome/copy";
+import { ExitHome } from "./ExitHome";
 
 // ── /call: translated 1:1 calls ─────────────────────────────────────────────
 // Use case: Tom and Liz call each other over wifi or cellular — video or
@@ -1019,14 +1020,9 @@ export function CallShell(): JSX.Element {
             : "min-h-[calc(100vh-2rem)] gap-4"
         }`}
       >
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            {c.home}
-          </a>
         </header>
 
         {phase === "lobby" ? (

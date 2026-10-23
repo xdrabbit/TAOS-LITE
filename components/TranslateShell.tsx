@@ -10,6 +10,7 @@ import { copyFor } from "@/lib/chrome/copy";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { pairDirection, type PairSide } from "@/lib/translate/pair";
 import { jsonAuthHeaders } from "@/lib/authClient";
+import { ExitHome } from "./ExitHome";
 
 // ── /translate: manual typing surface with personalized predictive autocomplete
 // A companion to /live's voice follow-along. You TYPE; a prediction model trained
@@ -212,14 +213,9 @@ export function TranslateShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
         </header>
 
         <div>
