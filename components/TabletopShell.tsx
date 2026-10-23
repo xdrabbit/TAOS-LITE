@@ -36,6 +36,7 @@ import { languageNative } from "@/lib/languages/catalog";
 import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
 import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import { copyFor } from "@/lib/chrome/copy";
+import { JumpToTail, useFollowTail, type FollowTail } from "./FollowTail";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -637,7 +638,25 @@ export function TabletopShell({
     [exchanges]
   );
 
-  const renderPane = (lang: Lang, rotated: boolean): JSX.Element => {
+  // Each pane follows the tail of whatever is being written into it right
+  // now (components/FollowTail.tsx): the far side's translation while it
+  // streams in, or this side's own "you said" line while it is heard.
+  const paneStreaming = (lang: Lang): { on: boolean; text: string } => {
+    if (engine !== "live" || turn.kind === "idle") return { on: false, text: "" };
+    if (turn.side !== lang) return { on: !!liveTranslation, text: liveTranslation };
+    const hearing = turn.kind === "recording" && !!liveHeard;
+    return { on: hearing, text: hearing ? liveHeard : "" };
+  };
+  const topStream = paneStreaming(topLang);
+  const bottomStream = paneStreaming(bottomLang);
+  const topTail = useFollowTail(topStream.on, topStream.text);
+  const bottomTail = useFollowTail(bottomStream.on, bottomStream.text);
+
+  const renderPane = (
+    lang: Lang,
+    rotated: boolean,
+    tail: FollowTail<HTMLDivElement>
+  ): JSX.Element => {
     const t = copyFor(lang);
     // This pane READS the other end's turns, so it is this pane's own
     // language that /api/tts would be asked for. Tier 2 (catalog) means the
@@ -674,46 +693,49 @@ export function TabletopShell({
         </div>
 
         {/* What the other person said (or is saying), in MY language. */}
-        <div className="flex-1 overflow-y-auto">
-          {streamingIn ? (
-            <>
-              <div className="text-[11px] uppercase tracking-widest text-emerald-300/70">
-                {t.theySaid} · live
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={tail.ref} className="flex-1 overflow-y-auto [overflow-anchor:none]">
+            {streamingIn ? (
+              <>
+                <div className="text-[11px] uppercase tracking-widest text-emerald-300/70">
+                  {t.theySaid} · live
+                </div>
+                <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
+                  {liveTranslation}
+                  <span className="animate-pulse text-emerald-300">▍</span>
+                </div>
+              </>
+            ) : theirs ? (
+              <>
+                <div className="text-[11px] uppercase tracking-widest text-amber-100/40">
+                  {t.theySaid}
+                </div>
+                <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
+                  {theirs.translation}
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full items-center justify-center text-center text-sm text-amber-100/30">
+                {t.idleHint}
               </div>
-              <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
-                {liveTranslation}
-                <span className="animate-pulse text-emerald-300">▍</span>
+            )}
+            {isRecording && engine === "live" && liveHeard ? (
+              <div className="mt-3 border-t border-white/10 pt-2">
+                <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
+                  {t.youSaid}
+                </div>
+                <div className="text-sm text-amber-100/60">{liveHeard}</div>
               </div>
-            </>
-          ) : theirs ? (
-            <>
-              <div className="text-[11px] uppercase tracking-widest text-amber-100/40">
-                {t.theySaid}
+            ) : !streamingIn && mine ? (
+              <div className="mt-3 border-t border-white/10 pt-2">
+                <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
+                  {t.youSaid}
+                </div>
+                <div className="text-sm text-amber-100/60">{mine.original}</div>
               </div>
-              <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
-                {theirs.translation}
-              </div>
-            </>
-          ) : (
-            <div className="flex h-full items-center justify-center text-center text-sm text-amber-100/30">
-              {t.idleHint}
-            </div>
-          )}
-          {isRecording && engine === "live" && liveHeard ? (
-            <div className="mt-3 border-t border-white/10 pt-2">
-              <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
-                {t.youSaid}
-              </div>
-              <div className="text-sm text-amber-100/60">{liveHeard}</div>
-            </div>
-          ) : !streamingIn && mine ? (
-            <div className="mt-3 border-t border-white/10 pt-2">
-              <div className="text-[11px] uppercase tracking-widest text-amber-100/30">
-                {t.youSaid}
-              </div>
-              <div className="text-sm text-amber-100/60">{mine.original}</div>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
+          <JumpToTail show={tail.detached} onJump={tail.jumpToTail} />
         </div>
 
         <button
@@ -753,7 +775,7 @@ export function TabletopShell({
 
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden">
-      {renderPane(topLang, true)}
+      {renderPane(topLang, true, topTail)}
 
       {/* Middle bar — readable from the bottom end (the phone owner), which
           is also whose taps it takes. The pill row is the same one /translate
@@ -813,7 +835,7 @@ export function TabletopShell({
         ) : null}
       </div>
 
-      {renderPane(bottomLang, false)}
+      {renderPane(bottomLang, false, bottomTail)}
 
       <LanguageSheet
         open={sheetOpen}
