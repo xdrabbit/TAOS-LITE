@@ -9,6 +9,7 @@ import {
 import { keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { JumpToTail, useFollowTail } from "./FollowTail";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { recognitionTag } from "@/lib/languages/recognition";
 import { languageNative } from "@/lib/languages/catalog";
@@ -754,6 +755,9 @@ export function LiveShell(): JSX.Element {
   // What the screen is doing right now, as a pair of language names. Ambient
   // AI always runs room → you; the on-device engine follows the side toggle.
   const heardLanguage = engine === "ambient" ? theirs : spoken.sourceLanguage;
+  // The draft only ever exists while a summary streams; it is cleared the
+  // moment the summary lands in the feed.
+  const draftTail = useFollowTail(!!draft, draft);
   const readLanguage = engine === "ambient" ? mine : spoken.targetLanguage;
 
   return (
@@ -939,12 +943,21 @@ export function LiveShell(): JSX.Element {
             ) : null}
 
             {/* Streaming summary (ambient) renders as a draft card up top */}
+            {/* Bounded and following its own tail (components/FollowTail.tsx),
+                so a long summary keeps its live words in view while the page
+                itself stays put. */}
             {draft ? (
-              <div className="rounded-3xl border border-emerald-300/30 bg-emerald-400/[0.06] p-5">
-                <p className="text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight text-emerald-50">
-                  {draft}
-                  <span className="animate-pulse">▍</span>
-                </p>
+              <div className="relative">
+                <div
+                  ref={draftTail.ref}
+                  className="max-h-[40dvh] overflow-y-auto overscroll-contain rounded-3xl border border-emerald-300/30 bg-emerald-400/[0.06] p-5 [overflow-anchor:none]"
+                >
+                  <p className="text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight text-emerald-50">
+                    {draft}
+                    <span className="animate-pulse">▍</span>
+                  </p>
+                </div>
+                <JumpToTail show={draftTail.detached} onJump={draftTail.jumpToTail} />
               </div>
             ) : null}
 
