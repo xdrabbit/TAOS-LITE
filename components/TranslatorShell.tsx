@@ -1419,33 +1419,39 @@ export function TranslatorShell({
 
               min-h-[44px] with inline-flex, not padding: min-height does
               nothing to an inline element. These were 48x30 until #54 — the row
-              a thumb reaches for most, 14px under the floor. */}
-          <nav aria-label={nav.navScreens} className="flex flex-wrap items-center justify-end gap-2">
+              a thumb reaches for most, 14px under the floor.
+
+              px-2 / gap-1.5 / whitespace-nowrap so a founder's five fit ONE line
+              on a 375px iPhone (10/23): at px-3 / gap-2 the Spanish row needed
+              345.7px of a 343px line and Llamada wrapped alone. min-w-[44px]
+              keeps Live, Chat and Call a fingertip wide at the tighter padding.
+              flex-wrap stays as the backstop for a narrower phone. */}
+          <nav aria-label={nav.navScreens} className="flex flex-wrap items-center justify-end gap-1.5">
             <a
               href="/translate"
               aria-label={nav.navTranslate}
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               {nav.navTranslate}
             </a>
             <a
               href="/live"
               aria-label={nav.navLive}
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               {nav.navLive}
             </a>
             <a
               href="/tabletop"
               aria-label={nav.navTable}
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               {nav.navTable}
             </a>
             <a
               href="/chat"
               aria-label="Chat"
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               Chat
             </a>
@@ -1453,7 +1459,7 @@ export function TranslatorShell({
               <a
                 href="/call"
                 aria-label={nav.navCall}
-                className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
               >
                 {nav.navCall}
               </a>
