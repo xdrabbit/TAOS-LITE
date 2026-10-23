@@ -37,6 +37,7 @@ import { otherInPair, type PairLangCode } from "@/lib/translate/pair";
 import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import { copyFor } from "@/lib/chrome/copy";
 import { JumpToTail, useFollowTail, type FollowTail } from "./FollowTail";
+import { ExitHome } from "./ExitHome";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -791,10 +792,8 @@ export function TabletopShell({
           onSelect={selectLanguage}
           onOpenSheet={() => setSheetOpen(true)}
         />
-        <div className="flex items-center justify-center gap-2">
-        <a href="/" className="rounded-full px-2 py-1 text-xs text-amber-100/50">
-          ← TAOS
-        </a>
+        <div data-tabletop-controls="" className="flex flex-wrap items-center justify-center gap-2">
+        <ExitHome lang={mine} />
         <button
           type="button"
           onClick={() => selectLanguage(mine)}

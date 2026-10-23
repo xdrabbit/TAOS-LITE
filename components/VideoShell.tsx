@@ -11,6 +11,7 @@ import { supabase } from "@/lib/supabase";
 import { toSrt, toVtt, type CaptionSegment } from "@/lib/video/captions";
 import { MAX_VIDEO_BYTES } from "@/lib/video/storage";
 import { SignIn } from "./SignIn";
+import { ExitHome } from "./ExitHome";
 
 // /video — feed TAOS a video (MP4/MOV/etc.), get translated closed captions.
 // The browser uploads straight to Supabase Storage via a signed URL (a video
@@ -308,14 +309,9 @@ export function VideoShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
         </header>
 
         <div>
