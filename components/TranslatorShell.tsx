@@ -19,13 +19,23 @@ import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { requestSpeech } from "@/lib/tts/speech";
-import { shareAudioFile } from "@/lib/tts/shareAudio";
+import {
+  SHARE_COVER_ART,
+  SHARE_TEXT_WITH_FILE,
+  brandSharedAudio,
+  loadShareCoverArt,
+  logShareTap,
+  shareAudioFile,
+  shareFileName,
+  shareText
+} from "@/lib/tts/shareAudio";
+import { SIGNOFF_AVAILABLE_HEADER, SIGNOFF_HEADER } from "@/lib/tts/signoffHeaders";
 import { SUBSCRIBER_DEFAULT_ENGINE, type TtsEngine } from "@/lib/tts/engine";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
-import { canSpeak, languageLabel, languageNative } from "@/lib/languages/catalog";
+import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
@@ -293,6 +303,10 @@ export function TranslatorShell({
   const resultAudioRef = useRef<Blob | null>(null);
   const resultAudioRequestRef = useRef<Promise<Blob | null> | null>(null);
   const resultAudioGenerationRef = useRef(0);
+  // Whether the server offered a share sign-off for this result's line
+  // (lib/tts/shareSignoff.ts). Set from the response that fetched it.
+  const signoffOfferRef = useRef<{ generation: number; available: boolean } | null>(null);
+  const shareCoverRef = useRef<Uint8Array | null>(null);
   const wakeStopRef = useRef<(() => void) | null>(null);
   const maxStopTimerRef = useRef<number | null>(null);
   // Visual ramp state (drives the record button directly, no re-render per frame).
@@ -558,6 +572,19 @@ export function TranslatorShell({
     stopRamp();
   }
 
+  // The shared file's cover art, fetched once the first line is on screen so
+  // a Share never waits on it (lib/tts/shareAudio.ts).
+  useEffect(() => {
+    if (!translation || shareCoverRef.current) return;
+    let live = true;
+    void loadShareCoverArt().then((png) => {
+      if (live) shareCoverRef.current = png;
+    });
+    return () => {
+      live = false;
+    };
+  }, [translation]);
+
   function clearResultAudio() {
     resultAudioGenerationRef.current += 1;
     resultAudioRef.current = null;
@@ -583,7 +610,13 @@ export function TranslatorShell({
       {
         fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
         failureMessage: s.ttsFailed,
-        surface
+        surface,
+        onResponse: (res) => {
+          signoffOfferRef.current = {
+            generation,
+            available: res.headers.get(SIGNOFF_AVAILABLE_HEADER) === "1"
+          };
+        }
       }
     ).then((blob) => {
       // A pair change or a new translation can finish while TTS is in flight.
@@ -639,19 +672,89 @@ export function TranslatorShell({
     }
   }
 
+  /**
+   * The audio a Share hands over, and whether it ends with the spoken
+   * sign-off. Play's audio is reused whenever it can be — one TTS call per
+   * line — and the only reason to ask again is a sign-off the server offered
+   * for a free-tier line. A signed file never goes into Play's cache: Play
+   * says the line and nothing else.
+   */
+  async function audioForShare(
+    text: string,
+    src: LangCode,
+    tgt: LangCode
+  ): Promise<{ blob: Blob; signed: boolean } | null> {
+    const generation = resultAudioGenerationRef.current;
+    const existing =
+      resultAudio?.generation === generation
+        ? resultAudio.blob
+        : (resultAudioRef.current ??
+          (resultAudioRequestRef.current ? await resultAudioRequestRef.current : null));
+    if (generation !== resultAudioGenerationRef.current) return null;
+    const offer = signoffOfferRef.current;
+    const offered = offer?.generation === generation && offer.available;
+    if (existing && (subscriber || !offered)) return { blob: existing, signed: false };
+    if (!existing && subscriber) {
+      const blob = await audioForResult(text, src, tgt, "home-share");
+      return blob ? { blob, signed: false } : null;
+    }
+
+    let signed = false;
+    setIsAudioFetching(true);
+    try {
+      const blob = await requestSpeech(
+        { text, engine, sourceLanguage: src, targetLanguage: tgt, signoff: true },
+        {
+          fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+          failureMessage: s.ttsFailed,
+          surface: "home-share",
+          onResponse: (res) => {
+            signed = res.headers.get(SIGNOFF_HEADER) === "1";
+          }
+        }
+      );
+      if (!blob || generation !== resultAudioGenerationRef.current) return null;
+      // Asked and came back clean: the server said no for this person, so
+      // don't ask again for this line.
+      signoffOfferRef.current = { generation, available: signed };
+      if (!signed && !existing) {
+        resultAudioRef.current = blob;
+        setResultAudio({ generation, blob });
+      }
+      return { blob, signed };
+    } finally {
+      if (generation === resultAudioGenerationRef.current) setIsAudioFetching(false);
+    }
+  }
+
   async function shareTranslationAudio() {
     if (!translation || !canSpeak(target)) return;
+    const line = translation;
+    const tgt = target;
     try {
       // Await inside this click handler and hand the File to navigator.share
       // as the very next operation. If Safari has dropped user activation in
       // the meantime, shareAudioFile recovers by downloading the same File.
-      const blob = await audioForResult(translation, source, target, "home-share");
-      if (!blob) return;
-      const targetName = languageLabel(target);
-      await shareAudioFile(blob, {
-        fileName: `TAOS · ${targetName}.mp3`,
-        title: `TAOS · ${targetName}`
+      const audio = await audioForShare(line, source, tgt);
+      if (!audio) return;
+      const file = await brandSharedAudio(audio.blob, line, shareCoverRef.current);
+      const result = await shareAudioFile(file, {
+        fileName: shareFileName(tgt),
+        title: `TAOS · ${languageNative(tgt)}`,
+        text: SHARE_TEXT_WITH_FILE ? shareText(line) : undefined
       });
+      logShareTap(
+        {
+          result,
+          lang: tgt,
+          signoff: audio.signed,
+          subscriber,
+          files: 1,
+          text: SHARE_TEXT_WITH_FILE,
+          cover: SHARE_COVER_ART
+        },
+        await authHeaders()
+      );
     } catch (e) {
       console.error("[tts] share failed", e);
       setError(isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.ttsFailed);

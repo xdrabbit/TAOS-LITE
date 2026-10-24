@@ -104,7 +104,8 @@ export function synthesizeGoogle(
   text: string,
   voice: GoogleVoice,
   apiKey: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  sampleRateHertz?: number
 ): Promise<Response> {
   return fetchImpl("https://texttospeech.googleapis.com/v1/text:synthesize", {
     method: "POST",
@@ -115,7 +116,9 @@ export function synthesizeGoogle(
     body: JSON.stringify({
       input: { text },
       voice: { languageCode: voice.languageCode, name: voice.voiceName },
-      audioConfig: { audioEncoding: "MP3" }
+      // A rate only when asked: the share sign-off must match the line it is
+      // appended to (lib/tts/mp3.ts). Every other call keeps Google's own.
+      audioConfig: sampleRateHertz ? { audioEncoding: "MP3", sampleRateHertz } : { audioEncoding: "MP3" }
     }),
     cache: "no-store",
     signal: AbortSignal.timeout(GOOGLE_TTS_TIMEOUT_MS)
