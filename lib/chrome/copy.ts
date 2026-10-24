@@ -290,7 +290,35 @@ const EN = {
   callWaitingAudio: "Waiting for your partner's audio — the interpreter starts when it arrives.",
   callPartnerLeft: "Your partner left the call. Waiting for them to rejoin…",
   callCameraFailed: "Could not switch the camera.",
-  callInterpreterStartFailed: "The interpreter could not start."
+  callInterpreterStartFailed: "The interpreter could not start.",
+
+  // ── Your voice (/demo) — founders-only sidewalk demo ────────────────────
+  // Agent-written 2026-10-24, both languages — PENDIENTE DE REVISIÓN POR LIZ.
+  // demoConsent is the line a stranger agrees to before the mic opens; it
+  // must stay two sentences and must stay TRUE (lib/demo/server.ts).
+  navDemo: "Your voice",
+  demoTitle: "Your voice, in another language",
+  demoConsent:
+    "We record your voice only for this demo and delete it right after. Nothing is stored.",
+  demoAgree: "I agree",
+  demoPrompt: "Tell me about your day.",
+  demoRecord: "Record",
+  demoStopRecording: "Done talking",
+  demoKeepTalking: "Keep going — at least {seconds} seconds.",
+  demoRemoveNoise: "Remove background noise",
+  demoCreating: "Creating your voice…",
+  demoRevealHint: "Say or type a line. They hear it in their own voice.",
+  demoTypePlaceholder: "Type a line…",
+  demoSpeakLine: "Say a line",
+  demoSay: "Say it",
+  demoLinesLeft: "{count} of {max} lines left",
+  demoShare: "Share",
+  demoDone: "Done",
+  demoDeleting: "Deleting the voice…",
+  demoDeleted: "Deleted. Nothing of the voice is left.",
+  demoDeleteFailed: "The voice could not be deleted yet — it deletes itself within 10 minutes.",
+  demoAgain: "New demo",
+  demoExpiresIn: "Deletes itself in {minutes} min"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -515,7 +543,33 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     callWaitingAudio: "Esperando el audio de la otra persona — el intérprete arranca cuando llegue.",
     callPartnerLeft: "La otra persona salió de la llamada. Esperando a que vuelva…",
     callCameraFailed: "No se pudo cambiar la cámara.",
-    callInterpreterStartFailed: "El intérprete no pudo arrancar."
+    callInterpreterStartFailed: "El intérprete no pudo arrancar.",
+
+    // Tu voz (/demo) — escrito por un agente el 24/10, PENDIENTE DE REVISIÓN
+    // POR LIZ. demoConsent es lo que acepta un desconocido antes de grabar.
+    navDemo: "Tu voz",
+    demoTitle: "Tu voz, en otro idioma",
+    demoConsent:
+      "Grabamos tu voz solo para esta demostración y la borramos justo después. No se guarda nada.",
+    demoAgree: "Acepto",
+    demoPrompt: "Háblame de tu día.",
+    demoRecord: "Grabar",
+    demoStopRecording: "Ya terminé",
+    demoKeepTalking: "Sigue hablando — al menos {seconds} segundos.",
+    demoRemoveNoise: "Quitar el ruido de fondo",
+    demoCreating: "Creando tu voz…",
+    demoRevealHint: "Di o escribe una frase. La escuchará con su propia voz.",
+    demoTypePlaceholder: "Escribe una frase…",
+    demoSpeakLine: "Decir una frase",
+    demoSay: "Decirlo",
+    demoLinesLeft: "Quedan {count} de {max} frases",
+    demoShare: "Compartir",
+    demoDone: "Terminar",
+    demoDeleting: "Borrando la voz…",
+    demoDeleted: "Borrada. No queda nada de la voz.",
+    demoDeleteFailed: "Aún no se pudo borrar la voz — se borra sola en 10 minutos.",
+    demoAgain: "Otra demostración",
+    demoExpiresIn: "Se borra sola en {minutes} min"
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

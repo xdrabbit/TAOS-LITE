@@ -219,6 +219,8 @@ const NAV_ICON_PATHS = {
   photo: ["M3 8.5A2 2 0 015 6.5h2.2L8.5 4.5h7l1.3 2H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z", "M15.5 13a3.5 3.5 0 11-7 0 3.5 3.5 0 017 0z"],
   video: ["M3 7a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z", "M15 10.5l6-3.5v10l-6-3.5"],
   tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"],
+  // /demo: a person with a sound wave — your own voice, carried across.
+  demo: ["M8 7a3 3 0 106 0 3 3 0 00-6 0z", "M4 20a7 7 0 0114 0", "M19 8.5a3 3 0 010 5M21.5 6a6.5 6.5 0 010 10"],
   // /study: an open book — your own conversations, read back as lessons.
   study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"]
 } as const;
@@ -1231,6 +1233,26 @@ export function TranslatorShell({
                         >
                           <NavIcon name="video" />
                           {nav.navVideo}
+                        </a>
+                      ) : null}
+                      {/* /demo — "Tu voz", the founders' sidewalk voice-clone
+                          demo. The tile is founder-only like Video; the page
+                          also needs TAOS_DEMO_ENABLED (server-only), and says
+                          "not enabled" when it is off rather than hiding. */}
+                      {founder ? (
+                        <a
+                          href="/demo"
+                          role="menuitem"
+                          aria-label={nav.navDemo}
+                          aria-current={pathname === "/demo" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/demo"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="demo" />
+                          {nav.navDemo}
                         </a>
                       ) : null}
                       {tutorEnabled() ? (
