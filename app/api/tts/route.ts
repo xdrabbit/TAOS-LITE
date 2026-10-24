@@ -16,6 +16,8 @@ import {
 } from "@/lib/tts/google";
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
+import { isFounder } from "@/lib/release";
+import { authorizeDemoVoice, countDemoLine, demoEnabled } from "@/lib/demo/server";
 import {
   TTS_STANDALONE_HEADER,
   TTS_SURFACE_HEADER,
@@ -68,7 +70,7 @@ function audioResponse(buffer: ArrayBuffer, engine: Engine, log: RequestLog): Ne
 
 // What the request log (lib/tts/requestLog.ts) learns along the way. Filled
 // in as the handler goes, written once by POST whatever the outcome.
-type RequestLog = Pick<
+type RequestLog = { demo?: boolean } & Pick<
   TtsLogRecord,
   | "userId"
   | "engine"
@@ -387,6 +389,40 @@ async function fishAudio(
   return audioResponse(await res.arrayBuffer(), "fishaudio", log);
 }
 
+async function demoVoice(
+  text: string,
+  voiceOverride: unknown,
+  demoToken: unknown,
+  user: { id: string; email?: string | null } | null,
+  log: RequestLog,
+  targetLanguage?: LangCode
+): Promise<NextResponse> {
+  log.demo = true;
+  log.requestedEngine = "demo";
+  const refuse = (code: string): NextResponse => {
+    log.errorCode = `demo_${code}`;
+    return NextResponse.json({ error: "That voice is not available." }, { status: 403 });
+  };
+  if (!demoEnabled()) return refuse("disabled");
+  if (!user || !isFounder(user.email)) return refuse("founder");
+  const verdict = authorizeDemoVoice({
+    voiceId: voiceOverride,
+    token: demoToken,
+    userId: user.id,
+    consume: false
+  });
+  if (!verdict.ok) return refuse(verdict.reason);
+
+  // The id is NOT logged: it is a stranger's voice, and the request log is
+  // the one place on this route that writes to a table. `[taos-demo]` lines
+  // from the demo routes carry it, which is enough to correlate.
+  log.engine = "elevenlabs";
+  log.voiceRole = "none";
+  const res = await elevenLabs(text, voiceOverride as string, log, targetLanguage);
+  if (res.ok) res.headers.set("X-Demo-Lines-Left", String(countDemoLine(voiceOverride as string)));
+  return res;
+}
+
 /**
  * The most an anonymous /try caller may ask to have spoken in one request.
  *
@@ -435,7 +471,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     // A request the spend guard turned away gets the log line but no row:
     // a flood of strangers must not become a flood of inserts.
-    waitUntil(log.errorCode === "guard" ? writeTtsLog(record, null) : writeTtsLog(record));
+    //
+    // A /demo line gets the line and no row either: the stranger's voice is
+    // promised to leave nothing behind, and a table row is something.
+    waitUntil(
+      log.errorCode === "guard" || log.demo ? writeTtsLog(record, null) : writeTtsLog(record)
+    );
   } catch (e) {
     console.warn(`[taos-tts] log skipped: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -466,6 +507,8 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
       targetLanguage?: LangCode;
       latency?: string;
       voice?: string;
+      voiceOverride?: unknown;
+      demoToken?: unknown;
     };
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const googleEnabled = process.env.TAOS_TTS_GOOGLE_ENABLED === "1";
@@ -526,6 +569,15 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
         { error: "This language is text only.", textOnly: true },
         { status: 422 }
       );
+    }
+
+    // /demo ("Tu voz"): speak in a stranger's ten-minute instant clone. The
+    // ONLY way a client names an ElevenLabs voice id on this route, so it is
+    // fenced four ways — flag, founder session, a token the clone route signed
+    // for this exact voice and founder, and the line cap — and a refusal is a
+    // refusal: no fallback to another voice (lib/demo/server.ts says why).
+    if (body.voiceOverride !== undefined) {
+      return await demoVoice(text, body.voiceOverride, body.demoToken, guard.user, log, body.targetLanguage);
     }
 
     // Wrong or absent code -> locked -> default voice. Deliberately silent:

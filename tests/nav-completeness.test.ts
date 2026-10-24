@@ -64,7 +64,10 @@ const GATED: Record<string, string> = {
   video: "founder",
   // /study is dark until NEXT_PUBLIC_ENABLE_STUDY — its own flag, not the
   // tutor's (lib/release.ts). Stripping this block is what a customer sees.
-  study: "studyEnabled()"
+  study: "studyEnabled()",
+  // /demo ("Tu voz") is founders-only, tiled behind `founder` like /video,
+  // and additionally needs the server-only TAOS_DEMO_ENABLED to open.
+  demo: "founder"
 };
 
 function read(path: string): string {
