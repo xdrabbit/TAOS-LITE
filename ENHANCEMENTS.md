@@ -64,6 +64,12 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   feature. Before it ships, verify the whole handoff on a real iPhone,
   including TAOS installed to the Home Screen.
   (added 2026-10-18)
+  → Branding (Tom, 2026-10-24) — PR #104, OPEN, awaiting Tom's phone test:
+  the shared file is named `TAOS · <native name> · taoslite.com.mp3` and is
+  ID3-tagged (title, TAOS·LITE, taoslite.com, /try URL, app icon), with the
+  line plus "— taoslite.com" as share text. Free-tier shares end in a spoken
+  "Traducido con TAOS" / "Translated with TAOS" behind TAOS_SHARE_SIGNOFF
+  (off by default). Each tap is counted as a `[taos-share]` log line.
 
 - **Chrome language should be its own setting, not the translation pair** —
   The next step after PR #68, and named as out of scope there on purpose. Every
