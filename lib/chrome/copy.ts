@@ -318,7 +318,20 @@ const EN = {
   demoDeleted: "Deleted. Nothing of the voice is left.",
   demoDeleteFailed: "The voice could not be deleted yet — it deletes itself within 10 minutes.",
   demoAgain: "New demo",
-  demoExpiresIn: "Deletes itself in {minutes} min"
+  demoExpiresIn: "Deletes itself in {minutes} min",
+
+  // ── Tu voz, public (/voz) — a stranger, on their own phone ─────────────
+  // Agent-written 2026-10-24, both languages — PENDIENTE DE REVISIÓN POR LIZ.
+  // vozConsent is what a stranger agrees to FOR THEMSELVES: it must stay
+  // TRUE to lib/voz/server.ts (one clip, ≤10 minutes, nothing stored, live
+  // microphone only). The rest of /voz reuses the demo* keys above.
+  navVoz: "Your voice (public)",
+  vozWhat: "Hear yourself speak another language — in your own voice.",
+  vozConsent:
+    "We record your voice only to make this one clip. The voice is deleted within 10 minutes and nothing is stored. Live microphone only — no uploads.",
+  vozRevealHint: "Say or type one line in your language. You'll hear it in {language}, in your voice.",
+  vozUsedToday: "That was today's free try.",
+  vozAgainSignUp: "Again? Create your free account"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -569,7 +582,18 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     demoDeleted: "Borrada. No queda nada de la voz.",
     demoDeleteFailed: "Aún no se pudo borrar la voz — se borra sola en 10 minutos.",
     demoAgain: "Otra demostración",
-    demoExpiresIn: "Se borra sola en {minutes} min"
+    demoExpiresIn: "Se borra sola en {minutes} min",
+
+    // Tu voz pública (/voz) — escrito por un agente el 24/10, PENDIENTE DE
+    // REVISIÓN POR LIZ. vozConsent es lo que un desconocido acepta por sí
+    // mismo: tiene que seguir siendo VERDAD (lib/voz/server.ts).
+    navVoz: "Tu voz (pública)",
+    vozWhat: "Escúchate hablar otro idioma — con tu propia voz.",
+    vozConsent:
+      "Grabamos tu voz solo para hacer este clip. La voz se borra en menos de 10 minutos y no se guarda nada. Solo micrófono en vivo — no se suben archivos.",
+    vozRevealHint: "Di o escribe una frase en tu idioma. La escucharás en {language}, con tu voz.",
+    vozUsedToday: "Esa fue tu prueba gratis de hoy.",
+    vozAgainSignUp: "¿Otra vez? Crea tu cuenta gratis"
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

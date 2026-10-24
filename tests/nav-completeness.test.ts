@@ -67,7 +67,11 @@ const GATED: Record<string, string> = {
   study: "studyEnabled()",
   // /demo ("Tu voz") is founders-only, tiled behind `founder` like /video,
   // and additionally needs the server-only TAOS_DEMO_ENABLED to open.
-  demo: "founder"
+  demo: "founder",
+  // /voz is the PUBLIC "Tu voz", reached by a texted link rather than the nav.
+  // Its only nav entry is a founder tile (how Tom walks it), and the page
+  // additionally needs the server-only TAOS_VOZ_ENABLED to open.
+  voz: "founder"
 };
 
 function read(path: string): string {

@@ -24,8 +24,7 @@ export const DEMO_VOICE_PREFIX = "taos-demo-";
  * The share-sheet filename: `TAOS · Spanish · taoslite.com.mp3`.
  *
  * The home screen's share is `TAOS · <lang>.mp3`; the demo's file travels to
- * people who were not on the sidewalk, so it carries the address too.
+ * people who were not on the sidewalk, so it carries the address too. One
+ * function with /voz's (lib/voz/limits.ts), so the two cannot drift.
  */
-export function demoShareFileName(languageName: string): string {
-  return `TAOS · ${languageName} · taoslite.com.mp3`;
-}
+export { vozShareFileName as demoShareFileName } from "@/lib/voz/limits";
