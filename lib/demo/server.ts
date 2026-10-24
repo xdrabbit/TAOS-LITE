@@ -27,7 +27,17 @@
 // the sweep's real backstop is ElevenLabs itself: list every voice named
 // `taos-demo-*` and delete the ones whose `expires` label has passed.
 
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import {
+  addInstantVoice,
+  alreadyGone,
+  deleteVoice,
+  listVoicesByPrefix,
+  listedExpiry,
+  VoiceUpstreamError,
+  type ListedVoice
+} from "@/lib/voz/elevenlabs";
+import { mintSignedToken, readSignedToken } from "@/lib/voz/token";
 import {
   DEMO_MAX_CLONES_PER_DAY,
   DEMO_MAX_LINES,
@@ -35,8 +45,11 @@ import {
   DEMO_VOICE_PREFIX
 } from "./limits";
 
-const ELEVENLABS = "https://api.elevenlabs.io";
-const UPSTREAM_TIMEOUT_MS = 30_000;
+// The ElevenLabs calls and the token signing are shared with the public
+// /voz screen and live in lib/voz/; this file keeps what is /demo's own.
+
+/** Kept for callers that check `instanceof DemoUpstreamError`. */
+export { alreadyGone, VoiceUpstreamError as DemoUpstreamError };
 
 /**
  * Is /demo switched on at all? Server-only (`TAOS_DEMO_ENABLED=1`): the page
@@ -111,42 +124,18 @@ interface TokenPayload {
   e: number;
 }
 
-function signingKey(): Buffer | null {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) return null;
-  // Derived, never the key itself: a leaked token must not be a leaked key,
-  // and this domain string keeps the derivation from colliding with any other.
-  return createHash("sha256").update(`taos-demo-token:v1:${apiKey}`).digest();
-}
-
-function sign(body: string, key: Buffer): string {
-  return createHmac("sha256", key).update(body).digest("base64url");
-}
+/** Domain string of the key derivation — unchanged since #105, so live tokens still verify. */
+const DEMO_TOKEN_DOMAIN = "taos-demo-token:v1";
 
 export function mintDemoToken(payload: TokenPayload): string {
-  const key = signingKey();
-  if (!key) throw new Error("ELEVENLABS_API_KEY is not set");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${body}.${sign(body, key)}`;
+  return mintSignedToken(DEMO_TOKEN_DOMAIN, payload);
 }
 
 /** The payload if the signature is ours, else null. Expiry is NOT checked here. */
 export function readDemoToken(token: unknown): TokenPayload | null {
-  if (typeof token !== "string" || token.length > 600) return null;
-  const key = signingKey();
-  if (!key) return null;
-  const [body, sig, extra] = token.split(".");
-  if (!body || !sig || extra !== undefined) return null;
-  const expected = Buffer.from(sign(body, key));
-  const given = Buffer.from(sig);
-  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
-  try {
-    const p = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<TokenPayload>;
-    if (typeof p.v !== "string" || typeof p.u !== "string" || typeof p.e !== "number") return null;
-    return { v: p.v, u: p.u, e: p.e };
-  } catch {
-    return null;
-  }
+  const p = readSignedToken(DEMO_TOKEN_DOMAIN, token);
+  if (!p || typeof p.v !== "string" || typeof p.u !== "string" || typeof p.e !== "number") return null;
+  return { v: p.v, u: p.u, e: p.e };
 }
 
 export type DemoAuthorization =
@@ -207,26 +196,11 @@ export function countDemoLine(voiceId: string): number {
 
 // ── ElevenLabs ─────────────────────────────────────────────────────────────
 
-function apiKey(): string {
-  const key = process.env.ELEVENLABS_API_KEY;
-  if (!key) throw new Error("ELEVENLABS_API_KEY is not set");
-  return key;
-}
-
 export interface CloneResult {
   voiceId: string;
   token: string;
   expiresAt: number;
   linesLeft: number;
-}
-
-export class DemoUpstreamError extends Error {
-  constructor(
-    message: string,
-    readonly status: number
-  ) {
-    super(message);
-  }
 }
 
 /**
@@ -244,30 +218,16 @@ export async function createDemoVoice(input: {
   const expiresAt = now + DEMO_TTL_MS;
   const name = `${DEMO_VOICE_PREFIX}${randomBytes(4).toString("hex")}`;
 
-  const form = new FormData();
-  form.append("name", name);
-  form.append("files", input.sample, input.fileName);
-  form.append("remove_background_noise", input.removeBackgroundNoise ? "true" : "false");
-  form.append("description", "TAOS sidewalk demo. Deleted automatically within 10 minutes.");
-  form.append("labels", JSON.stringify({ taos: "demo", expires: new Date(expiresAt).toISOString() }));
-
   const started = Date.now();
-  const res = await fetch(`${ELEVENLABS}/v1/voices/add`, {
-    method: "POST",
-    headers: { "xi-api-key": apiKey() },
-    body: form,
-    cache: "no-store",
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+  const voiceId = await addInstantVoice({
+    name,
+    sample: input.sample,
+    fileName: input.fileName,
+    removeBackgroundNoise: input.removeBackgroundNoise,
+    description: "TAOS sidewalk demo. Deleted automatically within 10 minutes.",
+    labels: { taos: "demo", expires: new Date(expiresAt).toISOString() },
+    logTag: "[taos-demo]"
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    // The detail can carry ElevenLabs' explanation; it never carries the key.
-    console.error(`[taos-demo] event=clone_failed http=${res.status} ${detail.slice(0, 200)}`);
-    throw new DemoUpstreamError("Voice cloning failed.", res.status);
-  }
-  const payload = (await res.json().catch(() => ({}))) as { voice_id?: unknown };
-  const voiceId = typeof payload.voice_id === "string" ? payload.voice_id : "";
-  if (!voiceId) throw new DemoUpstreamError("Voice cloning returned no voice.", 502);
 
   live.set(voiceId, { ownerId: input.ownerId, createdAt: now, expiresAt, linesUsed: 0 });
   countClone(input.ownerId, now);
@@ -283,88 +243,22 @@ export async function createDemoVoice(input: {
 /**
  * Delete one demo voice. True when it is gone — including when ElevenLabs
  * says it was already gone, which is the normal answer for the second of
- * "Done" and the page-unload beacon.
- *
- * "Already gone" is NOT a 404 here. Probed against the real API 2026-10-24:
- * a second DELETE answers 400 with `detail.code: "voice_not_found"`. Matching
- * only 404 would have reported every second delete as a failure.
+ * "Done" and the page-unload beacon (see alreadyGone in lib/voz/elevenlabs.ts).
  */
-export function alreadyGone(status: number, body: string): boolean {
-  return status === 404 || (status === 400 && body.includes("voice_not_found"));
-}
-
 export async function deleteDemoVoice(voiceId: string, reason: string): Promise<boolean> {
   const started = Date.now();
   live.delete(voiceId);
   deleted.add(voiceId);
   if (deleted.size > 500) deleted.delete(deleted.values().next().value as string);
   try {
-    const res = await fetch(`${ELEVENLABS}/v1/voices/${encodeURIComponent(voiceId)}`, {
-      method: "DELETE",
-      headers: { "xi-api-key": apiKey() },
-      cache: "no-store",
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
-    });
-    const gone = res.ok || alreadyGone(res.status, res.ok ? "" : await res.text().catch(() => ""));
-    demoLog({ event: "delete", voice: voiceId, reason, http: res.status, ms: Date.now() - started });
+    const { gone, http } = await deleteVoice(voiceId);
+    demoLog({ event: "delete", voice: voiceId, reason, http, ms: Date.now() - started });
     return gone;
   } catch (e) {
     demoLog({ event: "delete_failed", voice: voiceId, reason, ms: Date.now() - started });
     console.error(`[taos-demo] delete error: ${e instanceof Error ? e.message : String(e)}`);
     return false;
   }
-}
-
-interface ListedVoice {
-  voice_id?: unknown;
-  name?: unknown;
-  labels?: unknown;
-  created_at_unix?: unknown;
-}
-
-/** Every voice on the account whose name starts with the demo prefix. */
-async function listDemoVoices(): Promise<ListedVoice[]> {
-  const out: ListedVoice[] = [];
-  let pageToken: string | null = null;
-  for (let page = 0; page < 10; page += 1) {
-    const url = new URL(`${ELEVENLABS}/v2/voices`);
-    url.searchParams.set("search", DEMO_VOICE_PREFIX);
-    url.searchParams.set("page_size", "100");
-    if (pageToken) url.searchParams.set("next_page_token", pageToken);
-    const res = await fetch(url, {
-      headers: { "xi-api-key": apiKey() },
-      cache: "no-store",
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
-    });
-    if (!res.ok) throw new DemoUpstreamError("Listing voices failed.", res.status);
-    const body = (await res.json().catch(() => ({}))) as {
-      voices?: ListedVoice[];
-      has_more?: boolean;
-      next_page_token?: string | null;
-    };
-    for (const v of body.voices ?? []) {
-      // `search` is fuzzy; the prefix is the contract.
-      if (typeof v.name === "string" && v.name.startsWith(DEMO_VOICE_PREFIX)) out.push(v);
-    }
-    if (!body.has_more || !body.next_page_token) break;
-    pageToken = body.next_page_token;
-  }
-  return out;
-}
-
-/**
- * When does a listed voice expire? Its own `expires` label first (we wrote
- * it), then its creation time plus the TTL. Null when it carries neither —
- * a `taos-demo-*` voice nobody can date is a stray, and strays go.
- */
-function listedExpiry(v: ListedVoice): number | null {
-  const labels = (v.labels && typeof v.labels === "object" ? v.labels : {}) as Record<string, unknown>;
-  const fromLabel = typeof labels.expires === "string" ? Date.parse(labels.expires) : NaN;
-  if (Number.isFinite(fromLabel)) return fromLabel;
-  if (typeof v.created_at_unix === "number" && v.created_at_unix > 0) {
-    return v.created_at_unix * 1000 + DEMO_TTL_MS;
-  }
-  return null;
 }
 
 export interface SweepResult {
@@ -389,9 +283,9 @@ export async function sweepDemoVoices(now = Date.now()): Promise<SweepResult> {
   let kept = 0;
   let listError: string | null = null;
   try {
-    for (const v of await listDemoVoices()) {
+    for (const v of (await listVoicesByPrefix(DEMO_VOICE_PREFIX)) as ListedVoice[]) {
       if (typeof v.voice_id !== "string") continue;
-      const expiry = listedExpiry(v);
+      const expiry = listedExpiry(v, DEMO_TTL_MS);
       if (expiry === null || now >= expiry) doomed.add(v.voice_id);
       else kept += 1;
     }

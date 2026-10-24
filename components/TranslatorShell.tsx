@@ -1358,6 +1358,26 @@ export function TranslatorShell({
                           {nav.navDemo}
                         </a>
                       ) : null}
+                      {/* /voz — the PUBLIC "Tu voz", a stranger on their own
+                          phone. Reached by a texted link, not the nav; this
+                          founder tile is how Tom walks it on his own phone.
+                          The page also needs TAOS_VOZ_ENABLED (server-only). */}
+                      {founder ? (
+                        <a
+                          href="/voz"
+                          role="menuitem"
+                          aria-label={nav.navVoz}
+                          aria-current={pathname === "/voz" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/voz"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="demo" />
+                          {nav.navVoz}
+                        </a>
+                      ) : null}
                       {tutorEnabled() ? (
                         <a
                           href="/tutor"

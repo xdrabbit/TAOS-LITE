@@ -3,6 +3,7 @@ import { notFound } from "@/lib/demo/guard";
 import { demoEnabled, sweepDemoVoices } from "@/lib/demo/server";
 import { guardSpend } from "@/lib/spendGuard";
 import { isFounder } from "@/lib/release";
+import { sweepVozVoices } from "@/lib/voz/server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -17,6 +18,9 @@ export const dynamic = "force-dynamic";
 //
 // Not through guardDemo(): that kicks off a background sweep, and this route
 // is the sweep.
+//
+// It sweeps the public /voz screen's `taos-voz-*` voices too (`voz` in the
+// answer): one URL for Tom to ask "is anything of anybody's voice left?".
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!demoEnabled()) return notFound();
@@ -24,9 +28,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!guard.ok) return guard.response;
   if (!isFounder(guard.user?.email)) return notFound();
 
-  const result = await sweepDemoVoices();
-  return NextResponse.json(result, {
-    status: result.listError ? 502 : 200,
+  const [result, voz] = await Promise.all([sweepDemoVoices(), sweepVozVoices()]);
+  return NextResponse.json({ ...result, voz }, {
+    status: result.listError || voz.listError ? 502 : 200,
     headers: { "Cache-Control": "no-store" }
   });
 }

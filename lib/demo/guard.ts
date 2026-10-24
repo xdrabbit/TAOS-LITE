@@ -18,6 +18,7 @@ import type { User } from "@supabase/supabase-js";
 import { guardSpend } from "@/lib/spendGuard";
 import { isFounder } from "@/lib/release";
 import { demoEnabled, sweepDemoVoices } from "./server";
+import { sweepVozVoices } from "@/lib/voz/server";
 
 export type DemoGuardResult = { ok: true; user: User } | { ok: false; response: NextResponse };
 
@@ -25,10 +26,14 @@ export function notFound(): NextResponse {
   return NextResponse.json({ error: "Not found." }, { status: 404, headers: { "Cache-Control": "no-store" } });
 }
 
-/** Start a sweep without making the caller wait for it. Never throws. */
+/**
+ * Start a sweep without making the caller wait for it. Never throws. Sweeps
+ * the public /voz screen's `taos-voz-*` voices as well — belt and braces on
+ * top of /voz's own sweep, since /voz's routes only sweep on a valid token.
+ */
 export function kickSweep(): void {
   try {
-    waitUntil(sweepDemoVoices().catch(() => undefined));
+    waitUntil(Promise.all([sweepDemoVoices(), sweepVozVoices()]).catch(() => undefined));
   } catch {
     // Outside a Vercel request context (tests, local) the promise still runs.
   }

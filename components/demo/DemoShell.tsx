@@ -13,6 +13,7 @@ import {
   DEMO_MIN_SAMPLE_SECONDS,
   demoShareFileName
 } from "@/lib/demo/limits";
+import { fileNameFor, pickMimeType, SAMPLE_BITS_PER_SECOND, sendCleanupBeacon as beacon } from "@/lib/voz/recorder";
 import { ExitHome } from "@/components/ExitHome";
 import { LanguagePillRow, LanguageSheet } from "@/components/LanguagePicker";
 
@@ -38,25 +39,6 @@ interface DemoVoice {
   expiresAt: number;
 }
 
-/** Same candidates as the home screen; opus first, AAC for iOS. */
-function pickMimeType(): string {
-  if (typeof MediaRecorder === "undefined") return "";
-  for (const c of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"]) {
-    try {
-      if (MediaRecorder.isTypeSupported(c)) return c;
-    } catch {
-      /* ignore */
-    }
-  }
-  return "";
-}
-
-function fileNameFor(mime: string, stem: string): string {
-  return mime.includes("mp4") || mime.includes("aac") ? `${stem}.mp4` : `${stem}.webm`;
-}
-
-/** Twice the home screen's bitrate: this recording becomes a voice. ~720 KB at 90 s. */
-const SAMPLE_BITS_PER_SECOND = 64000;
 /** The "creating your voice" beat is part of the show; never shorter than this. */
 const MIN_CREATING_MS = 3000;
 /** The founder's own line: a sentence, not a speech. */
@@ -110,19 +92,7 @@ export function DemoShell(): JSX.Element {
     const v = voiceRef.current;
     if (!v) return;
     voiceRef.current = null;
-    const body = cleanupBody(v, "unload");
-    try {
-      // text/plain keeps the beacon a "simple" request; the route parses it.
-      const sent =
-        typeof navigator !== "undefined" &&
-        typeof navigator.sendBeacon === "function" &&
-        navigator.sendBeacon("/api/demo/cleanup", new Blob([body], { type: "text/plain" }));
-      if (!sent) {
-        void fetch("/api/demo/cleanup", { method: "POST", body, keepalive: true }).catch(() => {});
-      }
-    } catch {
-      // The sweep is the backstop.
-    }
+    beacon("/api/demo/cleanup", cleanupBody(v, "unload"));
   }, []);
 
   useEffect(() => {
