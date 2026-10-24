@@ -434,7 +434,6 @@ export function VozShell(): JSX.Element {
             </button>
           )
         ) : null}
-        <p className="text-sm text-amber-100/70">{s.vozKeepForever}</p>
       </section>
     ) : null;
 

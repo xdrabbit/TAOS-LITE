@@ -331,8 +331,7 @@ const EN = {
     "We record your voice only to make this one clip. The voice is deleted within 10 minutes and nothing is stored. Live microphone only — no uploads.",
   vozRevealHint: "Say or type one line in your language. You'll hear it in {language}, in your voice.",
   vozUsedToday: "That was today's free try.",
-  vozAgainSignUp: "Again? Create your free account",
-  vozKeepForever: "Keep your voice for good with a subscription."
+  vozAgainSignUp: "Again? Create your free account"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -594,8 +593,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
       "Grabamos tu voz solo para hacer este clip. La voz se borra en menos de 10 minutos y no se guarda nada. Solo micrófono en vivo — no se suben archivos.",
     vozRevealHint: "Di o escribe una frase en tu idioma. La escucharás en {language}, con tu voz.",
     vozUsedToday: "Esa fue tu prueba gratis de hoy.",
-    vozAgainSignUp: "¿Otra vez? Crea tu cuenta gratis",
-    vozKeepForever: "Conserva tu voz para siempre con una suscripción."
+    vozAgainSignUp: "¿Otra vez? Crea tu cuenta gratis"
   },
 
   // ── Written by nobody here since ────────────────────────────────────────
