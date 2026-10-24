@@ -23,6 +23,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     lang?: unknown;
     signoff?: unknown;
     subscriber?: unknown;
+    files?: unknown;
+    text?: unknown;
+    cover?: unknown;
   };
   if (typeof body.result !== "string" || !RESULTS.has(body.result)) {
     return NextResponse.json({ error: "Unknown result." }, { status: 400 });
@@ -31,7 +34,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     typeof body.lang === "string" ? body.lang.replace(/[^0-9A-Za-z-]/g, "").slice(0, 12) || "?" : "?";
   console.log(
     `[taos-share] result=${body.result} lang=${lang} signoff=${body.signoff === true ? 1 : 0} ` +
-      `subscriber=${body.subscriber === true ? 1 : 0}`
+      `subscriber=${body.subscriber === true ? 1 : 0} files=${body.files === 1 ? 1 : 0} ` +
+      `text=${body.text === true ? 1 : 0} cover=${body.cover === true ? 1 : 0}`
   );
   return new NextResponse(null, { status: 204 });
 }

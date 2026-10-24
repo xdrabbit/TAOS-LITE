@@ -86,6 +86,9 @@ export interface ShareTap {
   lang: string;
   signoff: boolean;
   subscriber: boolean;
+  files: 1;
+  text: boolean;
+  cover: boolean;
 }
 
 export function logShareTap(

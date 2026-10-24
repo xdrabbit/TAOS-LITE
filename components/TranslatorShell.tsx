@@ -20,6 +20,7 @@ import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { requestSpeech } from "@/lib/tts/speech";
 import {
+  SHARE_COVER_ART,
   SHARE_TEXT_WITH_FILE,
   brandSharedAudio,
   loadShareCoverArt,
@@ -742,7 +743,18 @@ export function TranslatorShell({
         title: `TAOS · ${languageNative(tgt)}`,
         text: SHARE_TEXT_WITH_FILE ? shareText(line) : undefined
       });
-      logShareTap({ result, lang: tgt, signoff: audio.signed, subscriber }, await authHeaders());
+      logShareTap(
+        {
+          result,
+          lang: tgt,
+          signoff: audio.signed,
+          subscriber,
+          files: 1,
+          text: SHARE_TEXT_WITH_FILE,
+          cover: SHARE_COVER_ART
+        },
+        await authHeaders()
+      );
     } catch (e) {
       console.error("[tts] share failed", e);
       setError(isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.ttsFailed);

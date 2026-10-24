@@ -426,20 +426,52 @@ describe("the Play path in the home screen", () => {
 
 // ── Counting share taps ─────────────────────────────────────────────────────
 describe("share tap counting", () => {
-  it("posts result, language, sign-off and tier — and nothing else", () => {
+  it("posts result, language, sign-off, tier and payload configuration", () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
-    logShareTap({ result: "shared", lang: "es", signoff: true, subscriber: false }, { authorization: "Bearer t" }, fetchImpl as unknown as typeof fetch);
+    logShareTap(
+      {
+        result: "shared",
+        lang: "es",
+        signoff: true,
+        subscriber: false,
+        files: 1,
+        text: false,
+        cover: true
+      },
+      { authorization: "Bearer t" },
+      fetchImpl as unknown as typeof fetch
+    );
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/tts/share");
-    expect(JSON.parse(String(init.body))).toEqual({ result: "shared", lang: "es", signoff: true, subscriber: false });
+    expect(JSON.parse(String(init.body))).toEqual({
+      result: "shared",
+      lang: "es",
+      signoff: true,
+      subscriber: false,
+      files: 1,
+      text: false,
+      cover: true
+    });
     expect(init.keepalive).toBe(true);
   });
 
   it("never throws when the count cannot be sent", () => {
     expect(() =>
-      logShareTap({ result: "cancelled", lang: "es", signoff: false, subscriber: false }, {}, (() => {
-        throw new Error("offline");
-      }) as unknown as typeof fetch)
+      logShareTap(
+        {
+          result: "cancelled",
+          lang: "es",
+          signoff: false,
+          subscriber: false,
+          files: 1,
+          text: false,
+          cover: false
+        },
+        {},
+        (() => {
+          throw new Error("offline");
+        }) as unknown as typeof fetch
+      )
     ).not.toThrow();
   });
 
@@ -452,14 +484,24 @@ describe("share tap counting", () => {
 
   it("logs one [taos-share] line per tap for shared, downloaded and cancelled", async () => {
     for (const result of ["shared", "downloaded", "cancelled"]) {
-      const res = await SHARE(shareReq({ result, lang: "es", signoff: result === "shared", subscriber: false, text: "secret words" }));
+      const res = await SHARE(
+        shareReq({
+          result,
+          lang: "es",
+          signoff: result === "shared",
+          subscriber: false,
+          files: 1,
+          text: result === "shared" ? true : "secret words",
+          cover: result === "shared"
+        })
+      );
       expect(res.status).toBe(204);
     }
     const lines = (console.log as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(lines).toEqual([
-      "[taos-share] result=shared lang=es signoff=1 subscriber=0",
-      "[taos-share] result=downloaded lang=es signoff=0 subscriber=0",
-      "[taos-share] result=cancelled lang=es signoff=0 subscriber=0"
+      "[taos-share] result=shared lang=es signoff=1 subscriber=0 files=1 text=1 cover=1",
+      "[taos-share] result=downloaded lang=es signoff=0 subscriber=0 files=1 text=0 cover=0",
+      "[taos-share] result=cancelled lang=es signoff=0 subscriber=0 files=1 text=0 cover=0"
     ]);
     expect(lines.join(" ")).not.toContain("secret");
     expect(lines.join(" ")).not.toContain("free@example.com");
