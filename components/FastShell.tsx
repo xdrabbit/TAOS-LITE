@@ -11,6 +11,7 @@ import { copyFor } from "@/lib/chrome/copy";
 import { FAST_DEBOUNCE_MS, FAST_MAX_CHARS } from "@/lib/fast/settle";
 import { hasSomethingToClear } from "@/lib/fast/clear";
 import { fastMicEnabled } from "@/lib/release";
+import { ExitHome } from "./ExitHome";
 
 // ── /fast: the quickie ─────────────────────────────────────────────────────
 // One box. You type, and the translation is already there. No record button,
@@ -310,14 +311,9 @@ export function FastShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
         </header>
 
         <div>

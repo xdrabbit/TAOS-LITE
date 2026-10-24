@@ -16,6 +16,7 @@ import { languageNative } from "@/lib/languages/catalog";
 import { pairDirection, type PairDirection, type PairLangCode, type PairSide } from "@/lib/translate/pair";
 import { onDeviceSttEnabled } from "@/lib/release";
 import { jsonAuthHeaders } from "@/lib/authClient";
+import { ExitHome } from "./ExitHome";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -763,14 +764,9 @@ export function LiveShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
         </header>
 
         <div>
