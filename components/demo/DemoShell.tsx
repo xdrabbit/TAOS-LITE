@@ -13,6 +13,7 @@ import {
   DEMO_MIN_SAMPLE_SECONDS,
   demoShareFileName
 } from "@/lib/demo/limits";
+import { ExitHome } from "@/components/ExitHome";
 import { LanguagePillRow, LanguageSheet } from "@/components/LanguagePicker";
 
 // ── /demo — "Tu voz" ───────────────────────────────────────────────────────
@@ -422,23 +423,19 @@ export function DemoShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          {/* A plain link out still deletes the clone: pagehide sends the
+              cleanup beacon (above). */}
+          <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          {stage === "reveal" ? (
+          {stage === "reveal" && (
             <button
               type="button"
               onClick={() => void finish()}
-              className="rounded-full bg-amber-400 px-4 py-1.5 text-sm font-semibold text-stone-950"
+              className="ml-auto rounded-full bg-amber-400 px-4 py-1.5 text-sm font-semibold text-stone-950"
             >
               Terminar · Done
             </button>
-          ) : (
-            <a
-              href="/"
-              className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-            >
-              ← Home
-            </a>
           )}
         </header>
 

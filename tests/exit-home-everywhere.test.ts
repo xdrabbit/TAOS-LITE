@@ -93,6 +93,8 @@ const SCREENS: Record<string, Loader> = {
   study: async () => (await import("@/components/StudyShell")).StudyShell,
   tutor: async () => (await import("@/components/TutorShell")).TutorShell,
   try: async () => (await import("@/components/AtomShell")).AtomShell,
+  // /demo's page is a server gate around this; the shell is the screen.
+  demo: async () => (await import("@/components/demo/DemoShell")).DemoShell,
   about: async () => (await import("@/app/about/page")).default,
   guide: async () => (await import("@/app/guide/page")).default,
   "love-in-translation": async () => (await import("@/app/love-in-translation/page")).default
