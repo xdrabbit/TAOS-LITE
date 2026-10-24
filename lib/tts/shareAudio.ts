@@ -16,7 +16,7 @@ export interface ShareAudioOptions {
 /** One-line switch for the APIC cover art, should a player choke on it. */
 export const SHARE_COVER_ART = true;
 /** One-line switch for the share text, should a target drop the file for it. */
-export const SHARE_TEXT_WITH_FILE = true;
+export const SHARE_TEXT_WITH_FILE = false;
 
 export const SHARE_TAG_ARTIST = "TAOS·LITE";
 export const SHARE_TAG_ALBUM = "taoslite.com";
