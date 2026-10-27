@@ -11,7 +11,7 @@ import {
   parseTone,
   type Tone
 } from "@/lib/translate/prompts";
-import { transcribeAudio } from "@/lib/translate/transcribe";
+import { autoTranscribeModel, transcribeAudio } from "@/lib/translate/transcribe";
 import { guardSpend } from "@/lib/spendGuard";
 import {
   parseAutoSegments,
@@ -212,7 +212,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // back as Standard Written Chinese and detection can't tell them apart.
       const autoHint =
         pairA === "yue" || pairB === "yue" ? CANTONESE_STT_HINT : undefined;
-      const original = await transcribeAudio(apiKey, audio, { extraHint: autoHint });
+      // Auto turns may run on their own transcriber (OPENAI_AUTO_TRANSCRIBE_MODEL):
+      // production's default drops one language from a mixed clip.
+      const transcriber = autoTranscribeModel();
+      const original = await transcribeAudio(apiKey, audio, {
+        extraHint: autoHint,
+        model: transcriber
+      });
       if (!original) {
         return NextResponse.json(
           { error: "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo." },
@@ -231,7 +237,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       console.log(
         `[taos-translate] auto=1 segments=${segments.length} detected=${segments
           .map((seg) => seg.sourceLanguage)
-          .join(",")} src_chars=${original.length} ms=${Date.now() - startedAt}`
+          .join(",")} src_chars=${original.length} transcriber=${transcriber} ms=${
+          Date.now() - startedAt
+        }`
       );
       // One segment is today's response exactly. Several keep the same
       // top-level fields (joined, direction from the first) so any reader of

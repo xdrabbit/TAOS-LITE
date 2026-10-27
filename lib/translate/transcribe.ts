@@ -47,6 +47,30 @@ export interface TranscribeOptions {
   extraHint?: string;
   /** Upstream timeout for this caller. Defaults to TRANSCRIBE_TIMEOUT_MS. */
   timeoutMs?: number;
+  /**
+   * The transcription model for this call. Omit it and every caller gets
+   * defaultTranscribeModel(), which is what all of them used before this
+   * option existed. Only /api/translate's auto path passes one (see
+   * autoTranscribeModel()).
+   */
+  model?: string;
+}
+
+/** The model every surface's mic uses: OPENAI_TRANSCRIBE_MODEL, else gpt-4o-transcribe. */
+export function defaultTranscribeModel(): string {
+  return process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
+}
+
+/**
+ * The model for home's Auto-detect turns only. 2026-10-26 (PR #108's live
+ * check): gpt-4o-transcribe collapses a two-language clip into ONE language,
+ * so a mixed turn never reaches the segments code. gpt-4o-mini-transcribe and
+ * whisper-1 keep both halves. OPENAI_AUTO_TRANSCRIBE_MODEL lets the auto path
+ * switch without moving /fast, /try, Tabletop or any manual-direction turn.
+ * Unset, it is exactly defaultTranscribeModel().
+ */
+export function autoTranscribeModel(): string {
+  return process.env.OPENAI_AUTO_TRANSCRIBE_MODEL?.trim() || defaultTranscribeModel();
 }
 
 /**
@@ -62,7 +86,7 @@ export async function transcribeAudio(
   options: TranscribeOptions = {}
 ): Promise<string> {
   const { sourceLabel, extraHint, timeoutMs = TRANSCRIBE_TIMEOUT_MS } = options;
-  const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe";
+  const model = options.model?.trim() || defaultTranscribeModel();
   const form = new FormData();
   form.append("file", file, file.name || "audio.webm");
   form.append("model", model);
