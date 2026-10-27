@@ -39,3 +39,36 @@ export function buildTurnInstructions(direction: TabletopDirection): string {
     `REMINDER: output ${target} text and ONLY ${target} text.`
   ].join(" ");
 }
+
+/** The two ends of an auto-detect table, as catalog codes. */
+export interface TabletopAutoPair {
+  a: string;
+  b: string;
+}
+
+/**
+ * Auto-detect mode (Liz and Tom, 2026-10-27): one phone, two languages,
+ * nobody taps. Each phrase arrives in ONE of the pair and goes out in the
+ * OTHER, and the model says which one it wrote by opening every response with
+ * `[xx] ` — the catalog code of the OUTPUT language. The client reads that tag
+ * to pick the pane, the readout voice and the exchange's direction
+ * (lib/tabletop/autoDetect.ts), so it is the one thing this prompt adds to
+ * buildTurnInstructions' rules. Same placement lesson as lib/live/
+ * instructions.ts: the format rule comes first and is repeated last, because
+ * a rule buried mid-prompt is the one the model drifts off.
+ */
+export function buildAutoInstructions(pair: TabletopAutoPair): string {
+  const a = languageLabel(pair.a);
+  const b = languageLabel(pair.b);
+  return [
+    `FORMAT: the first token of every response is the language tag of the language you are writing, exactly [${pair.a}] for ${a} or [${pair.b}] for ${b}, then a space, then the translation. Nothing before the tag.`,
+    `You are a simultaneous interpreter for two people at a table. One speaks ${a}, the other speaks ${b}.`,
+    `Each phrase arrives in ONE of the two languages. Translate it into the OTHER: ${a} into ${b}, ${b} into ${a}. Faithful, natural, FIRST person — write AS the speaker, never about them.`,
+    MEANING_FIRST_RULE(),
+    `Translate each phrase on its own; do not recap earlier phrases.`,
+    `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer questions yourself, never add commentary.`,
+    `NEVER invent content. If you heard only noise, music, or unintelligible sound, output nothing at all.`,
+    `If a phrase cut off or a word was unintelligible, translate only the words you clearly heard — never guess or complete the missing part.`,
+    `REMINDER: start every response with [${pair.a}] or [${pair.b}] — the language you are writing — then the translation, and only the translation.`
+  ].join(" ");
+}

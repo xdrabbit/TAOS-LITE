@@ -5,7 +5,12 @@
 // harness drives this builder against the real API, so the per-minute figures
 // in docs/realtime-cost-model.md describe the session that actually ships.
 
-import { buildTurnInstructions, type TabletopDirection } from "@/lib/tabletop/instructions";
+import {
+  buildAutoInstructions,
+  buildTurnInstructions,
+  type TabletopAutoPair,
+  type TabletopDirection
+} from "@/lib/tabletop/instructions";
 import { contextTokenLimitFromEnv, truncationCap } from "@/lib/realtime/truncation";
 
 /**
@@ -45,6 +50,12 @@ export interface TabletopSessionOptions {
    * null, to measure the "before" column.
    */
   contextTokenLimit?: number | null;
+  /**
+   * Auto-detect mode: the table's two languages. Set → the session opens on
+   * buildAutoInstructions instead of one turn's direction. Nothing else in the
+   * session changes — same text output, VAD and cap.
+   */
+  auto?: TabletopAutoPair;
 }
 
 export function buildTabletopSession(opts: TabletopSessionOptions): Record<string, unknown> {
@@ -54,7 +65,7 @@ export function buildTabletopSession(opts: TabletopSessionOptions): Record<strin
   return {
     type: "realtime",
     model: opts.model,
-    instructions: buildTurnInstructions(opts.direction),
+    instructions: opts.auto ? buildAutoInstructions(opts.auto) : buildTurnInstructions(opts.direction),
     // TEXT ONLY: the streamed translation is read off the pane; audio readout
     // happens at turn end via /api/tts (cloned voices, party-volume mp3).
     output_modalities: ["text"],

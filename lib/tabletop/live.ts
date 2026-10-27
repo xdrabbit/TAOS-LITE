@@ -1,6 +1,11 @@
 "use client";
 
-import { buildTurnInstructions, type TabletopDirection } from "./instructions";
+import {
+  buildAutoInstructions,
+  buildTurnInstructions,
+  type TabletopAutoPair,
+  type TabletopDirection
+} from "./instructions";
 import { jsonAuthHeaders } from "@/lib/authClient";
 
 // WebRTC client for /tabletop "live" mode. One persistent GA Realtime session
@@ -42,8 +47,13 @@ export interface TurnResult {
 }
 
 export interface ActiveTabletopLive {
-  /** Point the interpreter at a direction and open the mic. False = not ready. */
-  beginTurn: (direction: TabletopDirection) => boolean;
+  /**
+   * Point the interpreter at a direction and open the mic. False = not ready.
+   * `auto` (founders, TAOS_TABLETOP_AUTO_ENABLED): this turn runs on
+   * buildAutoInstructions for the pair instead — either person may speak, and
+   * each response opens with its output-language tag.
+   */
+  beginTurn: (direction: TabletopDirection, auto?: TabletopAutoPair) => boolean;
   /** Close the mic, wait for in-flight phrases, resolve the whole turn. */
   endTurn: () => Promise<TurnResult>;
   stop: () => void;
@@ -79,7 +89,8 @@ const MAX_SESSION_MS = 2 * 60 * 60 * 1000;
 
 export async function startTabletopLive(
   events: TabletopLiveEvents,
-  openingDirection: TabletopDirection = { source: "en", target: "es" }
+  openingDirection: TabletopDirection = { source: "en", target: "es" },
+  opts: { auto?: boolean } = {}
 ): Promise<ActiveTabletopLive> {
   let pc: RTCPeerConnection | null = null;
   let dc: RTCDataChannel | null = null;
@@ -193,7 +204,10 @@ export async function startTabletopLive(
     const mintRes = await fetch("/api/tabletop/realtime", {
       method: "POST",
       headers: await jsonAuthHeaders(),
-      body: JSON.stringify(openingDirection)
+      // `auto` is a request, not a grant: the route honours it only for a
+      // founder with TAOS_TABLETOP_AUTO_ENABLED=1. beginTurn sends each turn's
+      // own instructions regardless, so this only saves the first update.
+      body: JSON.stringify(opts.auto ? { ...openingDirection, auto: true } : openingDirection)
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
@@ -326,7 +340,7 @@ export async function startTabletopLive(
 
     const micTrack = micStream.getAudioTracks()[0] ?? null;
 
-    const beginTurn = (direction: TabletopDirection): boolean => {
+    const beginTurn = (direction: TabletopDirection, auto?: TabletopAutoPair): boolean => {
       if (stopped || !dc || dc.readyState !== "open" || !micTrack) {
         // Never fail silently: the UI shows "recording" the moment this is
         // called, so a no-op here looks like a dead feature.
@@ -342,7 +356,10 @@ export async function startTabletopLive(
       dc.send(
         JSON.stringify({
           type: "session.update",
-          session: { type: "realtime", instructions: buildTurnInstructions(direction) }
+          session: {
+            type: "realtime",
+            instructions: auto ? buildAutoInstructions(auto) : buildTurnInstructions(direction)
+          }
         })
       );
       micTrack.enabled = true;

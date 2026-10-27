@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { SessionGate } from "@/components/SessionGate";
 import { TabletopShell } from "@/components/TabletopShell";
 import { brainEnvDefault } from "@/lib/tabletop/brain";
+import { tabletopAutoEnabled } from "@/lib/release";
 
 export const metadata: Metadata = {
   title: "Tabletop · TAOS",
@@ -16,7 +17,9 @@ export default function TabletopPage(): JSX.Element {
     <SessionGate>
       {/* TAOS_TABLETOP_BRAIN is server-only; it reaches the shell as a prop,
           and only a founder's shell ever reads it (lib/tabletop/brain.ts). */}
-      <TabletopShell defaultBrain={brainEnvDefault()} />
+      {/* TAOS_TABLETOP_AUTO_ENABLED is server-only too; the shell shows the
+          auto-detect toggle only when this is true AND the user is a founder. */}
+      <TabletopShell defaultBrain={brainEnvDefault()} autoEnabled={tabletopAutoEnabled()} />
     </SessionGate>
   );
 }
