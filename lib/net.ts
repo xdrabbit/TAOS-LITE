@@ -40,10 +40,16 @@ export async function fetchWithRetry(
       typeof timeoutMs === "number" &&
       typeof AbortSignal !== "undefined" &&
       typeof AbortSignal.timeout === "function";
+    // x-taos-attempt (1, 2, …) lets a route's timing line tell a silent
+    // re-send from a fresh request — each retry re-runs the whole pipeline.
+    const headers = new Headers(init.headers);
+    headers.set("x-taos-attempt", String(attempt + 1));
     try {
       const res = await fetch(
         input,
-        canTimeout ? { ...init, signal: AbortSignal.timeout(timeoutMs) } : init
+        canTimeout
+          ? { ...init, headers, signal: AbortSignal.timeout(timeoutMs) }
+          : { ...init, headers }
       );
       if (!RETRYABLE_STATUS.has(res.status) || attempt >= retries) return res;
     } catch (e) {
