@@ -21,7 +21,7 @@
 
 import type { TtsLangCode } from "./voice";
 import { decodeGoogleAudio, synthesizeGoogle, type GoogleVoice } from "./google";
-import { audioFrames, concatBytes, frameBytes, paddingFrames, silenceFrames, xingFrame } from "./mp3";
+import { audioFrames, frameBytes, joinMp3, paddingFrames } from "./mp3";
 
 export { SIGNOFF_AVAILABLE_HEADER, SIGNOFF_HEADER } from "./signoffHeaders";
 
@@ -102,15 +102,7 @@ export function lineSampleRate(line: Uint8Array): number | null {
  * joined safely (unparseable line, or a sign-off at a different rate).
  */
 export function appendSignoff(line: Uint8Array, clip: Uint8Array): Uint8Array | null {
-  const lineFrames = audioFrames(line);
-  const clipFrames = audioFrames(clip);
-  if (lineFrames.length === 0 || clipFrames.length === 0) return null;
-  if (lineFrames[0].sampleRate !== clipFrames[0].sampleRate) return null;
-  const silence = silenceFrames(clip, clipFrames[0], SIGNOFF_GAP_MS);
-  const silenceCount = silence.length / (audioFrames(silence)[0]?.length ?? silence.length);
-  const audio = concatBytes([frameBytes(line, lineFrames), silence, frameBytes(clip, clipFrames)]);
-  const frameCount = lineFrames.length + silenceCount + clipFrames.length;
-  return concatBytes([xingFrame(line, lineFrames[0], frameCount, audio.length), audio]);
+  return joinMp3([line, clip], SIGNOFF_GAP_MS);
 }
 
 /** Tier lookup, injectable for tests. Resolves true when it cannot tell. */

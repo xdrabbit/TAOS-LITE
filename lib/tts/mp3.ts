@@ -1,7 +1,9 @@
 // Just enough MPEG audio (Layer III) framing to put two MP3s end to end.
 //
 // Built for the share sign-off (lib/tts/shareSignoff.ts): the shared file is
-// [line][150 ms silence][sign-off] as ONE mp3, and an mp3 is a run of
+// [line][150 ms silence][sign-off] as ONE mp3. The home screen's mixed-language
+// turns reuse it (joinMp3 below): one clip per segment, each in its speaker's
+// clone, played as one file. An mp3 is a run of
 // self-describing frames, so joining two is concatenating their frames —
 // provided three things hold, each of which this file checks or fixes:
 //
@@ -206,4 +208,33 @@ export function concatBytes(parts: Uint8Array[]): Uint8Array {
     at += p.length;
   }
   return out;
+}
+
+/**
+ * Several mp3s as ONE stream: [Xing][part][gap][part]…, or null when they
+ * cannot be joined safely (a part that does not parse, or a second sample
+ * rate). The one joiner in the app — the share sign-off and the home screen's
+ * mixed-language turns both come through here. Each gap is `gapMs` of
+ * silence shaped like the part after it; 0 puts the parts end to end.
+ */
+export function joinMp3(parts: Uint8Array[], gapMs: number): Uint8Array | null {
+  if (parts.length === 0) return null;
+  const framed = parts.map((bytes) => ({ bytes, frames: audioFrames(bytes) }));
+  if (framed.some((p) => p.frames.length === 0)) return null;
+  const rate = framed[0].frames[0].sampleRate;
+  if (framed.some((p) => p.frames[0].sampleRate !== rate)) return null;
+  const pieces: Uint8Array[] = [];
+  let frameCount = 0;
+  framed.forEach(({ bytes, frames }, i) => {
+    if (i > 0 && gapMs > 0) {
+      const silence = silenceFrames(bytes, frames[0], gapMs);
+      pieces.push(silence);
+      frameCount += silence.length / (audioFrames(silence)[0]?.length ?? silence.length);
+    }
+    pieces.push(frameBytes(bytes, frames));
+    frameCount += frames.length;
+  });
+  const audio = concatBytes(pieces);
+  const first = framed[0];
+  return concatBytes([xingFrame(first.bytes, first.frames[0], frameCount, audio.length), audio]);
 }

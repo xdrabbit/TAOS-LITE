@@ -35,6 +35,11 @@ import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
+import {
+  segmentsFromPayload,
+  speechForSegments,
+  type TranslatedSegment
+} from "@/lib/translate/segments";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
@@ -274,6 +279,10 @@ export function TranslatorShell({
   const [status, setStatus] = useState<Status>("idle");
   const [original, setOriginal] = useState("");
   const [translation, setTranslation] = useState("");
+  // A mixed-language turn's segments (lib/translate/segments.ts), each with its
+  // own direction; null for a one-language turn, which renders as it always did.
+  const [segments, setSegments] = useState<TranslatedSegment<LangCode>[] | null>(null);
+  const segmentsRef = useRef<TranslatedSegment<LangCode>[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioFetching, setIsAudioFetching] = useState(false);
@@ -366,6 +375,7 @@ export function TranslatorShell({
         setSource(next[0]);
         setOriginal("");
         setTranslation("");
+        showSegments(null);
         clearResultAudio();
         setError(null);
         if (status !== "recording") setStatus("idle");
@@ -386,7 +396,11 @@ export function TranslatorShell({
   // Tier 2 (lib/languages/catalog.ts): translated, never spoken. The screen has
   // to say so up front — an audio control that silently does nothing reads as a
   // bug, and this is a known limit of the language, not of the app.
-  const textOnlyTarget = !canSpeak(target);
+  // A mixed turn speaks in both directions, so it is text only when NO
+  // segment's language can be spoken.
+  const textOnlyTarget = segments
+    ? segments.every((seg) => !canSpeak(seg.targetLanguage))
+    : !canSpeak(target);
 
   useEffect(() => {
     return () => {
@@ -585,6 +599,13 @@ export function TranslatorShell({
     };
   }, [translation]);
 
+  // State for the render, ref for the audio path: a turn's autoplay runs in
+  // the same tick its segments arrive, before React has re-rendered.
+  function showSegments(next: TranslatedSegment<LangCode>[] | null) {
+    segmentsRef.current = next;
+    setSegments(next);
+  }
+
   function clearResultAudio() {
     resultAudioGenerationRef.current += 1;
     resultAudioRef.current = null;
@@ -605,20 +626,45 @@ export function TranslatorShell({
     if (resultAudioRequestRef.current) return resultAudioRequestRef.current;
 
     setIsAudioFetching(true);
-    const request = requestSpeech(
-      { text, engine, sourceLanguage: src, targetLanguage: tgt },
-      {
-        fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
-        failureMessage: s.ttsFailed,
-        surface,
-        onResponse: (res) => {
-          signoffOfferRef.current = {
-            generation,
-            available: res.headers.get(SIGNOFF_AVAILABLE_HEADER) === "1"
-          };
-        }
-      }
-    ).then((blob) => {
+    const ttsOptions = {
+      fetch: (input: string, init: RequestInit) =>
+        fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+      failureMessage: s.ttsFailed,
+      surface
+    };
+    // A mixed turn: one request per segment, each with THAT segment's source
+    // language so voice-follows-speaker picks the right clone, joined once into
+    // the one mp3 that Play and Share both use. No sign-off is offered for it —
+    // the server can only append one to a single line it synthesized itself.
+    const mixed = segmentsRef.current;
+    const speech = mixed
+      ? speechForSegments(mixed, (seg) =>
+          requestSpeech(
+            {
+              text: seg.translation,
+              engine,
+              sourceLanguage: seg.sourceLanguage,
+              targetLanguage: seg.targetLanguage
+            },
+            ttsOptions
+          )
+        ).then((blob) => {
+          signoffOfferRef.current = { generation, available: false };
+          return blob;
+        })
+      : requestSpeech(
+          { text, engine, sourceLanguage: src, targetLanguage: tgt },
+          {
+            ...ttsOptions,
+            onResponse: (res) => {
+              signoffOfferRef.current = {
+                generation,
+                available: res.headers.get(SIGNOFF_AVAILABLE_HEADER) === "1"
+              };
+            }
+          }
+        );
+    const request = speech.then((blob) => {
       // A pair change or a new translation can finish while TTS is in flight.
       // Never attach that older line's audio to the new result card.
       if (generation !== resultAudioGenerationRef.current) return null;
@@ -645,7 +691,8 @@ export function TranslatorShell({
     // error under it would be the app apologizing for working as designed.
     // The screen already says "text only" next to the language, so this is a
     // limit the person met before the turn, not a surprise after it.
-    if (!canSpeak(tgt)) return;
+    const mixed = segmentsRef.current;
+    if (mixed ? mixed.every((seg) => !canSpeak(seg.targetLanguage)) : !canSpeak(tgt)) return;
     const a = ensureAudioEl();
     if (!a) return;
     try {
@@ -694,7 +741,7 @@ export function TranslatorShell({
     const offer = signoffOfferRef.current;
     const offered = offer?.generation === generation && offer.available;
     if (existing && (subscriber || !offered)) return { blob: existing, signed: false };
-    if (!existing && subscriber) {
+    if (!existing && (subscriber || segmentsRef.current)) {
       const blob = await audioForResult(text, src, tgt, "home-share");
       return blob ? { blob, signed: false } : null;
     }
@@ -728,7 +775,7 @@ export function TranslatorShell({
   }
 
   async function shareTranslationAudio() {
-    if (!translation || !canSpeak(target)) return;
+    if (!translation || textOnlyTarget) return;
     const line = translation;
     const tgt = target;
     try {
@@ -875,6 +922,7 @@ export function TranslatorShell({
   async function translateBlob(blob: Blob, mime: string, src: string, tgt: string) {
     setOriginal("");
     setTranslation("");
+    showSegments(null);
     clearResultAudio();
     setStatus("processing");
     try {
@@ -904,6 +952,7 @@ export function TranslatorShell({
         translation?: string;
         sourceLanguage?: string;
         targetLanguage?: string;
+        segments?: unknown;
         error?: string;
         details?: string;
       };
@@ -921,6 +970,10 @@ export function TranslatorShell({
             : (src as LangCode);
       const resolvedTgt: LangCode = resolvedSrc === pair[0] ? pair[1] : pair[0];
       if (src === "auto") setSource(resolvedSrc);
+      // Several segments only ever come back from an auto turn; anything else
+      // (one segment, a malformed array) is a one-language turn, as before.
+      const mixed = src === "auto" ? segmentsFromPayload(payload.segments, pair) : null;
+      showSegments(mixed);
 
       setOriginal(typeof payload.original === "string" ? payload.original : "");
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
@@ -932,19 +985,35 @@ export function TranslatorShell({
         // the table will ever contain.
         const session = continueSession(sessionRef.current, Date.now());
         sessionRef.current = session;
-        void saveTranslation({
-          session_id: session.id,
-          source_lang: resolvedSrc,
-          target_lang: resolvedTgt,
-          tone: TONE,
-          original_text: payload.original ?? "",
-          translation_text: payload.translation,
-          engine
-        }).catch(() => {});
-        // Count this translation toward the free-trial allowance.
+        // A mixed turn saves one row per segment, each with its own true
+        // direction, in order (awaited one by one so created_at keeps that
+        // order) — so history, /study and the viewer never see a row whose
+        // source_lang is half wrong.
+        const rows = mixed
+          ? mixed.map((seg) => ({
+              source_lang: seg.sourceLanguage,
+              target_lang: seg.targetLanguage,
+              original_text: seg.original,
+              translation_text: seg.translation
+            }))
+          : [
+              {
+                source_lang: resolvedSrc,
+                target_lang: resolvedTgt,
+                original_text: payload.original ?? "",
+                translation_text: payload.translation
+              }
+            ];
+        void (async () => {
+          for (const row of rows) {
+            await saveTranslation({ session_id: session.id, tone: TONE, engine, ...row });
+          }
+        })().catch(() => {});
+        // Count this translation toward the free-trial allowance — by rows,
+        // because the server's monthly count is a count of rows.
         if (!subscriber) {
           setUsage((u) => ({
-            translations: (u?.translations ?? 0) + 1,
+            translations: (u?.translations ?? 0) + rows.length,
             tutorSeconds: u?.tutorSeconds ?? 0
           }));
         }
@@ -987,6 +1056,7 @@ export function TranslatorShell({
     setSource((prev) => (prev === pair[0] ? pair[1] : pair[0]));
     setOriginal("");
     setTranslation("");
+    showSegments(null);
     clearResultAudio();
     setError(null);
     if (status !== "recording") setStatus("idle");
@@ -1672,7 +1742,7 @@ export function TranslatorShell({
               </div>
               <div className="text-2xl font-semibold text-white">
                 {/* The language, never a name — see speakerFor above. */}
-                {status === "done"
+                {status === "done" && !segments
                   ? speaker.label
                   : `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`}
               </div>
@@ -1711,7 +1781,8 @@ export function TranslatorShell({
                   in a different one, which read as a broken screen. */}
               {translation ? (
                 <span>
-                  {s.translationLabel} · {listener.label}
+                  {/* A mixed turn goes both ways; each segment names its own. */}
+                  {segments ? s.translationLabel : `${s.translationLabel} · ${listener.label}`}
                 </span>
               ) : null}
               {translation ? (
@@ -1764,12 +1835,32 @@ export function TranslatorShell({
                 </div>
               ) : null}
             </div>
-            <div className="flex flex-1 items-center">
-              <p className="text-pretty text-[clamp(1.8rem,7vw,2.8rem)] font-semibold leading-tight tracking-tight text-white">
-                {translation || (processing ? s.translating : recording ? s.listening : s.idle)}
-              </p>
-            </div>
-            {original ? (
+            {segments ? (
+              // A mixed turn: one line pair per segment, in the order spoken,
+              // each with its direction (the HistoryDrawer's "Español → English").
+              <ol className="flex flex-1 flex-col justify-center gap-4">
+                {segments.map((seg, i) => (
+                  <li key={i} className="border-t border-white/10 pt-3 first:border-t-0 first:pt-0">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/45">
+                      {languageNative(seg.sourceLanguage)} → {languageNative(seg.targetLanguage)}
+                    </div>
+                    <p className="text-pretty text-[clamp(1.4rem,5.5vw,2.1rem)] font-semibold leading-tight tracking-tight text-white">
+                      {seg.translation}
+                    </p>
+                    {seg.original ? (
+                      <p className="mt-1 text-sm text-emerald-50/55">{seg.original}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <div className="flex flex-1 items-center">
+                <p className="text-pretty text-[clamp(1.8rem,7vw,2.8rem)] font-semibold leading-tight tracking-tight text-white">
+                  {translation || (processing ? s.translating : recording ? s.listening : s.idle)}
+                </p>
+              </div>
+            )}
+            {original && !segments ? (
               <p className="mt-4 border-t border-white/10 pt-3 text-sm text-emerald-50/55">
                 <span className="uppercase tracking-wider text-emerald-100/40">{s.heard}:</span>{" "}
                 {original}

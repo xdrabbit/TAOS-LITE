@@ -184,9 +184,22 @@ export function buildAutoDetectInstructions(
   const cantonese =
     a.label === "Cantonese" || b.label === "Cantonese" ? CANTONESE_OUTPUT_RULE : "";
   return (
-    `The user's text is in either ${a.label} or ${b.label}. Detect which. ` +
+    `The user's text is in either ${a.label} or ${b.label} — or, when one person interrupts ` +
+    `another, in both. Detect which. ` +
     `Then render its MEANING in the OTHER language as a natural, FIRST-PERSON concept paraphrase ` +
     `(never word-for-word, never narrate "he says"). ` +
+    // Mixed turns (Tom + Liz, 2026-10-27): one recording can hold English and
+    // then a Spanish interruption. Unasked, the model sometimes translated each
+    // half on its own and sometimes mangled one half, and the readout played in
+    // one clone. Segments make it deliberate — and the split rule is narrow on
+    // purpose: a borrowed word is not a second speaker.
+    `Split the text into segments ONLY where the language changes for a whole clause or ` +
+    `sentence. Never split on a single borrowed word, a name, a number, or an interjection: ` +
+    `a word like "okay", "sí" or "hola" inside a sentence in the other language stays in that ` +
+    `sentence's segment. Text in one language is EXACTLY ONE ` +
+    `segment — that is the usual case. Keep the segments in the order they were said, and ` +
+    `translate EACH segment into the OTHER language of the pair: each ${a.label} segment into ` +
+    `${b.label}, each ${b.label} segment into ${a.label}. ` +
     // Same translate-only fence as buildInstructions' shared block, for BOTH
     // tones. This prompt can't literally share that string because here the
     // direction is detected, not fixed.
@@ -197,12 +210,14 @@ export function buildAutoDetectInstructions(
     `and put "…" where it breaks off. NEVER fill a gap with a guessed word — no guessed places, ` +
     `objects, activities, or names. ${MEANING_FIRST_RULE()} ${toneLine}${cantonese} ` +
     `Respond ONLY with JSON: ` +
-    `{"source_lang":"${a.code}"|"${b.code}","translation":"<text in the OTHER language>"}. ` +
-    `"source_lang" is the language the USER'S TEXT is written in — the language you DETECTED — ` +
-    `NOT the language you translated into. "translation" is ALWAYS written in the other language. ` +
-    `Both directions: if the user's text is ${a.label}, then "source_lang" is "${a.code}" and ` +
-    `"translation" is written in ${b.label}; if the user's text is ${b.label}, then "source_lang" ` +
-    `is "${b.code}" and "translation" is written in ${a.label}.`
+    `{"segments":[{"source_lang":"${a.code}"|"${b.code}","original":"<the segment's words as ` +
+    `they appear in the user's text>","translation":"<that segment in the OTHER language>"}]}. ` +
+    `"source_lang" is the language the segment's words are written in — the language you ` +
+    `DETECTED — NOT the language you translated into. "translation" is ALWAYS written in the ` +
+    `other language. ` +
+    `Both directions, for every segment: if the user's text is ${a.label}, then "source_lang" is ` +
+    `"${a.code}" and "translation" is written in ${b.label}; if the user's text is ${b.label}, ` +
+    `then "source_lang" is "${b.code}" and "translation" is written in ${a.label}.`
   );
 }
 
