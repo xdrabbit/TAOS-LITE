@@ -51,6 +51,8 @@ export interface TabletopSessionTally {
   auto: boolean;
   /** Auto-detect responses whose language tag was missing or off-pair. */
   detectMiss: number;
+  /** Turns forced to one side (a long-press) while auto-detect was on. */
+  forcedTurns: number;
 }
 
 /** The numbers on the log line and the lobby card. No text, ever. */
@@ -71,6 +73,8 @@ export interface TabletopSessionSummary {
   auto: 0 | 1;
   /** Auto-detect responses with no usable language tag. */
   detect_miss: number;
+  /** Long-pressed (forced-direction) turns while auto-detect was on. */
+  forced_turns: number;
 }
 
 export function emptyTally(brain: TabletopBrainKind, startedAt: number): TabletopSessionTally {
@@ -83,7 +87,8 @@ export function emptyTally(brain: TabletopBrainKind, startedAt: number): Tableto
     reconnects: 0,
     estUsd: 0,
     auto: false,
-    detectMiss: 0
+    detectMiss: 0,
+    forcedTurns: 0
   };
 }
 
@@ -93,6 +98,21 @@ export function addSegment(tally: TabletopSessionTally, timing: SegmentTiming): 
     firstPartialMs: [...tally.firstPartialMs, clampMs(timing.firstPartialMs)],
     segmentDoneMs: [...tally.segmentDoneMs, clampMs(timing.doneMs)]
   };
+}
+
+/**
+ * One turn opened on this session. `auto=1` on the line means auto-detect was
+ * on AND at least one turn actually ran as an auto turn — the 10/28 field
+ * test minted an auto session and then forced every turn, which is not an
+ * auto session. A forced turn while auto was on is a long-press, counted.
+ */
+export function noteTurn(
+  tally: TabletopSessionTally,
+  turn: { auto: boolean; autoActive: boolean }
+): TabletopSessionTally {
+  if (turn.auto) return tally.auto ? tally : { ...tally, auto: true };
+  if (turn.autoActive) return { ...tally, forcedTurns: tally.forcedTurns + 1 };
+  return tally;
 }
 
 function clampMs(ms: number): number {
@@ -126,7 +146,8 @@ export function summarize(tally: TabletopSessionTally, endedAt: number): Tableto
     est_usd: tally.estUsd,
     ended_at: endedAt,
     auto: tally.auto ? 1 : 0,
-    detect_miss: tally.detectMiss
+    detect_miss: tally.detectMiss,
+    forced_turns: tally.forcedTurns
   };
 }
 
@@ -150,7 +171,9 @@ export function tabletopLogLine(s: TabletopSessionSummary): string {
     // Auto-detect (2026-10-27), appended so every field before it keeps its
     // place for anyone already grepping the line.
     `auto=${s.auto}`,
-    `detect_miss=${s.detect_miss}`
+    `detect_miss=${s.detect_miss}`,
+    // Side tap → auto turn (2026-10-28); a long-press shows up here.
+    `forced_turns=${s.forced_turns}`
   ].join(" ");
 }
 
@@ -190,7 +213,8 @@ export function parseSummary(raw: unknown): TabletopSessionSummary | null {
     o[k] === undefined ? 0 : n(k, max);
   const auto = optional("auto", 1);
   const detectMiss = optional("detect_miss", 100_000);
-  if (auto === null || detectMiss === null) return null;
+  const forcedTurns = optional("forced_turns", 100_000);
+  if (auto === null || detectMiss === null || forcedTurns === null) return null;
   return {
     brain: o.brain,
     seconds: Math.round(f.seconds),
@@ -204,7 +228,8 @@ export function parseSummary(raw: unknown): TabletopSessionSummary | null {
     est_usd: f.est_usd,
     ended_at: Math.round(f.ended_at),
     auto: auto >= 1 ? 1 : 0,
-    detect_miss: Math.round(detectMiss)
+    detect_miss: Math.round(detectMiss),
+    forced_turns: Math.round(forcedTurns)
   };
 }
 
