@@ -35,6 +35,12 @@ import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
+import {
+  contextForNextTurn,
+  EMPTY_CONTEXT,
+  rememberTurn,
+  type ContextStore
+} from "@/lib/translate/context";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
@@ -265,6 +271,14 @@ export function TranslatorShell({
   const engineTouchedRef = useRef(false);
   // The conversation the next saved turn belongs to; see lib/translate/session.ts.
   const sessionRef = useRef<ConversationSession | null>(null);
+  // The last few completed turns of that conversation, sent with each request
+  // so a short turn ("Pero es seguro") is read in light of what came before
+  // (lib/translate/context.ts). In memory only — never fetched, never saved.
+  const contextRef = useRef<ContextStore>(EMPTY_CONTEXT);
+  // What the memory held before the latest RECORDING was translated. Flip
+  // re-runs that same audio the other way, so it must neither see its own
+  // wrong-direction turn as context nor leave it behind once it's corrected.
+  const preTurnContextRef = useRef<ContextStore>(EMPTY_CONTEXT);
   useEffect(() => {
     if (subscriber && !engineTouchedRef.current) setEngine(SUBSCRIBER_DEFAULT_ENGINE);
   }, [subscriber]);
@@ -867,12 +881,20 @@ export function TranslatorShell({
     // Keep the clip so "Flip" can re-run it the other way without re-recording.
     lastBlobRef.current = blob;
     lastMimeRef.current = mime;
+    preTurnContextRef.current = contextRef.current;
     await translateBlob(blob, mime, autoDetect ? "auto" : source, autoDetect ? "auto" : target);
   }
 
   // Shared translate routine — used by a normal turn and by Flip (same audio,
   // opposite direction).
-  async function translateBlob(blob: Blob, mime: string, src: string, tgt: string) {
+  async function translateBlob(
+    blob: Blob,
+    mime: string,
+    src: string,
+    tgt: string,
+    { flip = false }: { flip?: boolean } = {}
+  ) {
+    const contextBase = flip ? preTurnContextRef.current : contextRef.current;
     setOriginal("");
     setTranslation("");
     clearResultAudio();
@@ -889,6 +911,10 @@ export function TranslatorShell({
         form.append("pairA", pair[0]);
         form.append("pairB", pair[1]);
       }
+      // The last 3 completed turns of this conversation, oldest first, each
+      // string clipped to 400 chars. Absent when there are none.
+      const context = contextForNextTurn(contextBase, sessionRef.current, Date.now());
+      if (context.length > 0) form.append("context", JSON.stringify(context));
 
       // Retry + a client-side timeout: a mid-flight connection drop (Safari's
       // "Load failed") gets one silent re-send before anyone sees an error.
@@ -932,6 +958,12 @@ export function TranslatorShell({
         // the table will ever contain.
         const session = continueSession(sessionRef.current, Date.now());
         sessionRef.current = session;
+        contextRef.current = rememberTurn(contextBase, session.id, {
+          source_lang: resolvedSrc,
+          target_lang: resolvedTgt,
+          original: payload.original ?? "",
+          translation: payload.translation
+        });
         void saveTranslation({
           session_id: session.id,
           source_lang: resolvedSrc,
@@ -971,7 +1003,9 @@ export function TranslatorShell({
     const newTarget: LangCode = source;
     setSource(newSource);
     setError(null);
-    void translateBlob(blob, lastMimeRef.current || "audio/webm", newSource, newTarget);
+    void translateBlob(blob, lastMimeRef.current || "audio/webm", newSource, newTarget, {
+      flip: true
+    });
   }
 
   function toggleRecord() {

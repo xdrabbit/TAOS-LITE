@@ -3,6 +3,8 @@
 // route promises: tone parsing, the faithfulness rules in the prompts, and
 // which upstream transcription errors count as "nothing was heard".
 
+import { selectContext, type ContextTurn } from "@/lib/translate/context";
+
 export type Tone = "casual" | "detailed";
 
 // Cantonese is mostly a SPOKEN language: formal Hong Kong writing uses
@@ -87,7 +89,65 @@ export function parseTone(value: FormDataEntryValue | null): Tone {
   return value === "detailed" ? "detailed" : "casual";
 }
 
-export function buildInstructions(sourceLabel: string, targetLabel: string, tone: Tone): string {
+// Conversation context (10/28, Tom): the last few turns of THIS conversation,
+// so a short turn like "Pero es seguro" after talk of insurance comes out
+// "insurance", not "safe". It rides in the SYSTEM prompt — the user turn stays
+// exactly the new transcript — and it is fenced as read-only, because the
+// failure to fear is the model translating the earlier turns again, or
+// carrying on the conversation, instead of interpreting the new one. Turns
+// arrive already validated by parseContextField (lib/translate/context.ts);
+// selectContext re-clips anyway so no caller can hand this an unbounded block.
+// Whitespace is flattened so a newline inside a turn can't break the fence.
+function contextLine(turn: ContextTurn, index: number): string {
+  const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+  return (
+    `${index + 1}. [${turn.source_lang}] ${flat(turn.original)} → ` +
+    `[${turn.target_lang}] ${flat(turn.translation)}`
+  );
+}
+
+// Wording as approved (Tom, 10/28). The 10/28 text probe (gpt-4.1, 0.2, these
+// builders) found it does NOT flip "Pero es seguro" to "insurance" — "safe"
+// with or without three insurance turns in front of it, 0/14 — and a reworded
+// rule ("a word with more than one meaning is ambiguous even inside a complete
+// sentence") did no better, so it was not shipped. It did pass the controls:
+// no earlier turn was ever translated or repeated, and an unrelated new turn
+// was never dragged toward the topic. See the PR body for the full run.
+export const CONTEXT_RULES =
+  "Use the earlier turns ONLY to resolve ambiguous words, pronouns, names and the topic of the " +
+  "NEW text. NEVER translate, repeat, summarize or continue the earlier turns. Your output is " +
+  "the translation of the NEW text only — the user's message, nothing else. If the new text is " +
+  "complete and clear on its own, the earlier turns change nothing.";
+
+// Auto mode only: the earlier turns must not vote on which language the new
+// turn is. A conversation alternates speakers, and three Spanish turns in a
+// row say nothing about the fourth.
+export const CONTEXT_NO_DETECTION_BIAS =
+  "The new text may be in either language regardless of earlier turns — decide its language " +
+  "from the new text alone.";
+
+export function buildContextBlock(
+  context: readonly ContextTurn[] | null | undefined,
+  { autoDetect = false }: { autoDetect?: boolean } = {}
+): string {
+  const turns = context ? selectContext(context) : [];
+  if (turns.length === 0) return "";
+  return (
+    `\n\n--- EARLIER IN THIS CONVERSATION (for understanding only): ---\n` +
+    turns.map(contextLine).join("\n") +
+    `\n--- END OF EARLIER CONVERSATION ---\n` +
+    CONTEXT_RULES +
+    (autoDetect ? ` ${CONTEXT_NO_DETECTION_BIAS}` : "")
+  );
+}
+
+export function buildInstructions(
+  sourceLabel: string,
+  targetLabel: string,
+  tone: Tone,
+  context?: readonly ContextTurn[] | null
+): string {
+  const contextBlock = buildContextBlock(context);
   const cantonese = targetLabel === "Cantonese" ? CANTONESE_OUTPUT_RULE : "";
   const shared =
     `You are a live interpreter helping two people in a face-to-face conversation. ` +
@@ -122,7 +182,8 @@ export function buildInstructions(sourceLabel: string, targetLabel: string, tone
       ` This is an IMPORTANT conversation. Preserve every meaningful nuance, condition, number, name, ` +
       `and emotional weight. Be faithful and complete, but still natural and first-person. ` +
       `If the speaker rambles, organize the meaning clearly without losing detail.` +
-      cantonese
+      cantonese +
+      contextBlock
     );
   }
 
@@ -138,7 +199,8 @@ export function buildInstructions(sourceLabel: string, targetLabel: string, tone
     // request. "Never invent" alone didn't block additions; say it directly.
     `NEVER ADD anything the speaker did not say — no extra requests, suggestions, softeners, ` +
     `or explanations. Trimming filler is allowed; adding words is not.` +
-    cantonese
+    cantonese +
+    contextBlock
   );
 }
 
@@ -169,7 +231,8 @@ export interface LanguageChoice {
 export function buildAutoDetectInstructions(
   a: LanguageChoice,
   b: LanguageChoice,
-  tone: Tone
+  tone: Tone,
+  context?: readonly ContextTurn[] | null
 ): string {
   const toneLine =
     tone === "detailed"
@@ -202,7 +265,8 @@ export function buildAutoDetectInstructions(
     `NOT the language you translated into. "translation" is ALWAYS written in the other language. ` +
     `Both directions: if the user's text is ${a.label}, then "source_lang" is "${a.code}" and ` +
     `"translation" is written in ${b.label}; if the user's text is ${b.label}, then "source_lang" ` +
-    `is "${b.code}" and "translation" is written in ${a.label}.`
+    `is "${b.code}" and "translation" is written in ${a.label}.` +
+    buildContextBlock(context, { autoDetect: true })
   );
 }
 
