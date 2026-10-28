@@ -68,7 +68,7 @@ interface TranslateTiming {
   srcChars: number | "?";
   outChars: number | "?";
   err: string;
-  /** The STT model this request used (or would have): the auto path's may differ. */
+  /** The STT model this request used — the auto path's may differ. "?" before transcription. */
   transcribeModel: string;
   /** The stage in flight, so a thrown error can be named (and timed) after it. */
   stage: "guard" | "form" | "transcribe" | "translate";
@@ -239,7 +239,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     srcChars: "?",
     outChars: "?",
     err: "?",
-    transcribeModel: defaultTranscribeModel(),
+    transcribeModel: "?",
     stage: "guard",
     stageStarted: started
   };
@@ -409,6 +409,8 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
     const sourceLabel = getLanguageLabel(sourceLanguage);
     const targetLabel = getLanguageLabel(targetLanguage);
 
+    // No model passed, so transcribeAudio() uses this one.
+    t.transcribeModel = defaultTranscribeModel();
     t.stage = "transcribe";
     t.stageStarted = performance.now();
     const original = await transcribeAudio(apiKey, audio, { sourceLabel });

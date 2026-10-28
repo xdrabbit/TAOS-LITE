@@ -113,6 +113,45 @@ describe("[taos-translate-timing]", () => {
     expect(field(line, "tgt")).toBe("es");
   });
 
+  it("a mixed auto turn: one timing line, the auto transcriber, the first segment's target", async () => {
+    process.env.OPENAI_AUTO_TRANSCRIBE_MODEL = "whisper-1";
+    try {
+      fetchSpy.mockImplementation(async () =>
+        chat(
+          JSON.stringify({
+            segments: [
+              { source_lang: "es", original: "uno", translation: "one" },
+              { source_lang: "en", original: "two", translation: "dos" }
+            ]
+          })
+        )
+      );
+      const { POST } = await loadRoute();
+      const res = await POST(request({ sourceLanguage: "auto", targetLanguage: "auto", pairA: "en", pairB: "es" }));
+      expect(res.status).toBe(200);
+      expect((await res.json()).segments).toHaveLength(2);
+      const lines = timingLines();
+      expect(lines).toHaveLength(1);
+      expect(field(lines[0], "status")).toBe("ok");
+      expect(field(lines[0], "transcribe_model")).toBe("whisper-1");
+      expect(field(lines[0], "tgt")).toBe("en");
+      expect(field(lines[0], "out_chars")).toBe(String("one\ndos".length));
+    } finally {
+      delete process.env.OPENAI_AUTO_TRANSCRIBE_MODEL;
+    }
+  });
+
+  it("a manual turn reports the default transcriber even when the auto override is set", async () => {
+    process.env.OPENAI_AUTO_TRANSCRIBE_MODEL = "whisper-1";
+    try {
+      const { POST } = await loadRoute();
+      await POST(request(manual));
+      expect(field(timingLines()[0], "transcribe_model")).toBe("gpt-4o-transcribe");
+    } finally {
+      delete process.env.OPENAI_AUTO_TRANSCRIBE_MODEL;
+    }
+  });
+
   it("cold=1 on the first request of an instance, cold=0 on the second", async () => {
     const { POST } = await loadRoute();
     await POST(request(manual));
