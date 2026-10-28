@@ -13,6 +13,11 @@ import {
 } from "@/lib/translate/prompts";
 import { transcribeAudio } from "@/lib/translate/transcribe";
 import { guardSpend } from "@/lib/spendGuard";
+import {
+  parseAutoSegments,
+  topLevelFromSegments,
+  type TranslatedSegment
+} from "@/lib/translate/segments";
 
 export const runtime = "nodejs";
 // 300s is the max on Vercel Pro. The client per-turn cap (MAX_TURN_DURATION_MS
@@ -95,15 +100,16 @@ async function paraphrase(
 }
 
 // Auto-detect mode: the model decides which of the conversation PAIR's two
-// languages the transcript is, and translates to the other — returning both
-// so the client knows the resolved direction (for voice + display).
+// languages each part of the transcript is, and translates each part to the
+// other — returning ordered segments so the client knows every resolved
+// direction (for voice + display). A one-language turn is one segment.
 async function paraphraseAuto(
   apiKey: string,
   text: string,
   tone: Tone,
   a: { code: SupportedLanguageCode; label: string },
   b: { code: SupportedLanguageCode; label: string }
-): Promise<{ detected: SupportedLanguageCode; translation: string }> {
+): Promise<TranslatedSegment<SupportedLanguageCode>[]> {
   const model = process.env.OPENAI_TRANSLATE_MODEL?.trim() || "gpt-4.1"; // full, see paraphrase()
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -132,30 +138,17 @@ async function paraphraseAuto(
   const first = choices[0] as Record<string, unknown> | undefined;
   const message = first?.message as Record<string, unknown> | undefined;
   const content = typeof message?.content === "string" ? message.content : "";
-  let parsed: { source_lang?: string; translation?: string } = {};
-  try {
-    parsed = JSON.parse(content) as { source_lang?: string; translation?: string };
-  } catch {
-    /* fall through to defaults */
-  }
   // source_lang is the language the SPEAKER used (see buildAutoDetectInstructions
   // for why the field is named this and must not be renamed back to "lang").
-  // It becomes sourceLanguage for /api/tts, which is what picks Tom's clone vs
-  // Liz's — read it wrong and every auto-detect turn plays the wrong voice.
+  // It becomes each segment's sourceLanguage for /api/tts, which is what picks
+  // Tom's clone vs Liz's — read it wrong and the turn plays the wrong voice.
   //
-  // An unparseable response leaves no way to know who spoke, so this falls back
-  // to the pair's first language. That silent fallback is exactly how the old
-  // inversion hid for five weeks, so it is now a coin flip we log rather than
-  // one we pretend is a detection.
-  if (parsed.source_lang !== a.code && parsed.source_lang !== b.code) {
-    console.warn(
-      `[translate] auto-detect returned no usable source_lang (got ${JSON.stringify(parsed.source_lang)}); defaulting to ${a.code}`
-    );
-  }
-  const detected: SupportedLanguageCode = parsed.source_lang === b.code ? b.code : a.code;
-  const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
-  if (!translation) throw new Error("Translation response was empty.");
-  return { detected, translation };
+  // A segment with a code outside the pair is folded into its neighbour, and a
+  // reply with no usable segments falls back to the old single-source reading
+  // (pair's first language when even that code is missing). Both are logged:
+  // that silent fallback is exactly how the old inversion hid for five weeks.
+  // See lib/translate/segments.ts.
+  return parseAutoSegments(content, text, a.code, b.code).segments;
 }
 
 /**
@@ -169,6 +162,7 @@ async function paraphraseAuto(
 const ANON_MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const startedAt = Date.now();
   try {
     // Before the key is read and long before OpenAI is called: this route
     // spends on transcription AND a chat completion per turn, and until 8/19
@@ -225,20 +219,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { status: 422 }
         );
       }
-      const { detected, translation } = await paraphraseAuto(
+      const segments = await paraphraseAuto(
         apiKey,
         original,
         tone,
         { code: pairA, label: getLanguageLabel(pairA) },
         { code: pairB, label: getLanguageLabel(pairB) }
       );
+      // Body-less on purpose: counts and codes, never the transcript, the
+      // email, or the user agent.
+      console.log(
+        `[taos-translate] auto=1 segments=${segments.length} detected=${segments
+          .map((seg) => seg.sourceLanguage)
+          .join(",")} src_chars=${original.length} ms=${Date.now() - startedAt}`
+      );
+      // One segment is today's response exactly. Several keep the same
+      // top-level fields (joined, direction from the first) so any reader of
+      // them still works, plus the segments themselves.
       return NextResponse.json({
-        original,
-        translation,
-        sourceLanguage: detected,
-        targetLanguage: detected === pairA ? pairB : pairA,
+        ...topLevelFromSegments(segments),
         tone,
-        autoDetected: true
+        autoDetected: true,
+        ...(segments.length > 1 ? { segments } : {})
       });
     }
 
