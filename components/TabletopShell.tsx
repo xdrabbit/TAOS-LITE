@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TabletopLiveState } from "@/lib/tabletop/live";
 import {
+  autoBrain,
   BRAIN_STORAGE_KEY,
   resolveBrain,
   TABLETOP_BRAINS,
@@ -16,11 +17,14 @@ import { ensureTabletopAudioContext } from "@/lib/tabletop/audio";
 import {
   addSegment,
   emptyTally,
+  noteTurn,
   summarize,
   type TabletopSessionSummary,
   type TabletopSessionTally
 } from "@/lib/tabletop/metrics";
-import { isFounder } from "@/lib/release";
+import { isFounder, tabletopAutoVisibleTo } from "@/lib/release";
+import { createTagStream, type TagVerdict } from "@/lib/tabletop/autoDetect";
+import { createLongPress, paneAction, type PaneAction } from "@/lib/tabletop/paneTap";
 import { supabase } from "@/lib/supabase";
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
@@ -61,12 +65,15 @@ import { ExitHome } from "./ExitHome";
 // whole purpose is handing your phone to a stranger.
 type Lang = PairLangCode;
 type Engine = "live" | "classic";
+// `auto`: an auto-detect turn (founders, TAOS_TABLETOP_AUTO_ENABLED). Its
+// `side` is not who tapped — nobody did — but who the last phrase's language
+// tag says is speaking, so it moves as the two people take turns and every
+// pane rule below that reads `turn.side` follows it for free.
 type TurnState =
   | { kind: "idle" }
-  | { kind: "connecting"; side: Lang }
-  | { kind: "recording"; side: Lang }
-  | { kind: "processing"; side: Lang };
-
+  | { kind: "connecting"; side: Lang; auto?: boolean }
+  | { kind: "recording"; side: Lang; auto?: boolean }
+  | { kind: "processing"; side: Lang; auto?: boolean };
 
 interface Exchange {
   /** Language the speaker used. */
@@ -74,6 +81,30 @@ interface Exchange {
   original: string;
   translation: string;
   at: number;
+  /** Auto-detect only: the language it was translated INTO, per the tag. */
+  to?: Lang;
+  /**
+   * Auto-detect only. "miss" = at least one phrase in it came back without a
+   * usable language tag, so its direction is the last one known, not a
+   * detected one (lib/tabletop/autoDetect.ts).
+   */
+  detect?: "hit" | "miss";
+}
+
+/** One open auto-detect turn: the tag reader and the run being written. */
+interface AutoTurn {
+  pair: readonly [Lang, Lang];
+  /** This response's tag reader; null between responses. */
+  stream: ReturnType<typeof createTagStream> | null;
+  /** True until this response has written its first visible character. */
+  segFresh: boolean;
+  /** Consecutive phrases from the same speaker — one exchange when it ends. */
+  run: { source: Lang; text: string; miss: boolean } | null;
+  /** The turn's running "heard" transcript, and how much of it is used up. */
+  heardAll: string;
+  heardUsed: number;
+  /** Exchanges this turn has closed, in order — read out at turn end. */
+  closed: Exchange[];
 }
 
 const MAX_TURN_SEC_CLASSIC = 60;
@@ -129,10 +160,16 @@ function pickRecordingMime(): string {
 }
 
 export function TabletopShell({
-  defaultBrain = "openai"
+  defaultBrain = "openai",
+  autoEnabled = false
 }: {
   /** TAOS_TABLETOP_BRAIN, read on the server. Founders only; see brain.ts. */
   defaultBrain?: TabletopBrainKind;
+  /**
+   * TAOS_TABLETOP_AUTO_ENABLED, read on the server. The auto-detect toggle
+   * shows only when this is true AND the user is a founder (lib/release.ts).
+   */
+  autoEnabled?: boolean;
 } = {}): JSX.Element {
   // The pair IS the table (lib/translate/useLanguagePair.ts): `theirs` faces
   // the rotated TOP end, `mine` faces the phone's owner at the bottom. It is
@@ -184,6 +221,19 @@ export function TabletopShell({
   const [lastSession, setLastSession] = useState<TabletopSessionSummary | null>(null);
   const meteredRef = useRef<MeteredSession | null>(null);
   const turnRef = useRef<TurnState>({ kind: "idle" });
+  // ── Auto-detect state (founders + TAOS_TABLETOP_AUTO_ENABLED) ──
+  const [autoAllowed, setAutoAllowed] = useState(false);
+  // ON by default whenever it is visible at all — the point is not tapping.
+  const [autoOn, setAutoOn] = useState(true);
+  const autoRef = useRef<AutoTurn | null>(null);
+  // Who spoke last, per the last tag that hit. A miss lands on this side's
+  // direction rather than a guess. Starts on the phone's owner.
+  const lastSourceRef = useRef<Lang | null>(null);
+  // Bumped by every new turn so an old turn's readout queue stops cleanly.
+  const speakGenRef = useRef(0);
+  const autoActive = autoAllowed && autoOn && engine === "live";
+  // Auto-detect always runs on openai — see autoBrain in lib/tabletop/brain.ts.
+  const { brain: runBrain, autoFellBack } = autoBrain(brain, autoActive);
 
   useEffect(() => {
     turnRef.current = turn;
@@ -205,12 +255,13 @@ export function TabletopShell({
         /* private mode */
       }
       setBrain(resolveBrain({ founder: isF, stored, envDefault: defaultBrain }));
+      setAutoAllowed(tabletopAutoVisibleTo(data.session?.user?.email, autoEnabled));
       if (isF) setLastSession(readLastSession());
     });
     return () => {
       active = false;
     };
-  }, [defaultBrain]);
+  }, [defaultBrain, autoEnabled]);
 
   // A brain session ended (idle, cap, failure, the end chip, leaving): its
   // numbers become the card, and — founders only — one [taos-tabletop] line
@@ -304,7 +355,7 @@ export function TabletopShell({
     };
   }, [cleanupRecording]);
 
-  const speak = useCallback(async (ex: Exchange, pairNow: readonly [Lang, Lang]) => {
+  const speak = useCallback(async (ex: Exchange, pairNow: readonly [Lang, Lang], untilEnded = false) => {
     if (!voiceOnRef.current || !ex.translation) return;
     try {
       // requestSpeech asks the catalog first: a tier-2 target never reaches
@@ -315,7 +366,7 @@ export function TabletopShell({
         {
           text: ex.translation,
           sourceLanguage: ex.from,
-          targetLanguage: otherInPair(pairNow, ex.from)
+          targetLanguage: ex.to ?? otherInPair(pairNow, ex.from)
           // No voice override: the shared /api/tts voice-follows-speaker rule
           // applies (Liz's Spanish -> English in Liz's clone, Tom's English ->
           // Spanish in Tom's clone) — identical on every screen.
@@ -330,11 +381,17 @@ export function TabletopShell({
       playerRef.current?.pause();
       const el = new Audio(url);
       playerRef.current = el;
-      el.onended = () => {
-        URL.revokeObjectURL(url);
-        if (playerRef.current === el) playerRef.current = null;
-      };
+      const ended = new Promise<void>((resolve) => {
+        el.onended = () => {
+          URL.revokeObjectURL(url);
+          if (playerRef.current === el) playerRef.current = null;
+          resolve();
+        };
+        // A new turn, the voice toggle, or the next readout pauses it.
+        el.onpause = () => resolve();
+      });
       await el.play();
+      if (untilEnded) await ended;
     } catch {
       /* voice is best-effort; the text is already on screen */
     }
@@ -351,26 +408,120 @@ export function TabletopShell({
     [speak]
   );
 
+  // An auto turn can close several exchanges — Liz, then Tom, then Liz — and
+  // each is read in its own speaker's clone, one after the other. Only at
+  // turn end, with the mic muted, exactly like a tapped turn: a readout while
+  // the mic is open would be heard and translated back.
+  const speakInOrder = useCallback(
+    async (list: Exchange[], pairNow: readonly [Lang, Lang]) => {
+      const gen = speakGenRef.current;
+      for (const ex of list) {
+        if (speakGenRef.current !== gen) return;
+        await speak(ex, pairNow, true);
+      }
+    },
+    [speak]
+  );
+
+  // ── Auto-detect: tags → panes ─────────────────────────────────────────────
+  // All of this runs from brain events bound when the session was minted, so
+  // it reads the open turn from autoRef, never from render state.
+
+  /** Close the run being written as one exchange (on screen now, spoken later). */
+  const closeAutoRun = useCallback((a: AutoTurn) => {
+    const run = a.run;
+    a.run = null;
+    setLiveTranslation("");
+    if (!run || !run.text.trim()) return;
+    const ex: Exchange = {
+      from: run.source,
+      to: otherInPair(a.pair, run.source),
+      original: a.heardAll.slice(a.heardUsed).trim(),
+      translation: run.text.trim(),
+      at: Date.now(),
+      detect: run.miss ? "miss" : "hit"
+    };
+    a.heardUsed = a.heardAll.length;
+    setLiveHeard("");
+    a.closed.push(ex);
+    setExchanges((prev) => [...prev.slice(-19), ex]);
+  }, []);
+
+  const applyAutoText = useCallback(
+    (text: string, verdict: TagVerdict | undefined) => {
+      const a = autoRef.current;
+      if (!a) return;
+      if (verdict) {
+        let source: Lang;
+        if (verdict.kind === "hit") {
+          // The tag names what was WRITTEN; the speaker is the other end.
+          source = otherInPair(a.pair, verdict.code as Lang);
+          lastSourceRef.current = source;
+        } else {
+          // Don't guess. Last known direction, marked, counted.
+          const last = lastSourceRef.current;
+          source = last && a.pair.includes(last) ? last : a.pair[0];
+          const m = meteredRef.current;
+          if (m) m.tally = { ...m.tally, detectMiss: m.tally.detectMiss + 1 };
+        }
+        if (a.run && a.run.source !== source) closeAutoRun(a);
+        if (!a.run) a.run = { source, text: "", miss: false };
+        if (verdict.kind === "miss") a.run.miss = true;
+        setTurn((t) => (t.kind !== "idle" && t.auto && t.side !== source ? { ...t, side: source } : t));
+      }
+      if (!text || !a.run) return;
+      let piece = text;
+      if (a.segFresh) {
+        piece = piece.replace(/^\s+/, "");
+        if (!piece) return;
+        // Phrases arrive back to back; keep the run readable.
+        if (a.run.text) piece = ` ${piece}`;
+        a.segFresh = false;
+      }
+      a.run.text += piece;
+      setLiveTranslation(a.run.text);
+    },
+    [closeAutoRun]
+  );
+
+
   // ── Live engine ───────────────────────────────────────────────────────────
 
   const startLiveTurn = useCallback(
-    async (side: Lang) => {
+    async (side: Lang, auto = false) => {
       setError(null);
+      speakGenRef.current += 1;
       playerRef.current?.pause();
       playerRef.current = null;
       setLiveHeard("");
       setLiveTranslation("");
       // Whoever tapped is the source; the other end of the table is the
       // target. Both are catalog codes — the direction string that used to
-      // live here could only spell two of them.
+      // live here could only spell two of them. (An auto turn passes the last
+      // known speaker; its prompt names both languages and ignores this.)
       const direction: TabletopDirection = { source: side, target: otherInPair(pair, side) };
+      autoRef.current = auto
+        ? { pair, stream: null, segFresh: true, run: null, heardAll: "", heardUsed: 0, closed: [] }
+        : null;
       try {
+        // Auto-detect moved the table onto a different brain than the open
+        // session's (a founder on Gemini) — close it so this turn mints one.
+        if (liveRef.current && liveRef.current.kind !== runBrain) {
+          liveRef.current.stop();
+          liveRef.current = null;
+        }
         if (!liveRef.current) {
-          setTurn({ kind: "connecting", side });
-          const m: MeteredSession = { tally: emptyTally(brain, Date.now()), finished: false };
+          setTurn({ kind: "connecting", side, auto });
+          if (autoFellBack) {
+            console.info(
+              `[taos-tabletop] auto-detect: brain ${brain} -> openai ` +
+                "(Gemini Live Translate takes one locked target language and cannot tag its output)"
+            );
+          }
+          const m: MeteredSession = { tally: emptyTally(runBrain, Date.now()), finished: false };
           meteredRef.current = m;
           setBrainLive(true);
-          liveRef.current = await BRAIN_STARTERS[brain](
+          liveRef.current = await BRAIN_STARTERS[runBrain](
             {
               onError: (msg) => {
                 m.tally = { ...m.tally, errors: m.tally.errors + 1 };
@@ -384,8 +535,38 @@ export function TabletopShell({
                   finishMetered(m);
                 }
               },
-              onHeard: (text) => setLiveHeard(text),
-              onPartial: (d) => setLiveTranslation((t) => t + d),
+              onHeard: (text) => {
+                const a = autoRef.current;
+                if (!a) {
+                  setLiveHeard(text);
+                  return;
+                }
+                a.heardAll = text;
+                setLiveHeard(text.slice(a.heardUsed).trim());
+              },
+              onPartial: (d) => {
+                const a = autoRef.current;
+                if (!a) {
+                  setLiveTranslation((t) => t + d);
+                  return;
+                }
+                a.stream ??= createTagStream(a.pair);
+                const r = a.stream.push(d);
+                applyAutoText(r.text, r.verdict);
+              },
+              onSegmentStart: () => {
+                const a = autoRef.current;
+                if (!a) return;
+                a.stream = createTagStream(a.pair);
+                a.segFresh = true;
+              },
+              onSegmentEnd: () => {
+                const a = autoRef.current;
+                if (!a?.stream) return;
+                const r = a.stream.end();
+                a.stream = null;
+                applyAutoText(r.text, r.verdict);
+              },
               onSegmentDone: (_text, meta) => {
                 if (meta) m.tally = addSegment(m.tally, meta);
               },
@@ -396,27 +577,35 @@ export function TabletopShell({
                 m.tally = { ...m.tally, estUsd: usd };
               }
             },
-            direction
+            direction,
+            { auto: autoActive }
           );
         }
-        if (!liveRef.current.beginTurn(direction)) {
+        // auto=1 only once an auto turn really runs; a forced turn while auto
+        // is on is a long-press, counted as forced_turns (lib/tabletop/metrics.ts).
+        if (meteredRef.current) {
+          meteredRef.current.tally = noteTurn(meteredRef.current.tally, { auto, autoActive });
+        }
+        if (!liveRef.current.beginTurn(direction, auto ? { a: pair[0], b: pair[1] } : undefined)) {
           // Session went stale (e.g. idle disconnect raced us) — drop it so
           // the next tap reconnects fresh.
           liveRef.current.stop();
           liveRef.current = null;
+          autoRef.current = null;
           setTurn({ kind: "idle" });
           return;
         }
-        setTurn({ kind: "recording", side });
+        setTurn({ kind: "recording", side, auto });
         startTimer(MAX_TURN_SEC_LIVE);
       } catch {
         liveRef.current = null;
+        autoRef.current = null;
         setTurn({ kind: "idle" });
         stopTimer();
         setError((prev) => prev ?? "Live mode failed — try classic mode.");
       }
     },
-    [pair, brain, finishMetered, startTimer, stopTimer]
+    [pair, brain, runBrain, autoFellBack, autoActive, applyAutoText, finishMetered, startTimer, stopTimer]
   );
 
   const endLiveTurn = useCallback(
@@ -426,11 +615,25 @@ export function TabletopShell({
         setTurn({ kind: "idle" });
         return;
       }
-      setTurn({ kind: "processing", side });
+      const a = autoRef.current;
+      setTurn({ kind: "processing", side, auto: !!a });
       stopTimer();
       try {
         const result = await session.endTurn();
-        if (result.translation || result.heard) {
+        if (a) {
+          // Whatever the drain left open (a response cut off by the timeout)
+          // ends here, then the last run closes and every exchange the turn
+          // closed is read out, in order, each in its own speaker's voice.
+          if (a.stream) {
+            const r = a.stream.end();
+            a.stream = null;
+            applyAutoText(r.text, r.verdict);
+          }
+          a.heardAll = result.heard || a.heardAll;
+          closeAutoRun(a);
+          autoRef.current = null;
+          void speakInOrder(a.closed, a.pair);
+        } else if (result.translation || result.heard) {
           pushExchange(
             {
               from: side,
@@ -442,12 +645,13 @@ export function TabletopShell({
           );
         }
       } finally {
+        autoRef.current = null;
         setLiveHeard("");
         setLiveTranslation("");
         setTurn({ kind: "idle" });
       }
     },
-    [pair, stopTimer, pushExchange]
+    [pair, stopTimer, pushExchange, applyAutoText, closeAutoRun, speakInOrder]
   );
 
   // ── Classic engine (batch /api/translate) ─────────────────────────────────
@@ -568,28 +772,80 @@ export function TabletopShell({
     else recorderRef.current?.stop();
   }, [recordSec, turn, engine, endLiveTurn]);
 
-  const tap = useCallback(
-    (side: Lang) => {
-      // Take it inside the tap gesture — the best context to ask in if a
-      // prior request was denied. The effect above refreshes and releases it;
-      // a tap that never opens a turn is dropped by the idle cap.
+  // A pane's finger, decided by lib/tabletop/paneTap.ts. With auto-detect on
+  // (field test 10/28), a TAP opens an auto turn exactly like ◉ — whoever is
+  // at the table taps the pane in front of them — and the forced direction is
+  // a LONG-PRESS on the side that speaks: that one turn, then auto again.
+  // With auto off a tap is today's forced turn.
+  const paneGesture = useCallback(
+    (side: Lang, gesture: "tap" | "long-press") => {
+      // Take it inside the gesture — the best context to ask in if a prior
+      // request was denied. The effect above refreshes and releases it; a
+      // tap that never opens a turn is dropped by the idle cap.
       holdWake("tabletop-turn");
       // The Gemini brain reads the mic through WebAudio, and iOS only lets a
       // context start inside a gesture — this one (lib/tabletop/audio.ts).
-      if (engine === "live" && brain === "gemini") ensureTabletopAudioContext();
-      const t = turnRef.current;
-      if (t.kind === "idle") {
+      if (engine === "live" && runBrain === "gemini") ensureTabletopAudioContext();
+      const action: PaneAction<Lang> = paneAction({ autoActive, turn: turnRef.current, side, gesture });
+      if (action.kind === "start-auto") {
+        const last = lastSourceRef.current;
+        void startLiveTurn(last && pair.includes(last) ? last : mine, true);
+      } else if (action.kind === "start-forced") {
         if (engine === "live") void startLiveTurn(side);
         else void startClassicTurn(side);
-      } else if (t.kind === "recording" && t.side === side) {
-        if (engine === "live") void endLiveTurn(side);
+      } else if (action.kind === "end") {
+        if (engine === "live") void endLiveTurn(action.side);
         else {
           cancelledRef.current = false;
           recorderRef.current?.stop();
         }
       }
     },
-    [engine, brain, startLiveTurn, startClassicTurn, endLiveTurn]
+    [engine, runBrain, autoActive, pair, mine, startLiveTurn, startClassicTurn, endLiveTurn]
+  );
+
+  // One long-press reader per pane. The handler is read through a ref so the
+  // readers live for the page while the gesture logic follows fresh state.
+  const paneGestureRef = useRef(paneGesture);
+  paneGestureRef.current = paneGesture;
+  const topLangRef = useRef(topLang);
+  topLangRef.current = topLang;
+  const bottomLangRef = useRef(bottomLang);
+  bottomLangRef.current = bottomLang;
+  const [topPress] = useState(() =>
+    createLongPress({ onLongPress: () => paneGestureRef.current(topLangRef.current, "long-press") })
+  );
+  const [bottomPress] = useState(() =>
+    createLongPress({ onLongPress: () => paneGestureRef.current(bottomLangRef.current, "long-press") })
+  );
+
+  // The auto-detect start/stop in the middle bar. No side: the turn opens on
+  // the last speaker the tags found (or the phone's owner) and the tags take
+  // it from there.
+  const tapAuto = useCallback(() => {
+    holdWake("tabletop-turn");
+    const t = turnRef.current;
+    if (t.kind === "idle") {
+      const last = lastSourceRef.current;
+      void startLiveTurn(last && pair.includes(last) ? last : mine, true);
+    } else if (t.kind === "recording" && t.auto) {
+      void endLiveTurn(t.side);
+    }
+  }, [pair, mine, startLiveTurn, endLiveTurn]);
+
+  // Flipping auto-detect can move the table between brains (a founder on
+  // Gemini), so a session on the wrong one is closed — numbers logged.
+  const toggleAuto = useCallback(
+    (on: boolean) => {
+      if (turnRef.current.kind !== "idle") return;
+      const next = autoBrain(brain, autoAllowed && on && engine === "live").brain;
+      if (liveRef.current && liveRef.current.kind !== next) {
+        liveRef.current.stop();
+        liveRef.current = null;
+      }
+      setAutoOn(on);
+    },
+    [brain, autoAllowed, engine]
   );
 
   // Founder chips: a new brain is a new session, so the old one is closed
@@ -602,13 +858,15 @@ export function TabletopShell({
       } catch {
         /* this tap still counts */
       }
-      if (next !== brain) {
+      // With auto-detect on, both chips run openai; only a real change of
+      // brain costs the open session.
+      if (autoBrain(next, autoActive).brain !== runBrain) {
         liveRef.current?.stop();
         liveRef.current = null;
       }
       setBrain(next);
     },
-    [founder, brain]
+    [founder, autoActive, runBrain]
   );
 
   const endBrainSession = useCallback(() => {
@@ -658,6 +916,8 @@ export function TabletopShell({
     rotated: boolean,
     tail: FollowTail<HTMLDivElement>
   ): JSX.Element => {
+    // The rotated pane is always the top end.
+    const press = rotated ? topPress : bottomPress;
     const t = copyFor(lang);
     // This pane READS the other end's turns, so it is this pane's own
     // language that /api/tts would be asked for. Tier 2 (catalog) means the
@@ -741,9 +1001,19 @@ export function TabletopShell({
 
         <button
           type="button"
-          onClick={() => tap(lang)}
+          onPointerDown={(e) => press.down(e.clientX, e.clientY)}
+          onPointerMove={(e) => press.move(e.clientX, e.clientY)}
+          onPointerUp={() => press.up()}
+          onPointerLeave={() => press.up()}
+          onPointerCancel={() => press.cancel()}
+          // A held finger on iOS/Android asks for the callout menu; the hold
+          // is ours now.
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={() => {
+            if (press.takeClick()) paneGesture(lang, "tap");
+          }}
           disabled={otherBusy || isProcessing || isConnecting}
-          className={`rounded-2xl px-4 py-5 text-lg font-bold tracking-wide transition ${
+          className={`select-none [-webkit-touch-callout:none] rounded-2xl px-4 py-5 text-lg font-bold tracking-wide transition ${
             isRecording
               ? "animate-pulse bg-red-500 text-stone-50"
               : isProcessing || isConnecting
@@ -822,12 +1092,22 @@ export function TabletopShell({
         </button>
         {error ? <span className="max-w-[40%] truncate text-xs text-red-300">{error}</span> : null}
         </div>
+        {autoAllowed && engine === "live" ? (
+          <AutoBar
+            on={autoOn}
+            turn={turn}
+            words={copyFor(mine)}
+            onToggle={toggleAuto}
+            onTap={tapAuto}
+          />
+        ) : null}
         {founder && engine === "live" ? (
           <BrainBar
             brain={brain}
             disabled={turn.kind !== "idle"}
             live={brainLive}
             last={lastSession}
+            autoFellBack={autoFellBack}
             onChoose={chooseBrain}
             onEnd={endBrainSession}
           />
@@ -849,6 +1129,73 @@ export function TabletopShell({
   );
 }
 
+// Auto-detect's row in the middle bar (founders, TAOS_TABLETOP_AUTO_ENABLED):
+// the home screen's own "Auto-detect language" checkbox, same copy key, and
+// the one button that opens a turn without picking a side. Every word is an
+// existing lib/chrome/copy.ts key in the phone owner's language, plus one
+// bilingual hint line. A tap on either pane is an auto turn too (10/28); the
+// escape hatch is a long-press on a pane, which the hint names.
+// One bilingual line, founders-only for now — pendiente de revisión por Liz.
+const HOLD_HINT = "Hold a side: one turn in its language · Mantén pulsado un lado: un turno en su idioma";
+
+function AutoBar({
+  on,
+  turn,
+  words,
+  onToggle,
+  onTap
+}: {
+  on: boolean;
+  turn: TurnState;
+  words: ReturnType<typeof copyFor>;
+  onToggle: (on: boolean) => void;
+  onTap: () => void;
+}): JSX.Element {
+  const autoTurn = turn.kind !== "idle" && turn.auto === true;
+  const otherTurn = turn.kind !== "idle" && !autoTurn;
+  const recording = autoTurn && turn.kind === "recording";
+  return (
+    <div data-tabletop-auto="" className="flex flex-col items-center gap-0.5">
+      <div className="flex items-center justify-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-amber-100/70">
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={turn.kind !== "idle"}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="h-4 w-4 accent-amber-400"
+          />
+          {words.autoDetectLanguage}
+        </label>
+        {on ? (
+          <button
+            type="button"
+            onClick={onTap}
+            disabled={otherTurn || (autoTurn && !recording)}
+            aria-pressed={recording}
+            className={`rounded-full px-4 py-1.5 text-xs font-bold disabled:opacity-40 ${
+              recording ? "animate-pulse bg-red-500 text-stone-50" : "bg-emerald-400 text-stone-950"
+            }`}
+          >
+            {recording
+              ? words.tapDone
+              : autoTurn && turn.kind === "connecting"
+                ? words.connecting
+                : autoTurn
+                  ? words.translating
+                  : `◉ ${words.autoDetect}`}
+          </button>
+        ) : null}
+      </div>
+      {on ? (
+        <div data-tabletop-hold-hint="" className="text-center text-[10px] leading-tight text-amber-100/50">
+          {HOLD_HINT}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // The founder-only strip under the middle bar: the two brain chips, an end
 // button (a session's numbers are only final once it ends), and the last
 // session's numbers in one line, readable right after a run.
@@ -857,6 +1204,7 @@ function BrainBar({
   disabled,
   live,
   last,
+  autoFellBack,
   onChoose,
   onEnd
 }: {
@@ -864,6 +1212,8 @@ function BrainBar({
   disabled: boolean;
   live: boolean;
   last: TabletopSessionSummary | null;
+  /** Gemini is chosen but auto-detect is on, so the table runs on OpenAI. */
+  autoFellBack: boolean;
   onChoose: (b: TabletopBrainKind) => void;
   onEnd: () => void;
 }): JSX.Element {
@@ -898,12 +1248,19 @@ function BrainBar({
           </button>
         ) : null}
       </div>
+      {autoFellBack ? (
+        <div className="text-center text-[10px] leading-tight text-amber-100/50">
+          auto-detect runs on OpenAI — Gemini takes one fixed target language
+        </div>
+      ) : null}
       {last ? (
         <div className="text-center font-mono text-[10px] leading-tight text-amber-100/50">
           last: {BRAIN_LABEL[last.brain]} · {last.seconds}s · {last.segments} seg · first{" "}
           {last.first_partial_ms_p50}/{last.first_partial_ms_p95}ms · done {last.segment_done_ms_p50}/
           {last.segment_done_ms_p95}ms · err {last.errors} · rc {last.reconnects} · $
           {last.est_usd.toFixed(4)}
+          {last.auto ? ` · auto · miss ${last.detect_miss ?? 0}` : ""}
+          {last.forced_turns ? ` · forced ${last.forced_turns}` : ""}
         </div>
       ) : null}
     </div>

@@ -374,3 +374,26 @@ export function isCallAllowlisted(email: string | null | undefined): boolean {
   if (!EMAIL_SHAPE.test(normalized)) return false;
   return callAllowlist(process.env.CALL_ALLOWLIST_EMAILS).has(normalized);
 }
+
+// /tabletop AUTO-DETECT (Liz and Tom, 2026-10-27): one phone between two
+// people, each phrase routed to the right pane by the language it was spoken
+// in, nobody tapping a side. FOUNDERS ONLY while it is field-tested, behind a
+// SERVER-ONLY flag on the TAOS_TTS_GOOGLE_ENABLED pattern: the page reads it
+// and hands the shell a boolean, so flipping it is a Vercel env edit +
+// redeploy and nothing ships in the bundle.
+//
+//     TAOS_TABLETOP_AUTO_ENABLED=1
+//
+// Both halves are asked twice: the shell hides the toggle, and
+// POST /api/tabletop/realtime only builds the auto prompt for a request that
+// passes this check against a server-validated user. Anyone else gets exactly
+// today's table.
+export function tabletopAutoEnabled(
+  raw: string | undefined = process.env.TAOS_TABLETOP_AUTO_ENABLED
+): boolean {
+  return (raw ?? "").trim() === "1";
+}
+
+export function tabletopAutoVisibleTo(email: string | null | undefined, enabled: boolean): boolean {
+  return enabled && isFounder(email);
+}

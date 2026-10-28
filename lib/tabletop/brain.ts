@@ -14,7 +14,7 @@
 // defaulted, LOCKED: neither the env default nor a stored choice reaches them,
 // so a customer's Tabletop is exactly today's whatever this file is told.
 
-import type { TabletopDirection } from "./instructions";
+import type { TabletopAutoPair, TabletopDirection } from "./instructions";
 import type { TabletopLiveState, TurnResult } from "./live";
 import type { SegmentTiming, TabletopBrainKind } from "./metrics";
 
@@ -52,6 +52,23 @@ export function resolveBrain(opts: {
   return parseBrain(opts.stored) ?? opts.envDefault;
 }
 
+/**
+ * Which brain an auto-detect table runs on: always openai. Gemini Live
+ * Translate takes ONE target language, locked into the token it is minted
+ * with (lib/tabletop/geminiSession.ts), and with echoTargetLanguage off it
+ * drops speech already in that language — so it cannot hear two languages and
+ * answer each in the other, and it has no way to say which one it wrote. A
+ * founder who picked Gemini gets openai for auto turns, and the shell logs
+ * that it did (`autoFellBack`).
+ */
+export function autoBrain(chosen: TabletopBrainKind, auto: boolean): {
+  brain: TabletopBrainKind;
+  autoFellBack: boolean;
+} {
+  if (!auto) return { brain: chosen, autoFellBack: false };
+  return { brain: "openai", autoFellBack: chosen !== "openai" };
+}
+
 /** What a brain tells the table while it works. */
 export interface TabletopBrainEvents {
   onState?: (s: TabletopLiveState) => void;
@@ -66,12 +83,22 @@ export interface TabletopBrainEvents {
   onReconnect?: () => void;
   /** Running estimate of what this session has spent on the BRAIN (not TTS). */
   onSpend?: (usd: number) => void;
+  /**
+   * One response began / ended — auto-detect reads a language tag off the
+   * front of each response, so it needs the boundaries. Only the openai brain
+   * sends these; auto-detect never runs on gemini (see autoBrain below).
+   */
+  onSegmentStart?: () => void;
+  onSegmentEnd?: () => void;
 }
 
 export interface ActiveTabletopBrain {
   kind: TabletopBrainKind;
-  /** Point the brain at a direction and open the mic. False = not ready. */
-  beginTurn: (direction: TabletopDirection) => boolean;
+  /**
+   * Point the brain at a direction and open the mic. False = not ready.
+   * `auto` asks for an auto-detect turn; only the openai brain honours it.
+   */
+  beginTurn: (direction: TabletopDirection, auto?: TabletopAutoPair) => boolean;
   /** Close the mic, wait for in-flight phrases, resolve the whole turn. */
   endTurn: () => Promise<TurnResult>;
   stop: () => void;
@@ -79,5 +106,6 @@ export interface ActiveTabletopBrain {
 
 export type StartTabletopBrain = (
   events: TabletopBrainEvents,
-  openingDirection: TabletopDirection
+  openingDirection: TabletopDirection,
+  opts?: { auto?: boolean }
 ) => Promise<ActiveTabletopBrain>;
