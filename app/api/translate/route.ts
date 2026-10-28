@@ -11,6 +11,7 @@ import {
   parseTone,
   type Tone
 } from "@/lib/translate/prompts";
+import { parseContextField, type ContextTurn } from "@/lib/translate/context";
 import { autoTranscribeModel, transcribeAudio } from "@/lib/translate/transcribe";
 import { guardSpend } from "@/lib/spendGuard";
 import {
@@ -48,7 +49,8 @@ async function paraphrase(
   text: string,
   sourceLabel: string,
   targetLabel: string,
-  tone: Tone
+  tone: Tone,
+  context: ContextTurn[] | null
 ): Promise<string> {
   // Full gpt-4.1, not mini: field reports (7/23, Yellowstone) had casual-mode
   // translations drifting to a different meaning entirely — mini paraphrases
@@ -74,7 +76,7 @@ async function paraphrase(
       // the casual REGISTER comes from the prompt, not the sampler.
       temperature: 0.2,
       messages: [
-        { role: "system", content: buildInstructions(sourceLabel, targetLabel, tone) },
+        { role: "system", content: buildInstructions(sourceLabel, targetLabel, tone, context) },
         { role: "user", content: text }
       ]
     }),
@@ -108,7 +110,8 @@ async function paraphraseAuto(
   text: string,
   tone: Tone,
   a: { code: SupportedLanguageCode; label: string },
-  b: { code: SupportedLanguageCode; label: string }
+  b: { code: SupportedLanguageCode; label: string },
+  context: ContextTurn[] | null
 ): Promise<TranslatedSegment<SupportedLanguageCode>[]> {
   const model = process.env.OPENAI_TRANSLATE_MODEL?.trim() || "gpt-4.1"; // full, see paraphrase()
 
@@ -120,7 +123,7 @@ async function paraphraseAuto(
       temperature: 0.2, // both tones — see paraphrase() for the 7/27 rationale
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: buildAutoDetectInstructions(a, b, tone) },
+        { role: "system", content: buildAutoDetectInstructions(a, b, tone, context) },
         { role: "user", content: text }
       ]
     }),
@@ -184,6 +187,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const sourceLanguage = String(form.get("sourceLanguage") ?? "");
     const targetLanguage = String(form.get("targetLanguage") ?? "");
     const tone = parseTone(form.get("tone"));
+    // The last few turns of this conversation, for disambiguation only
+    // (lib/translate/context.ts). Null on anything malformed — the turn then
+    // translates exactly as it did before context existed. Request-only:
+    // never logged, never saved, never echoed back.
+    const context = parseContextField(form.get("context"));
 
     if (!(audio instanceof File) || audio.size === 0) {
       return NextResponse.json({ error: "An audio recording is required." }, { status: 400 });
@@ -230,14 +238,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         original,
         tone,
         { code: pairA, label: getLanguageLabel(pairA) },
-        { code: pairB, label: getLanguageLabel(pairB) }
+        { code: pairB, label: getLanguageLabel(pairB) },
+        context
       );
       // Body-less on purpose: counts and codes, never the transcript, the
-      // email, or the user agent.
+      // email, or the user agent. ctx is how many earlier turns came along —
+      // a number, never their words.
+      const ctxTurns = context?.length ?? 0;
       console.log(
         `[taos-translate] auto=1 segments=${segments.length} detected=${segments
           .map((seg) => seg.sourceLanguage)
-          .join(",")} src_chars=${original.length} transcriber=${transcriber} ms=${
+          .join(",")} src_chars=${original.length} ctx=${ctxTurns} transcriber=${transcriber} ms=${
           Date.now() - startedAt
         }`
       );
@@ -273,7 +284,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const translation = await paraphrase(apiKey, original, sourceLabel, targetLabel, tone);
+    const translation = await paraphrase(
+      apiKey,
+      original,
+      sourceLabel,
+      targetLabel,
+      tone,
+      context
+    );
 
     return NextResponse.json({
       original,
