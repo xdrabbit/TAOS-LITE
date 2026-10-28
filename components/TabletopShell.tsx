@@ -17,12 +17,14 @@ import { ensureTabletopAudioContext } from "@/lib/tabletop/audio";
 import {
   addSegment,
   emptyTally,
+  noteTurn,
   summarize,
   type TabletopSessionSummary,
   type TabletopSessionTally
 } from "@/lib/tabletop/metrics";
 import { isFounder, tabletopAutoVisibleTo } from "@/lib/release";
 import { createTagStream, type TagVerdict } from "@/lib/tabletop/autoDetect";
+import { createLongPress, paneAction, type PaneAction } from "@/lib/tabletop/paneTap";
 import { supabase } from "@/lib/supabase";
 import type { TabletopDirection } from "@/lib/tabletop/instructions";
 import { fetchWithRetry } from "@/lib/net";
@@ -579,8 +581,10 @@ export function TabletopShell({
             { auto: autoActive }
           );
         }
-        if (auto && meteredRef.current && !meteredRef.current.tally.auto) {
-          meteredRef.current.tally = { ...meteredRef.current.tally, auto: true };
+        // auto=1 only once an auto turn really runs; a forced turn while auto
+        // is on is a long-press, counted as forced_turns (lib/tabletop/metrics.ts).
+        if (meteredRef.current) {
+          meteredRef.current.tally = noteTurn(meteredRef.current.tally, { auto, autoActive });
         }
         if (!liveRef.current.beginTurn(direction, auto ? { a: pair[0], b: pair[1] } : undefined)) {
           // Session went stale (e.g. idle disconnect raced us) — drop it so
@@ -768,35 +772,51 @@ export function TabletopShell({
     else recorderRef.current?.stop();
   }, [recordSec, turn, engine, endLiveTurn]);
 
-  const tap = useCallback(
-    (side: Lang) => {
-      // Take it inside the tap gesture — the best context to ask in if a
-      // prior request was denied. The effect above refreshes and releases it;
-      // a tap that never opens a turn is dropped by the idle cap.
+  // A pane's finger, decided by lib/tabletop/paneTap.ts. With auto-detect on
+  // (field test 10/28), a TAP opens an auto turn exactly like ◉ — whoever is
+  // at the table taps the pane in front of them — and the forced direction is
+  // a LONG-PRESS on the side that speaks: that one turn, then auto again.
+  // With auto off a tap is today's forced turn.
+  const paneGesture = useCallback(
+    (side: Lang, gesture: "tap" | "long-press") => {
+      // Take it inside the gesture — the best context to ask in if a prior
+      // request was denied. The effect above refreshes and releases it; a
+      // tap that never opens a turn is dropped by the idle cap.
       holdWake("tabletop-turn");
       // The Gemini brain reads the mic through WebAudio, and iOS only lets a
       // context start inside a gesture — this one (lib/tabletop/audio.ts).
       if (engine === "live" && runBrain === "gemini") ensureTabletopAudioContext();
-      const t = turnRef.current;
-      if (t.kind === "idle") {
-        // With auto-detect on, a side tap is the escape hatch: THIS turn is
-        // forced to that direction (today's tapped turn, on the auto session),
-        // and the next ◉ Auto-detect tap is auto again.
+      const action: PaneAction<Lang> = paneAction({ autoActive, turn: turnRef.current, side, gesture });
+      if (action.kind === "start-auto") {
+        const last = lastSourceRef.current;
+        void startLiveTurn(last && pair.includes(last) ? last : mine, true);
+      } else if (action.kind === "start-forced") {
         if (engine === "live") void startLiveTurn(side);
         else void startClassicTurn(side);
-      } else if (t.kind === "recording" && t.auto) {
-        // Either lit button ends an auto turn — the side it is on is only
-        // whoever spoke last.
-        void endLiveTurn(t.side);
-      } else if (t.kind === "recording" && t.side === side) {
-        if (engine === "live") void endLiveTurn(side);
+      } else if (action.kind === "end") {
+        if (engine === "live") void endLiveTurn(action.side);
         else {
           cancelledRef.current = false;
           recorderRef.current?.stop();
         }
       }
     },
-    [engine, runBrain, startLiveTurn, startClassicTurn, endLiveTurn]
+    [engine, runBrain, autoActive, pair, mine, startLiveTurn, startClassicTurn, endLiveTurn]
+  );
+
+  // One long-press reader per pane. The handler is read through a ref so the
+  // readers live for the page while the gesture logic follows fresh state.
+  const paneGestureRef = useRef(paneGesture);
+  paneGestureRef.current = paneGesture;
+  const topLangRef = useRef(topLang);
+  topLangRef.current = topLang;
+  const bottomLangRef = useRef(bottomLang);
+  bottomLangRef.current = bottomLang;
+  const [topPress] = useState(() =>
+    createLongPress({ onLongPress: () => paneGestureRef.current(topLangRef.current, "long-press") })
+  );
+  const [bottomPress] = useState(() =>
+    createLongPress({ onLongPress: () => paneGestureRef.current(bottomLangRef.current, "long-press") })
   );
 
   // The auto-detect start/stop in the middle bar. No side: the turn opens on
@@ -896,6 +916,8 @@ export function TabletopShell({
     rotated: boolean,
     tail: FollowTail<HTMLDivElement>
   ): JSX.Element => {
+    // The rotated pane is always the top end.
+    const press = rotated ? topPress : bottomPress;
     const t = copyFor(lang);
     // This pane READS the other end's turns, so it is this pane's own
     // language that /api/tts would be asked for. Tier 2 (catalog) means the
@@ -979,9 +1001,19 @@ export function TabletopShell({
 
         <button
           type="button"
-          onClick={() => tap(lang)}
+          onPointerDown={(e) => press.down(e.clientX, e.clientY)}
+          onPointerMove={(e) => press.move(e.clientX, e.clientY)}
+          onPointerUp={() => press.up()}
+          onPointerLeave={() => press.up()}
+          onPointerCancel={() => press.cancel()}
+          // A held finger on iOS/Android asks for the callout menu; the hold
+          // is ours now.
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={() => {
+            if (press.takeClick()) paneGesture(lang, "tap");
+          }}
           disabled={otherBusy || isProcessing || isConnecting}
-          className={`rounded-2xl px-4 py-5 text-lg font-bold tracking-wide transition ${
+          className={`select-none [-webkit-touch-callout:none] rounded-2xl px-4 py-5 text-lg font-bold tracking-wide transition ${
             isRecording
               ? "animate-pulse bg-red-500 text-stone-50"
               : isProcessing || isConnecting
@@ -1100,8 +1132,12 @@ export function TabletopShell({
 // Auto-detect's row in the middle bar (founders, TAOS_TABLETOP_AUTO_ENABLED):
 // the home screen's own "Auto-detect language" checkbox, same copy key, and
 // the one button that opens a turn without picking a side. Every word is an
-// existing lib/chrome/copy.ts key in the phone owner's language — nothing new
-// to translate. The side buttons in the panes stay the escape hatch.
+// existing lib/chrome/copy.ts key in the phone owner's language, plus one
+// bilingual hint line. A tap on either pane is an auto turn too (10/28); the
+// escape hatch is a long-press on a pane, which the hint names.
+// One bilingual line, founders-only for now — pendiente de revisión por Liz.
+const HOLD_HINT = "Hold a side: one turn in its language · Mantén pulsado un lado: un turno en su idioma";
+
 function AutoBar({
   on,
   turn,
@@ -1119,35 +1155,42 @@ function AutoBar({
   const otherTurn = turn.kind !== "idle" && !autoTurn;
   const recording = autoTurn && turn.kind === "recording";
   return (
-    <div data-tabletop-auto="" className="flex items-center justify-center gap-3">
-      <label className="flex items-center gap-2 text-xs text-amber-100/70">
-        <input
-          type="checkbox"
-          checked={on}
-          disabled={turn.kind !== "idle"}
-          onChange={(e) => onToggle(e.target.checked)}
-          className="h-4 w-4 accent-amber-400"
-        />
-        {words.autoDetectLanguage}
-      </label>
+    <div data-tabletop-auto="" className="flex flex-col items-center gap-0.5">
+      <div className="flex items-center justify-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-amber-100/70">
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={turn.kind !== "idle"}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="h-4 w-4 accent-amber-400"
+          />
+          {words.autoDetectLanguage}
+        </label>
+        {on ? (
+          <button
+            type="button"
+            onClick={onTap}
+            disabled={otherTurn || (autoTurn && !recording)}
+            aria-pressed={recording}
+            className={`rounded-full px-4 py-1.5 text-xs font-bold disabled:opacity-40 ${
+              recording ? "animate-pulse bg-red-500 text-stone-50" : "bg-emerald-400 text-stone-950"
+            }`}
+          >
+            {recording
+              ? words.tapDone
+              : autoTurn && turn.kind === "connecting"
+                ? words.connecting
+                : autoTurn
+                  ? words.translating
+                  : `◉ ${words.autoDetect}`}
+          </button>
+        ) : null}
+      </div>
       {on ? (
-        <button
-          type="button"
-          onClick={onTap}
-          disabled={otherTurn || (autoTurn && !recording)}
-          aria-pressed={recording}
-          className={`rounded-full px-4 py-1.5 text-xs font-bold disabled:opacity-40 ${
-            recording ? "animate-pulse bg-red-500 text-stone-50" : "bg-emerald-400 text-stone-950"
-          }`}
-        >
-          {recording
-            ? words.tapDone
-            : autoTurn && turn.kind === "connecting"
-              ? words.connecting
-              : autoTurn
-                ? words.translating
-                : `◉ ${words.autoDetect}`}
-        </button>
+        <div data-tabletop-hold-hint="" className="text-center text-[10px] leading-tight text-amber-100/50">
+          {HOLD_HINT}
+        </div>
       ) : null}
     </div>
   );
@@ -1217,6 +1260,7 @@ function BrainBar({
           {last.segment_done_ms_p95}ms · err {last.errors} · rc {last.reconnects} · $
           {last.est_usd.toFixed(4)}
           {last.auto ? ` · auto · miss ${last.detect_miss ?? 0}` : ""}
+          {last.forced_turns ? ` · forced ${last.forced_turns}` : ""}
         </div>
       ) : null}
     </div>

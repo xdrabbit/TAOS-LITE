@@ -10,7 +10,8 @@ import { createTagStream, parseTag } from "@/lib/tabletop/autoDetect";
 import { autoBrain } from "@/lib/tabletop/brain";
 import { buildAutoInstructions, buildTurnInstructions } from "@/lib/tabletop/instructions";
 import { buildTabletopSession } from "@/lib/tabletop/session";
-import { emptyTally, parseSummary, summarize, tabletopLogLine } from "@/lib/tabletop/metrics";
+import { emptyTally, noteTurn, parseSummary, summarize, tabletopLogLine } from "@/lib/tabletop/metrics";
+import { createLongPress, LONG_PRESS_MS, paneAction, type PaneTurn } from "@/lib/tabletop/paneTap";
 import { tabletopAutoEnabled, tabletopAutoVisibleTo } from "@/lib/release";
 
 const mocks = vi.hoisted(() => ({ user: vi.fn() }));
@@ -160,16 +161,18 @@ describe("[taos-tabletop] gains auto= and detect_miss=, keeps every field", () =
     const line = tabletopLogLine(summarize(t, 60_000));
     expect(line).toBe(
       "[taos-tabletop] brain=openai seconds=60 segments=0 first_partial_ms_p50=0 first_partial_ms_p95=0 " +
-        "segment_done_ms_p50=0 segment_done_ms_p95=0 errors=0 reconnects=0 est_usd=0.0000 auto=1 detect_miss=3"
+        "segment_done_ms_p50=0 segment_done_ms_p95=0 errors=0 reconnects=0 est_usd=0.0000 auto=1 detect_miss=3 " +
+        "forced_turns=0"
     );
   });
 
   it("a phone on the previous build (no auto fields) still logs, as 0", () => {
     const s = summarize(emptyTally("openai", 0), 60_000);
-    const { auto: _a, detect_miss: _d, ...old } = s;
+    const { auto: _a, detect_miss: _d, forced_turns: _f, ...old } = s;
     void _a;
     void _d;
-    expect(parseSummary(old)).toEqual({ ...s, auto: 0, detect_miss: 0 });
+    void _f;
+    expect(parseSummary(old)).toEqual({ ...s, auto: 0, detect_miss: 0, forced_turns: 0 });
   });
 
   it("present but not a number is refused — no text reaches the log", () => {
@@ -273,5 +276,204 @@ describe("the shell wiring", () => {
   it("the readout follows the tag: the speaker is the OTHER end of what was written", () => {
     expect(shell).toContain("source = otherInPair(a.pair, verdict.code as Lang)");
     expect(shell).toContain("targetLanguage: ex.to ?? otherInPair(pairNow, ex.from)");
+  });
+});
+
+// ── Field test 2026-10-28: a side tap starts an AUTO turn ──────────────────
+// Tom tapped a pane out of habit instead of ◉ Auto-detect; the side tap was
+// the escape hatch, so the session minted auto=1 and then ran every turn
+// forced (client auto=0, one readout). With auto on, every tap is an auto
+// turn now, and forcing a side is a long-press.
+
+describe("a pane tap with auto-detect on is an auto turn", () => {
+  const IDLE: PaneTurn = { kind: "idle" };
+
+  it("auto on + tap either pane → auto turn (no direction; the tags drive it)", () => {
+    for (const side of ["es", "en"]) {
+      expect(paneAction({ autoActive: true, turn: IDLE, side, gesture: "tap" })).toEqual({ kind: "start-auto" });
+    }
+  });
+
+  it("auto on + long-press → that side's direction, for one turn; the next tap is auto again", () => {
+    expect(paneAction({ autoActive: true, turn: IDLE, side: "es", gesture: "long-press" })).toEqual({
+      kind: "start-forced",
+      side: "es"
+    });
+    // The forced turn ends from its own side, like today's tapped turn...
+    const forced: PaneTurn = { kind: "recording", side: "es" };
+    expect(paneAction({ autoActive: true, turn: forced, side: "es", gesture: "tap" })).toEqual({
+      kind: "end",
+      side: "es"
+    });
+    // ...and nothing is remembered: back at idle, a tap is auto.
+    expect(paneAction({ autoActive: true, turn: IDLE, side: "es", gesture: "tap" })).toEqual({ kind: "start-auto" });
+  });
+
+  it("auto off + tap → forced, exactly as today; a long-press is just a slow tap", () => {
+    for (const gesture of ["tap", "long-press"] as const) {
+      expect(paneAction({ autoActive: false, turn: IDLE, side: "en", gesture })).toEqual({
+        kind: "start-forced",
+        side: "en"
+      });
+    }
+    expect(paneAction({ autoActive: false, turn: { kind: "recording", side: "en" }, side: "en", gesture: "tap" }))
+      .toEqual({ kind: "end", side: "en" });
+    expect(paneAction({ autoActive: false, turn: { kind: "recording", side: "en" }, side: "es", gesture: "tap" }))
+      .toEqual({ kind: "none" });
+  });
+
+  it("either lit button ends an auto turn — its side is only whoever spoke last", () => {
+    const auto: PaneTurn = { kind: "recording", side: "en", auto: true };
+    expect(paneAction({ autoActive: true, turn: auto, side: "es", gesture: "tap" })).toEqual({ kind: "end", side: "en" });
+    expect(paneAction({ autoActive: true, turn: auto, side: "en", gesture: "long-press" })).toEqual({
+      kind: "end",
+      side: "en"
+    });
+  });
+
+  it("connecting or translating: a finger does nothing", () => {
+    for (const kind of ["connecting", "processing"] as const) {
+      expect(paneAction({ autoActive: true, turn: { kind, side: "es", auto: true }, side: "es", gesture: "tap" }))
+        .toEqual({ kind: "none" });
+    }
+  });
+});
+
+describe("the long-press reader (≥ 500 ms, cancel past 10 px)", () => {
+  function rig() {
+    let pending: { fn: () => void; at: number } | null = null;
+    let now = 0;
+    const fired = vi.fn();
+    const press = createLongPress({
+      onLongPress: fired,
+      timers: {
+        set: (fn, ms) => (pending = { fn, at: now + ms }),
+        clear: () => (pending = null)
+      }
+    });
+    const advance = (ms: number) => {
+      now += ms;
+      if (pending && pending.at <= now) {
+        const p = pending;
+        pending = null;
+        p.fn();
+      }
+    };
+    return { press, fired, advance };
+  }
+
+  it("is 500 ms", () => {
+    expect(LONG_PRESS_MS).toBe(500);
+  });
+
+  it("a quick tap is a tap: no long-press, the click goes through", () => {
+    const { press, fired, advance } = rig();
+    press.down(100, 100);
+    advance(120);
+    press.up();
+    advance(1000);
+    expect(fired).not.toHaveBeenCalled();
+    expect(press.takeClick()).toBe(true);
+  });
+
+  it("held 500 ms fires once, while still down, and eats the click that follows", () => {
+    const { press, fired, advance } = rig();
+    press.down(100, 100);
+    advance(499);
+    expect(fired).not.toHaveBeenCalled();
+    advance(1);
+    expect(fired).toHaveBeenCalledTimes(1);
+    press.up();
+    expect(press.takeClick()).toBe(false);
+    // ...only that one: the next plain tap is a tap again.
+    press.down(100, 100);
+    press.up();
+    expect(press.takeClick()).toBe(true);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it("small drift (≤ 10 px) still counts", () => {
+    const { press, fired, advance } = rig();
+    press.down(100, 100);
+    press.move(106, 108); // exactly 10 px
+    advance(500);
+    expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it("moved past 10 px → nothing: no long-press and no tap", () => {
+    const { press, fired, advance } = rig();
+    press.down(100, 100);
+    press.move(100, 112);
+    advance(1000);
+    press.up();
+    expect(fired).not.toHaveBeenCalled();
+    expect(press.takeClick()).toBe(false);
+  });
+
+  it("the OS taking the gesture (pointercancel) is nothing too", () => {
+    const { press, fired, advance } = rig();
+    press.down(100, 100);
+    press.cancel();
+    advance(1000);
+    expect(fired).not.toHaveBeenCalled();
+    expect(press.takeClick()).toBe(false);
+  });
+
+  it("a keyboard click (no pointer) goes through", () => {
+    expect(rig().press.takeClick()).toBe(true);
+  });
+});
+
+describe("[taos-tabletop] auto= means an auto turn ran; forced_turns= counts long-presses", () => {
+  it("auto on but every turn forced → auto=0 forced_turns=n (the 10/28 run)", () => {
+    let t = emptyTally("openai", 0);
+    for (let i = 0; i < 3; i++) t = noteTurn(t, { auto: false, autoActive: true });
+    const line = tabletopLogLine(summarize(t, 1000));
+    expect(line).toMatch(/ auto=0 detect_miss=0 forced_turns=3$/);
+  });
+
+  it("one auto turn → auto=1; a long-press after it adds to forced_turns", () => {
+    let t = emptyTally("openai", 0);
+    t = noteTurn(t, { auto: true, autoActive: true });
+    t = noteTurn(t, { auto: false, autoActive: true });
+    t = noteTurn(t, { auto: true, autoActive: true });
+    expect(summarize(t, 1000)).toMatchObject({ auto: 1, forced_turns: 1 });
+  });
+
+  it("auto off: taps are ordinary turns, not forced ones", () => {
+    let t = emptyTally("openai", 0);
+    t = noteTurn(t, { auto: false, autoActive: false });
+    expect(summarize(t, 1000)).toMatchObject({ auto: 0, forced_turns: 0 });
+  });
+
+  it("forced_turns is a number or it is refused", () => {
+    const s = summarize(emptyTally("openai", 0), 60_000);
+    expect(parseSummary({ ...s, forced_turns: "tres" })).toBeNull();
+    expect(parseSummary({ ...s, forced_turns: 2 })).toEqual({ ...s, forced_turns: 2 });
+  });
+});
+
+describe("the shell wiring for side taps", () => {
+  const shell = readFileSync("components/TabletopShell.tsx", "utf8");
+
+  it("the pane button routes taps and holds through paneAction", () => {
+    expect(shell).toContain("paneAction({ autoActive, turn: turnRef.current, side, gesture })");
+    expect(shell).toContain('if (press.takeClick()) paneGesture(lang, "tap");');
+    expect(shell).toContain("onPointerDown={(e) => press.down(e.clientX, e.clientY)}");
+    expect(shell).toContain("onPointerCancel={() => press.cancel()}");
+    expect(shell).toMatch(/createLongPress\(\{ onLongPress: \(\) => paneGestureRef\.current\(topLangRef\.current, "long-press"\)/);
+  });
+
+  it("the session counts each turn through noteTurn", () => {
+    expect(shell).toContain("noteTurn(meteredRef.current.tally, { auto, autoActive })");
+  });
+
+  it("the pane keeps its hit size (nav-tap-targets: py-5 text-lg)", () => {
+    expect(shell).toMatch(/rounded-2xl px-4 py-5 text-lg font-bold/);
+  });
+
+  it("the hold hint shows only while auto is on, one bilingual line", () => {
+    expect(shell).toContain("{on ? (\n        <div data-tabletop-hold-hint=\"\"");
+    expect(shell).toMatch(/const HOLD_HINT = "[^"]+ · [^"]+";/);
   });
 });
