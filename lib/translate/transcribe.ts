@@ -74,6 +74,14 @@ export function autoTranscribeModel(): string {
 }
 
 /**
+ * The STT model transcribeAudio() calls when no `model` is passed. Kept as a
+ * name for callers that log it; it IS defaultTranscribeModel() — one default.
+ */
+export function getTranscribeModel(): string {
+  return defaultTranscribeModel();
+}
+
+/**
  * Transcribe one audio file.
  *
  * Returns `""` — not an error — when the audio held no usable speech, so the
@@ -122,7 +130,11 @@ export async function transcribeAudio(
     }
     const detail =
       payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
-    throw new Error(`Transcription failed: ${detail}`);
+    // upstreamStatus rides along for the route's timing line; the message
+    // (which callers surface as `details`) is unchanged.
+    throw Object.assign(new Error(`Transcription failed: ${detail}`), {
+      upstreamStatus: res.status
+    });
   }
   const text = typeof payload?.text === "string" ? payload.text.trim() : "";
   return text;

@@ -65,6 +65,26 @@ describe("fetchWithRetry", () => {
     expect(err).toBeInstanceOf(TypeError);
     expect(mock).toHaveBeenCalledTimes(2); // first try + 1 retry
   });
+
+  it("numbers each attempt in x-taos-attempt and keeps the caller's headers", async () => {
+    // The route's [taos-translate-timing] line reads this to tell a silent
+    // re-send (which re-runs the whole pipeline) from a fresh turn.
+    const mock = vi.fn().mockResolvedValueOnce(res(503)).mockResolvedValueOnce(res(200));
+    vi.stubGlobal("fetch", mock);
+
+    const promise = fetchWithRetry(
+      "/api/translate",
+      { method: "POST", headers: { Authorization: "Bearer t" } },
+      { retries: 1 }
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    await promise;
+
+    expect(mock).toHaveBeenCalledTimes(2);
+    const sent = mock.mock.calls.map((c) => new Headers((c[1] as RequestInit).headers));
+    expect(sent.map((h) => h.get("x-taos-attempt"))).toEqual(["1", "2"]);
+    expect(sent.map((h) => h.get("authorization"))).toEqual(["Bearer t", "Bearer t"]);
+  });
 });
 
 describe("isConnectionError", () => {
