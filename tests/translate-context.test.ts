@@ -135,7 +135,7 @@ describe("buildContextBlock / the prompts", () => {
       const p = buildAutoDetectInstructions(EN, ES, tone, INSURANCE);
       // Context only ADDS: everything the bare prompt said is still there.
       expect(p.startsWith(bare)).toBe(true);
-      expect(p).toContain('"source_lang" is the language the USER\'S TEXT is written in');
+      expect(p).toContain(`"source_lang" is the language the segment's words are written in`);
       expect(p).toContain("NOT the language you translated into");
       expect(p).toContain(CONTEXT_RULES);
       expect(p).toContain(CONTEXT_NO_DETECTION_BIAS);
@@ -377,6 +377,10 @@ describe("/api/translate with context", () => {
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(body.messages[0].content).toContain(CONTEXT_NO_DETECTION_BIAS);
     expect(body.messages[1]).toEqual({ role: "user", content: "Pero es seguro" });
+    // The auto log line counts the turns that came along — never their words.
+    expect(consoleText()).toMatch(
+      new RegExp(`\\[taos-translate\\] auto=1 .*\\bctx=${INSURANCE.length}\\b`)
+    );
   });
 
   it("ignores an invalid field whole — the prompt is the no-context prompt", async () => {

@@ -316,7 +316,7 @@ describe("/api/translate auto response", () => {
     const lines = logSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith("[taos-translate]"));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(
-      new RegExp(`^\\[taos-translate\\] auto=1 segments=2 detected=en,es src_chars=${transcript.length} transcriber=gpt-4o-transcribe ms=\\d+$`)
+      new RegExp(`^\\[taos-translate\\] auto=1 segments=2 detected=en,es src_chars=${transcript.length} ctx=0 transcriber=gpt-4o-transcribe ms=\\d+$`)
     );
     expect(lines[0]).not.toMatch(/five|seis|example\.com/);
   });

@@ -117,7 +117,7 @@ describe("/api/translate transcriber choice", () => {
     await POST(turn("auto", "auto"));
     const line = translateLog();
     expect(line).toMatch(
-      /^\[taos-translate\] auto=1 segments=1 detected=en src_chars=\d+ transcriber=gpt-4o-mini-transcribe ms=\d+$/
+      /^\[taos-translate\] auto=1 segments=1 detected=en src_chars=\d+ ctx=0 transcriber=gpt-4o-mini-transcribe ms=\d+$/
     );
     expect(line).not.toMatch(/car|carro|example\.com/);
   });

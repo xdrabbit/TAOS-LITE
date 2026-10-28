@@ -242,11 +242,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         context
       );
       // Body-less on purpose: counts and codes, never the transcript, the
-      // email, or the user agent.
+      // email, or the user agent. ctx is how many earlier turns came along —
+      // a number, never their words.
+      const ctxTurns = context?.length ?? 0;
       console.log(
         `[taos-translate] auto=1 segments=${segments.length} detected=${segments
           .map((seg) => seg.sourceLanguage)
-          .join(",")} src_chars=${original.length} ctx=${context?.length ?? 0} transcriber=${transcriber} ms=${
+          .join(",")} src_chars=${original.length} ctx=${ctxTurns} transcriber=${transcriber} ms=${
           Date.now() - startedAt
         }`
       );
