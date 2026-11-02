@@ -97,6 +97,8 @@ const SCREENS: Record<string, Loader> = {
   demo: async () => (await import("@/components/demo/DemoShell")).DemoShell,
   // /voz's page is a server flag around this; the shell is the screen.
   voz: async () => (await import("@/components/voz/VozShell")).VozShell,
+  // /taokie's page is a server flag + founder gate around this; the shell is the screen.
+  taokie: async () => (await import("@/components/walkie/WalkieShell")).WalkieShell,
   about: async () => (await import("@/app/about/page")).default,
   guide: async () => (await import("@/app/guide/page")).default,
   "love-in-translation": async () => (await import("@/app/love-in-translation/page")).default

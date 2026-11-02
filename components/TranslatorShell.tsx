@@ -36,6 +36,15 @@ import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
 import {
+  AUDIO_BITS_PER_SECOND,
+  MIN_TURN_DURATION_MS,
+  fileNameFor,
+  pickMimeType,
+  pulsePeriod,
+  rampStyle,
+  rampWindows
+} from "@/lib/translate/recorder";
+import {
   segmentsFromPayload,
   speechForSegments,
   type TranslatedSegment
@@ -153,43 +162,13 @@ const TONE = "detailed" as const;
 // `maxDuration` (300s) — a longer turn can't be transcribed + paraphrased in
 // time and the turn fails silently. Change to 150000 for a 2.5-minute cap.
 const MAX_TURN_DURATION_MS = 300000; // 5 minutes
+// T-30s / T-10s for a five-minute turn (lib/translate/recorder.ts).
+const RAMP_WINDOWS = rampWindows(MAX_TURN_DURATION_MS);
 
-// A stop within this window is an accidental rapid double-tap, not a turn.
-// Sub-second clips carry no usable speech, and the really short ones don't
-// even have complete container headers — OpenAI rejects those as "corrupted
-// or unsupported". Catch them before they leave the phone.
-const MIN_TURN_DURATION_MS = 600;
-
-// Visual "wrap up" ramp on the record button. NO audio cues — the mic and
-// speaker are both live during a turn, so the only safe signal is visual.
-const RAMP_EARLY_MS = 30000; // T-30s remaining: gentle "breathing" glow begins
-const RAMP_FAST_MS = 10000; // T-10s remaining: pulse starts accelerating
-const PULSE_SLOW_MS = 600; // pulse period at the start of the fast ramp (T-10s)
-const PULSE_FAST_MS = 150; // pulse period as it reaches T-0 (fastest)
-
-// Keep the upload well under Vercel's ~4.5 MB request-body limit even on a
-// full-length turn: cap MediaRecorder at a voice-friendly bitrate
-// (32 kbps ≈ 1.2 MB for 5 min) so the audio buffer can't grow unbounded.
-const AUDIO_BITS_PER_SECOND = 32000;
-
-function pickMimeType(): string {
-  if (typeof MediaRecorder === "undefined") return "";
-  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"];
-  for (const c of candidates) {
-    try {
-      if (MediaRecorder.isTypeSupported(c)) return c;
-    } catch {
-      /* ignore */
-    }
-  }
-  return "";
-}
-
-function fileNameFor(mime: string): string {
-  if (mime.includes("webm")) return "audio.webm";
-  if (mime.includes("mp4") || mime.includes("aac")) return "audio.mp4";
-  return "audio.webm";
-}
+// The recorder's constants and helpers — MIN_TURN_DURATION_MS, the bitrate
+// cap, pickMimeType/fileNameFor and the wrap-up ramp maths — live in
+// lib/translate/recorder.ts since 2026-11-01 so Taokie's hold-to-talk button
+// can hold the exact same microphone. Nothing about them changed.
 
 /**
  * One 24x24 line icon for the launcher grid, in the stroke style every other
@@ -242,6 +221,8 @@ const NAV_ICON_PATHS = {
   tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"],
   // /demo: a person with a sound wave — your own voice, carried across.
   demo: ["M8 7a3 3 0 106 0 3 3 0 00-6 0z", "M4 20a7 7 0 0114 0", "M19 8.5a3 3 0 010 5M21.5 6a6.5 6.5 0 010 10"],
+  // /taokie: a walkie-talkie — the antenna and the body.
+  walkie: ["M9 2v4", "M7 6h10a1 1 0 011 1v13a1 1 0 01-1 1H7a1 1 0 01-1-1V7a1 1 0 011-1z", "M9.5 10h5M12 14v3"],
   // /study: an open book — your own conversations, read back as lessons.
   study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"]
 } as const;
@@ -540,23 +521,20 @@ export function TranslatorShell({
     const btn = recordBtnRef.current;
 
     // Surface the textual heads-up once we enter the ramp window.
-    setWrappingUp(remaining <= RAMP_EARLY_MS);
+    setWrappingUp(remaining <= RAMP_WINDOWS.early);
 
     if (btn) {
       const reduceMotion =
         typeof window !== "undefined" &&
         window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-      if (remaining > RAMP_EARLY_MS) {
+      if (remaining > RAMP_WINDOWS.early) {
         resetRecordButtonStyle();
       } else {
-        const urgent = remaining <= RAMP_FAST_MS;
+        const urgent = remaining <= RAMP_WINDOWS.fast;
         // Pulse period: constant & gentle in the early window, then shrinking
         // (faster and faster) through the final window.
-        const period = urgent
-          ? PULSE_FAST_MS +
-            (PULSE_SLOW_MS - PULSE_FAST_MS) * (Math.max(0, remaining) / RAMP_FAST_MS)
-          : 2400;
+        const period = pulsePeriod(remaining, RAMP_WINDOWS);
 
         let wave: number;
         if (reduceMotion) {
@@ -568,10 +546,9 @@ export function TranslatorShell({
           wave = (Math.sin(pulsePhaseRef.current) + 1) / 2; // 0..1
         }
 
-        const scaleAmt = urgent ? 0.08 : 0.03;
-        const glow = (urgent ? 80 : 36) * wave + 18;
-        btn.style.transform = reduceMotion ? "" : `scale(${1 + wave * scaleAmt})`;
-        btn.style.boxShadow = `0 0 ${glow}px rgba(251,191,36,${0.4 + wave * 0.5})`;
+        const style = rampStyle(remaining, wave, RAMP_WINDOWS, reduceMotion);
+        btn.style.transform = style.transform;
+        btn.style.boxShadow = style.boxShadow;
       }
     }
 
@@ -1483,6 +1460,26 @@ export function TranslatorShell({
                         >
                           <NavIcon name="demo" />
                           {nav.navVoz}
+                        </a>
+                      ) : null}
+                      {/* /taokie — the push-to-talk translation walkie, a
+                          founders-only P0 spike (2026-11-01). Tiled behind
+                          `founder` like /voz; the page additionally needs the
+                          server-only TAOS_WALKIE_ENABLED to open. */}
+                      {founder ? (
+                        <a
+                          href="/taokie"
+                          role="menuitem"
+                          aria-label={nav.navTaokie}
+                          aria-current={pathname === "/taokie" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/taokie"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="walkie" />
+                          {nav.navTaokie}
                         </a>
                       ) : null}
                       {tutorEnabled() ? (

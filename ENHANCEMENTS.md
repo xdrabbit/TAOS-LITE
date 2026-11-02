@@ -16,6 +16,39 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Taokie — push-to-talk translation walkie; P0 spike built 2026-11-01,
+  draft PR open, founders only.** Two people in a channel. Hold the big
+  button, talk, let go: the turn goes through the EXISTING home pipeline
+  (transcribe → translate → TTS in the sender's voice) and plays on the
+  partner's phone in the partner's language, with text. The bet is that it
+  feels faster than a WhatsApp voice note; the `[taos-walkie-timing]` line
+  proves it or kills it.
+  → Tom's decisions (2026-11-01, not up for relitigation in the spike):
+  reuse /call's signaling for presence and "message ready" (done — it is a
+  Supabase Realtime channel, no realtime model anywhere in Taokie); no push in
+  P0 (none exists in the PWA, so foreground-only); audio retained 30 days
+  (`TAOS_WALKIE_RETENTION_DAYS`, swept daily by Vercel Cron); a "show message
+  text in notifications" setting stored with the user, default on, inert
+  until push exists; "Taokie" in English, Spanish strings placeholders
+  marked `pendiente de revisión por Liz`.
+  → Gate: `TAOS_WALKIE_ENABLED` (server-only) + founders. Preview env only,
+  this branch only, until the two-phone test (Tom + Liz, Wi-Fi ↔ cellular)
+  passes — that is the bar for leaving draft.
+  → Screen: /taokie. Routes: /api/walkie/{turn,messages,ack,settings,sweep}.
+  Table: `taos_lite_walkie_messages` + private bucket `walkie-audio`
+  (supabase/migrations/20261101_walkie_messages.sql).
+  → First two-phone test (Tom, 2026-11-01, iPhone 17 + Galaxy S23): "the fun
+  factor of this is fun." Decisions from it, built on the same PR: TAP TO
+  TALK / TAP TO SEND on both platforms (the Android "missed release" was a
+  race between the finger and the mic opening; no long press remains on the
+  screen); the busy lock is a heartbeat that expires (4 s beat / 10 s stale /
+  cap + 5 s); a Resync button; every failed stage shows a banner and lands on
+  the timing line as `fail_stage=`. 13 of 22 turns that night reached the
+  server and never the other phone — a broadcast only reaches a subscribed
+  socket — so an on-air phone now stays awake, polls for missed turns every
+  5 s, and catches up on every return to the foreground. Second two-phone
+  test pending.
+
 - **Practica con Liz — ACTIVE; spike dispatched 2026-10-18** — a
   scene-based conversational tutor with one live face. The learner picks the
   language they want to practise and enters a real-life scene — airport,
@@ -968,6 +1001,19 @@ blank.
 
 ## Shipped
 
+- Taokie — push-to-talk translation walkie (/taokie, founders only, behind
+  server-only `TAOS_WALKIE_ENABLED`; routes 404 and the page says "Not
+  enabled" with the flag unset) — 2026-11-02, PR #114
+- Phase timing — one `[taos-translate-timing]` line per home turn and
+  `[taos-fast-timing]` per /fast burst (diagnostic) — 2026-10-28, PR #110
+- Conversation context window — last 3 turns handed to /api/translate as
+  fenced context, disambiguation only — 2026-10-28, PR #111
+- Auto transcriber override — `OPENAI_AUTO_TRANSCRIBE_MODEL` for auto mode
+  only, inert until set, plus the accuracy probe — 2026-10-28, PR #109
+- Mixed-language turns as segments — an auto turn returns per-language
+  segments, each spoken in its speaker's voice — 2026-10-28, PR #108
+- Tabletop auto-detect — one phone, two languages, nobody taps (founders,
+  behind `TAOS_TABLETOP_AUTO_ENABLED`) — 2026-10-28, PR #107
 - **Every TTS request is logged: engine, voice id, whose voice, which device** —
   Tom, 2026-10-07: Fish Audio sounded like a different VOICE on his phone than
   on his computer, and ElevenLabs the same on both; he wanted a log that says

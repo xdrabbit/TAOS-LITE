@@ -19,7 +19,9 @@ export const TTS_SURFACES = [
   "study",
   "tutor",
   "fast",
-  "try"
+  "try",
+  // Taokie: /api/walkie/turn speaks through the real /api/tts handler.
+  "walkie"
 ] as const;
 export type TtsSurface = (typeof TTS_SURFACES)[number] | "unknown";
 
