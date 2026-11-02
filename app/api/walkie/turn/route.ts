@@ -27,6 +27,7 @@ import {
   formatWalkieTiming,
   walkieErrorCode,
   type StoredTimings,
+  type WalkieFailStage,
   type WalkieTimingFields
 } from "@/lib/walkie/timing";
 
@@ -74,6 +75,26 @@ function intField(form: FormData, name: string): number | null {
 
 type Stage = "guard" | "form" | "store_rec" | "transcribe" | "translate" | "tts" | "store_say" | "insert";
 
+/** Which fail_stage a route stage reports as (guard failures are not a turn). */
+function failStageOf(stage: Stage): WalkieFailStage | "?" {
+  switch (stage) {
+    case "form":
+      return "upload";
+    case "transcribe":
+      return "transcribe";
+    case "translate":
+      return "translate";
+    case "tts":
+      return "tts";
+    case "store_rec":
+    case "store_say":
+    case "insert":
+      return "store";
+    default:
+      return "?";
+  }
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const started = performance.now();
   const t: WalkieTimingFields = {
@@ -88,6 +109,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     releaseToPlayMs: "?",
     busyBlocked: "?",
     cancelled: "?",
+    failStage: "?",
     src: "?",
     tgt: "?",
     audioBytes: "?",
@@ -237,6 +259,7 @@ async function handle(req: NextRequest, t: WalkieTimingFields): Promise<NextResp
     stageStarted = performance.now();
     let speechPath: string | null = null;
     let speechEngine: string | null = null;
+    let ttsFailed = false;
     if (canSpeak(targetLanguage)) {
       const engine = engineRaw === "openai" || engineRaw === "fishaudio" || engineRaw === "google" ? engineRaw : "elevenlabs";
       const headers = new Headers({ "Content-Type": "application/json" });
@@ -265,7 +288,10 @@ async function handle(req: NextRequest, t: WalkieTimingFields): Promise<NextResp
         uploaded.push(speechPath);
       } else if (ttsRes.status !== 422) {
         // A provider failure is not the end of the turn: the text still goes
-        // through, and the log says the voice did not. 422 is "text only".
+        // through, the line says fail_stage=tts, and the sender's phone shows
+        // a banner (the response says so). 422 is "text only" by design.
+        ttsFailed = true;
+        t.failStage = "tts";
         const body = (await ttsRes.json().catch(() => null)) as { error?: string } | null;
         console.warn(`[taos-walkie] tts_failed http=${ttsRes.status} code=${(body?.error ?? "?").replace(/[^0-9A-Za-z_ ]/g, "").slice(0, 40)}`);
       }
@@ -313,11 +339,12 @@ async function handle(req: NextRequest, t: WalkieTimingFields): Promise<NextResp
 
     const speechUrl = await signWalkieAudio(speechPath);
     return NextResponse.json(
-      { message: { ...row, speech_url: speechUrl } },
+      { message: { ...row, speech_url: speechUrl }, tts_failed: ttsFailed },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
     t.err = error instanceof WalkieStoreError ? error.code : walkieErrorCode(stage, error);
+    t.failStage = failStageOf(stage);
     if (stage === "form") t.uploadMs = since(stageStarted);
     if (stage === "transcribe") t.transcribeMs = since(stageStarted);
     if (stage === "translate") t.translateMs = since(stageStarted);

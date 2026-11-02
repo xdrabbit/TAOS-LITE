@@ -179,20 +179,25 @@ export async function countWalkieTurnAsHomeTurn(input: {
   return true;
 }
 
-/** Unexpired messages in a room, oldest first, at most WALKIE_LIST_LIMIT. */
+/**
+ * Unexpired messages in a room, oldest first, at most WALKIE_LIST_LIMIT.
+ * `afterIso` narrows to rows created after that instant — the on-air
+ * catch-up poll asks for "anything since the last one I have".
+ */
 export async function listWalkieMessages(
   room: string,
   nowMs: number = Date.now(),
-  limit: number = WALKIE_LIST_LIMIT
+  limit: number = WALKIE_LIST_LIMIT,
+  afterIso: string | null = null
 ): Promise<WalkieMessageRow[]> {
   requireAdmin();
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from(WALKIE_TABLE)
     .select("*")
     .eq("room", room)
-    .gt("expires_at", new Date(nowMs).toISOString())
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .gt("expires_at", new Date(nowMs).toISOString());
+  if (afterIso) query = query.gt("created_at", afterIso);
+  const { data, error } = await query.order("created_at", { ascending: false }).limit(limit);
   if (error) throw new WalkieStoreError(`Could not list messages: ${error.message}`, "list_failed");
   return ((data ?? []) as WalkieMessageRow[]).reverse();
 }

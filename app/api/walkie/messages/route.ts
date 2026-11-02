@@ -16,6 +16,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 // GET /api/walkie/messages?room=XYZ        the room's unexpired log, oldest first
+// GET /api/walkie/messages?room=XYZ&after=<iso>   only rows created after that
+//                                          instant (the on-air catch-up poll:
+//                                          a "ready" broadcast that found no
+//                                          subscriber is otherwise lost)
 // GET /api/walkie/messages?id=<uuid>       one message (the partner, on "ready")
 //
 // Each message comes back with a signed link to its spoken translation. Text
@@ -50,12 +54,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ message: await withUrl(row) }, { headers: { "Cache-Control": "no-store" } });
     }
     if (!isWalkieRoom(room)) return NextResponse.json({ error: "Channel code is not valid." }, { status: 400 });
-    const rows = await listWalkieMessages(room);
+    const afterRaw = url.searchParams.get("after");
+    const after = afterRaw && Number.isFinite(Date.parse(afterRaw)) ? new Date(Date.parse(afterRaw)).toISOString() : null;
+    const rows = await listWalkieMessages(room, Date.now(), undefined, after);
     // Belt and braces on top of the daily cron: opening a log kicks a sweep.
-    try {
-      waitUntil(sweepWalkieMessages().catch(() => undefined));
-    } catch {
-      /* outside a Vercel request context the promise still runs */
+    // The catch-up poll (`after`) does not — every five seconds is no time
+    // to be deleting things.
+    if (!after) {
+      try {
+        waitUntil(sweepWalkieMessages().catch(() => undefined));
+      } catch {
+        /* outside a Vercel request context the promise still runs */
+      }
     }
     const messages = await Promise.all(rows.map(withUrl));
     return NextResponse.json({ messages }, { headers: { "Cache-Control": "no-store" } });

@@ -12,11 +12,19 @@
 //   deliver_ms           partner: "ready" heard → audio playing
 //   release_to_play_ms   sender's release → partner's playback (two clocks)
 //   busy_blocked         presses refused because the channel was busy
-//   cancelled            1 when pointercancel ended the hold (sent anyway)
+//   cancelled            1 when pointercancel ended the turn (sent anyway)
+//   fail_stage           where a failed turn died: upload, transcribe,
+//                        translate, tts, store, deliver, playback — or "?"
+//                        when nothing failed. Never the text of anything.
 //
 // Two emitters, one format. The turn route knows the server phases and logs
 // the line with deliver_ms / release_to_play_ms as "?"; the partner's played
-// ack carries those two and the ack route logs the line complete. The format
+// ack carries those two and the ack route logs the line complete. A failure
+// the server cannot see — no "got" from the partner, or their playback
+// refused — is reported by the phone that saw it (ack kind "failed") and
+// logged as a status=error line with the stage, from the row's numbers. A
+// TTS failure is the one non-fatal stage: the text still goes through, the
+// line stays status=ok and says fail_stage=tts. The format
 // is pure so the test can assert the one rule that matters: NO message text,
 // no email, no raw user agent — numbers and short codes only.
 
@@ -32,6 +40,7 @@ export interface WalkieTimingFields {
   releaseToPlayMs: number | "?";
   busyBlocked: number | "?";
   cancelled: 0 | 1 | "?";
+  failStage: WalkieFailStage | "?";
   src: string;
   tgt: string;
   audioBytes: number | "?";
@@ -42,6 +51,16 @@ export interface WalkieTimingFields {
 }
 
 export const WALKIE_TIMING_PREFIX = "[taos-walkie-timing]";
+
+export const WALKIE_FAIL_STAGES = ["upload", "transcribe", "translate", "tts", "store", "deliver", "playback"] as const;
+export type WalkieFailStage = (typeof WALKIE_FAIL_STAGES)[number];
+
+export function isWalkieFailStage(v: unknown): v is WalkieFailStage {
+  return typeof v === "string" && (WALKIE_FAIL_STAGES as readonly string[]).includes(v);
+}
+
+/** The stages a PHONE may report: the server already logs its own. */
+export const WALKIE_CLIENT_FAIL_STAGES: readonly WalkieFailStage[] = ["deliver", "playback"];
 
 /** `transcribe_timeout`, `translate_502`, … — a code, never a message. */
 export function walkieErrorCode(stage: string, e: unknown): string {
@@ -69,7 +88,8 @@ export function formatWalkieTiming(f: WalkieTimingFields): string {
     ` transcribe_ms=${token(f.transcribeMs)} translate_ms=${token(f.translateMs)}` +
     ` tts_ms=${token(f.ttsMs)} deliver_ms=${token(f.deliverMs)}` +
     ` release_to_play_ms=${token(f.releaseToPlayMs)} busy_blocked=${token(f.busyBlocked)}` +
-    ` cancelled=${token(f.cancelled)} src=${token(f.src)} tgt=${token(f.tgt)}` +
+    ` cancelled=${token(f.cancelled)} fail_stage=${token(f.failStage)}` +
+    ` src=${token(f.src)} tgt=${token(f.tgt)}` +
     ` audio_bytes=${token(f.audioBytes)} src_chars=${token(f.srcChars)}` +
     ` out_chars=${token(f.outChars)} total_ms=${token(f.totalMs)} err=${token(f.err)}`
   );

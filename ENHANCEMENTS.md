@@ -37,6 +37,17 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   → Screen: /taokie. Routes: /api/walkie/{turn,messages,ack,settings,sweep}.
   Table: `taos_lite_walkie_messages` + private bucket `walkie-audio`
   (supabase/migrations/20261101_walkie_messages.sql).
+  → First two-phone test (Tom, 2026-11-01, iPhone 17 + Galaxy S23): "the fun
+  factor of this is fun." Decisions from it, built on the same PR: TAP TO
+  TALK / TAP TO SEND on both platforms (the Android "missed release" was a
+  race between the finger and the mic opening; no long press remains on the
+  screen); the busy lock is a heartbeat that expires (4 s beat / 10 s stale /
+  cap + 5 s); a Resync button; every failed stage shows a banner and lands on
+  the timing line as `fail_stage=`. 13 of 22 turns that night reached the
+  server and never the other phone — a broadcast only reaches a subscribed
+  socket — so an on-air phone now stays awake, polls for missed turns every
+  5 s, and catches up on every return to the foreground. Second two-phone
+  test pending.
 
 - **Practica con Liz — ACTIVE; spike dispatched 2026-10-18** — a
   scene-based conversational tutor with one live face. The learner picks the
