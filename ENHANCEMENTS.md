@@ -1001,6 +1001,19 @@ blank.
 
 ## Shipped
 
+- Taokie — push-to-talk translation walkie (/taokie, founders only, behind
+  server-only `TAOS_WALKIE_ENABLED`; routes 404 and the page says "Not
+  enabled" with the flag unset) — 2026-11-02, PR #114
+- Phase timing — one `[taos-translate-timing]` line per home turn and
+  `[taos-fast-timing]` per /fast burst (diagnostic) — 2026-10-28, PR #110
+- Conversation context window — last 3 turns handed to /api/translate as
+  fenced context, disambiguation only — 2026-10-28, PR #111
+- Auto transcriber override — `OPENAI_AUTO_TRANSCRIBE_MODEL` for auto mode
+  only, inert until set, plus the accuracy probe — 2026-10-28, PR #109
+- Mixed-language turns as segments — an auto turn returns per-language
+  segments, each spoken in its speaker's voice — 2026-10-28, PR #108
+- Tabletop auto-detect — one phone, two languages, nobody taps (founders,
+  behind `TAOS_TABLETOP_AUTO_ENABLED`) — 2026-10-28, PR #107
 - **Every TTS request is logged: engine, voice id, whose voice, which device** —
   Tom, 2026-10-07: Fish Audio sounded like a different VOICE on his phone than
   on his computer, and ElevenLabs the same on both; he wanted a log that says
