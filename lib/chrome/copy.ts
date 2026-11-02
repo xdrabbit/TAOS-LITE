@@ -326,6 +326,43 @@ const EN = {
   // TRUE to lib/voz/server.ts (one clip, ≤10 minutes, nothing stored, live
   // microphone only). The rest of /voz reuses the demo* keys above.
   navVoz: "Your voice (public)",
+
+  // ── Taokie (/taokie) — the push-to-talk translation walkie ────────────────
+  // Founders-only P0 spike (2026-11-01). "Taokie" is the product name in
+  // both languages; the Spanish strings below are PLACEHOLDERS marked
+  // "pendiente de revisión por Liz" — nobody at this table who reads
+  // Spanish has checked them yet.
+  navTaokie: "Taokie",
+  walkieTitle: "Taokie",
+  walkieTagline: "Hold, talk, let go — they hear it in their language.",
+  walkieChannel: "Channel",
+  walkieNewChannel: "New channel",
+  walkieShareChannel: "Share link",
+  walkieCopied: "Link copied",
+  walkieCodePlaceholder: "Code",
+  walkieGoOnAir: "Tap to go on air",
+  walkieGoOnAirHint: "One tap unlocks the speaker, then their turns play by themselves while this screen is open.",
+  walkieOffAir: "Leave channel",
+  walkieHold: "HOLD TO TALK",
+  walkieHolding: "Talking…",
+  walkieSending: "Sending…",
+  walkieBusy: "Channel busy",
+  walkieWaiting: "Waiting for your partner…",
+  walkiePartnerHere: "{name} is here",
+  walkiePartnerTalking: "{name} is talking…",
+  walkieYouHear: "You hear {language}",
+  walkieTheyHear: "They hear {language}",
+  walkieDelivered: "Delivered",
+  walkiePlayed: "Played",
+  walkieReplay: "Replay",
+  walkieNothingYet: "Nothing yet. Hold the button and say something.",
+  walkieTooShort: "Too short — hold, say a full thought, then let go.",
+  walkieMicDenied: "Microphone permission was denied. Enable it in Settings and try again.",
+  walkieNotifyText: "Show message text in notifications",
+  walkieNotifyTextHint: "Notifications are not on yet; this is set for when they are.",
+  walkieRetention: "Messages are kept for {days} days, then deleted.",
+  walkieLeftChannel: "You left the channel.",
+  walkieFailed: "That one did not go through. Try again.",
   vozWhat: "Hear yourself speak another language — in your own voice.",
   vozConsent:
     "We record your voice only to make this one clip. The voice is deleted within 10 minutes and nothing is stored. Live microphone only — no uploads.",
@@ -588,6 +625,42 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     // REVISIÓN POR LIZ. vozConsent es lo que un desconocido acepta por sí
     // mismo: tiene que seguir siendo VERDAD (lib/voz/server.ts).
     navVoz: "Tu voz (pública)",
+
+    // ── Taokie — PLACEHOLDERS. Every line: pendiente de revisión por Liz. ──
+    // The name is the same word in both languages; the Spanish label carries
+    // "(walkie)" so a Spanish reader knows what the tile is, and so the
+    // every-Spanish-key-differs fence in tests/chrome-copy.test.ts holds.
+    navTaokie: "Taokie (walkie)", // pendiente de revisión por Liz
+    walkieTitle: "Taokie (walkie)", // pendiente de revisión por Liz
+    walkieTagline: "Mantén, habla, suelta — lo escuchan en su idioma.", // pendiente de revisión por Liz
+    walkieChannel: "Canal", // pendiente de revisión por Liz
+    walkieNewChannel: "Canal nuevo", // pendiente de revisión por Liz
+    walkieShareChannel: "Compartir enlace", // pendiente de revisión por Liz
+    walkieCopied: "Enlace copiado", // pendiente de revisión por Liz
+    walkieCodePlaceholder: "Código", // pendiente de revisión por Liz
+    walkieGoOnAir: "Toca para salir al aire", // pendiente de revisión por Liz
+    walkieGoOnAirHint: "Un toque activa el altavoz; después sus turnos se reproducen solos mientras esta pantalla esté abierta.", // pendiente de revisión por Liz
+    walkieOffAir: "Salir del canal", // pendiente de revisión por Liz
+    walkieHold: "MANTÉN PARA HABLAR", // pendiente de revisión por Liz
+    walkieHolding: "Hablando…", // pendiente de revisión por Liz
+    walkieSending: "Enviando…", // pendiente de revisión por Liz
+    walkieBusy: "Canal ocupado", // pendiente de revisión por Liz
+    walkieWaiting: "Esperando a tu pareja…", // pendiente de revisión por Liz
+    walkiePartnerHere: "{name} está aquí", // pendiente de revisión por Liz
+    walkiePartnerTalking: "{name} está hablando…", // pendiente de revisión por Liz
+    walkieYouHear: "Tú escuchas {language}", // pendiente de revisión por Liz
+    walkieTheyHear: "Ellos escuchan {language}", // pendiente de revisión por Liz
+    walkieDelivered: "Entregado", // pendiente de revisión por Liz
+    walkiePlayed: "Reproducido", // pendiente de revisión por Liz
+    walkieReplay: "Repetir", // pendiente de revisión por Liz
+    walkieNothingYet: "Nada todavía. Mantén el botón y di algo.", // pendiente de revisión por Liz
+    walkieTooShort: "Muy corto — mantén, di una idea completa y suelta.", // pendiente de revisión por Liz
+    walkieMicDenied: "Se negó el permiso del micrófono. Actívalo en Ajustes e intenta de nuevo.", // pendiente de revisión por Liz
+    walkieNotifyText: "Mostrar el texto del mensaje en las notificaciones", // pendiente de revisión por Liz
+    walkieNotifyTextHint: "Las notificaciones aún no están activas; esto queda listo para cuando lo estén.", // pendiente de revisión por Liz
+    walkieRetention: "Los mensajes se guardan {days} días y luego se borran.", // pendiente de revisión por Liz
+    walkieLeftChannel: "Saliste del canal.", // pendiente de revisión por Liz
+    walkieFailed: "Ese no llegó. Intenta de nuevo.", // pendiente de revisión por Liz
     vozWhat: "Escúchate hablar otro idioma — con tu propia voz.",
     vozConsent:
       "Grabamos tu voz solo para hacer este clip. La voz se borra en menos de 10 minutos y no se guarda nada. Solo micrófono en vivo — no se suben archivos.",

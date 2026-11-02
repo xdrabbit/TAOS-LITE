@@ -16,6 +16,28 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Taokie — push-to-talk translation walkie; P0 spike built 2026-11-01,
+  draft PR open, founders only.** Two people in a channel. Hold the big
+  button, talk, let go: the turn goes through the EXISTING home pipeline
+  (transcribe → translate → TTS in the sender's voice) and plays on the
+  partner's phone in the partner's language, with text. The bet is that it
+  feels faster than a WhatsApp voice note; the `[taos-walkie-timing]` line
+  proves it or kills it.
+  → Tom's decisions (2026-11-01, not up for relitigation in the spike):
+  reuse /call's signaling for presence and "message ready" (done — it is a
+  Supabase Realtime channel, no realtime model anywhere in Taokie); no push in
+  P0 (none exists in the PWA, so foreground-only); audio retained 30 days
+  (`TAOS_WALKIE_RETENTION_DAYS`, swept daily by Vercel Cron); a "show message
+  text in notifications" setting stored with the user, default on, inert
+  until push exists; "Taokie" in English, Spanish strings placeholders
+  marked `pendiente de revisión por Liz`.
+  → Gate: `TAOS_WALKIE_ENABLED` (server-only) + founders. Preview env only,
+  this branch only, until the two-phone test (Tom + Liz, Wi-Fi ↔ cellular)
+  passes — that is the bar for leaving draft.
+  → Screen: /taokie. Routes: /api/walkie/{turn,messages,ack,settings,sweep}.
+  Table: `taos_lite_walkie_messages` + private bucket `walkie-audio`
+  (supabase/migrations/20261101_walkie_messages.sql).
+
 - **Practica con Liz — ACTIVE; spike dispatched 2026-10-18** — a
   scene-based conversational tutor with one live face. The learner picks the
   language they want to practise and enters a real-life scene — airport,
