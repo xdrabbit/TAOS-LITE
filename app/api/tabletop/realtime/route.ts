@@ -7,6 +7,7 @@ import {
 } from "@/lib/tabletop/session";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 import { guardSpend } from "@/lib/spendGuard";
+import { tabletopAutoEnabled, tabletopAutoVisibleTo } from "@/lib/release";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json().catch(() => ({}))) as {
     source?: string;
     target?: string;
+    auto?: boolean;
   };
   const source =
     typeof body.source === "string" && isSupportedLanguageCode(body.source) ? body.source : "en";
@@ -64,6 +66,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // a language into itself (the doubled-side rule, lib/translate/pair.ts).
   const target = rawTarget === source ? (source === "en" ? "es" : "en") : rawTarget;
   const direction: TabletopDirection = { source, target };
+  // Auto-detect opens the session on the two-language prompt — only for a
+  // founder, only with TAOS_TABLETOP_AUTO_ENABLED=1 (lib/release.ts). Anyone
+  // else asking for it gets today's per-direction session, silently.
+  const auto =
+    body.auto === true && tabletopAutoVisibleTo(guard.user?.email, tabletopAutoEnabled())
+      ? { a: source, b: target }
+      : undefined;
 
   // Same model policy as /live and /call: full gpt-realtime (mini drifted at
   // the 7/8 field test). Reuses the /live override env, plus its own.
@@ -74,7 +83,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const session = buildTabletopSession({ direction, model, transcribeModel });
+  const session = buildTabletopSession({ direction, model, transcribeModel, auto });
 
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
@@ -112,7 +121,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Greppable as [taos-tabletop-mint] in the Vercel runtime logs. One line
     // per table, not per turn — the session outlives every turn it serves.
     console.info(
-      `[taos-tabletop-mint] pair=${source}->${target} model=${model} ` +
+      `[taos-tabletop-mint] pair=${source}->${target} auto=${auto ? 1 : 0} model=${model} ` +
         `context_tokens=${TABLETOP_CONTEXT_TOKEN_LIMIT ?? "off"} ttl=${TABLETOP_SECRET_TTL_SECONDS}s`
     );
 

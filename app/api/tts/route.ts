@@ -16,6 +16,8 @@ import {
 } from "@/lib/tts/google";
 import { canSpeak, isLanguageCode } from "@/lib/languages/catalog";
 import { guardSpend, SIGN_IN_REQUIRED } from "@/lib/spendGuard";
+import { isFounder } from "@/lib/release";
+import { authorizeDemoVoice, countDemoLine, demoEnabled } from "@/lib/demo/server";
 import {
   TTS_STANDALONE_HEADER,
   TTS_SURFACE_HEADER,
@@ -26,6 +28,12 @@ import {
   writeTtsLog,
   type TtsLogRecord
 } from "@/lib/tts/requestLog";
+import {
+  SIGNOFF_AVAILABLE_HEADER,
+  SIGNOFF_HEADER,
+  shareSignoffEnabled,
+  withSignoff
+} from "@/lib/tts/shareSignoff";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -68,7 +76,7 @@ function audioResponse(buffer: ArrayBuffer, engine: Engine, log: RequestLog): Ne
 
 // What the request log (lib/tts/requestLog.ts) learns along the way. Filled
 // in as the handler goes, written once by POST whatever the outcome.
-type RequestLog = Pick<
+type RequestLog = { demo?: boolean } & Pick<
   TtsLogRecord,
   | "userId"
   | "engine"
@@ -387,6 +395,40 @@ async function fishAudio(
   return audioResponse(await res.arrayBuffer(), "fishaudio", log);
 }
 
+async function demoVoice(
+  text: string,
+  voiceOverride: unknown,
+  demoToken: unknown,
+  user: { id: string; email?: string | null } | null,
+  log: RequestLog,
+  targetLanguage?: LangCode
+): Promise<NextResponse> {
+  log.demo = true;
+  log.requestedEngine = "demo";
+  const refuse = (code: string): NextResponse => {
+    log.errorCode = `demo_${code}`;
+    return NextResponse.json({ error: "That voice is not available." }, { status: 403 });
+  };
+  if (!demoEnabled()) return refuse("disabled");
+  if (!user || !isFounder(user.email)) return refuse("founder");
+  const verdict = authorizeDemoVoice({
+    voiceId: voiceOverride,
+    token: demoToken,
+    userId: user.id,
+    consume: false
+  });
+  if (!verdict.ok) return refuse(verdict.reason);
+
+  // The id is NOT logged: it is a stranger's voice, and the request log is
+  // the one place on this route that writes to a table. `[taos-demo]` lines
+  // from the demo routes carry it, which is enough to correlate.
+  log.engine = "elevenlabs";
+  log.voiceRole = "none";
+  const res = await elevenLabs(text, voiceOverride as string, log, targetLanguage);
+  if (res.ok) res.headers.set("X-Demo-Lines-Left", String(countDemoLine(voiceOverride as string)));
+  return res;
+}
+
 /**
  * The most an anonymous /try caller may ask to have spoken in one request.
  *
@@ -417,7 +459,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     audioBytes: null,
     audioMime: null
   };
-  const res = await handle(req, log);
+  const share: ShareRequest = { requested: false, target: null };
+  const res = await shareStep(req, await handle(req, log, share), log, share);
   try {
     const ua = req.headers.get("user-agent");
     const { device, browser } = parseUserAgent(ua);
@@ -435,14 +478,58 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     // A request the spend guard turned away gets the log line but no row:
     // a flood of strangers must not become a flood of inserts.
-    waitUntil(log.errorCode === "guard" ? writeTtsLog(record, null) : writeTtsLog(record));
+    //
+    // A /demo line gets the line and no row either: the stranger's voice is
+    // promised to leave nothing behind, and a table row is something.
+    waitUntil(
+      log.errorCode === "guard" || log.demo ? writeTtsLog(record, null) : writeTtsLog(record)
+    );
   } catch (e) {
     console.warn(`[taos-tts] log skipped: ${e instanceof Error ? e.message : String(e)}`);
   }
   return res;
 }
 
-async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> {
+// What the body said about the share sign-off (lib/tts/shareSignoff.ts).
+interface ShareRequest {
+  requested: boolean;
+  target: string | null;
+}
+
+/**
+ * The home card's Share, after the line is synthesized. Two jobs, both only
+ * on a 200 for a signed-in caller:
+ *   * a home-screen line says whether the flag is on, so the client knows a
+ *     Share should come back for the signed version rather than reuse Play's;
+ *   * a home-share request that asked gets [line][gap][sign-off] — or the
+ *     clean line, when the caller is a subscriber or anything goes wrong.
+ */
+async function shareStep(
+  req: NextRequest,
+  res: NextResponse,
+  log: RequestLog,
+  share: ShareRequest
+): Promise<NextResponse> {
+  if (res.status !== 200 || !log.userId) return res;
+  const surface = parseSurface(req.headers.get(TTS_SURFACE_HEADER));
+  if (surface !== "home" && surface !== "home-share") return res;
+  if (shareSignoffEnabled()) res.headers.set(SIGNOFF_AVAILABLE_HEADER, "1");
+  if (!share.requested) return res;
+
+  const line = new Uint8Array(await res.arrayBuffer());
+  const result = await withSignoff(line, {
+    requested: true,
+    userId: log.userId,
+    target: share.target
+  });
+  if (result.skipped && !log.errorCode) log.errorCode = result.skipped;
+  log.audioBytes = result.audio.byteLength;
+  const headers = new Headers(res.headers);
+  headers.set(SIGNOFF_HEADER, result.signed ? "1" : "0");
+  return new NextResponse(result.audio as BodyInit, { status: 200, headers });
+}
+
+async function handle(req: NextRequest, log: RequestLog, share: ShareRequest): Promise<NextResponse> {
   try {
     // FIRST, before the body is even read and long before a provider is
     // called. Until 8/19 this route answered anyone — a bare curl got 14KB of
@@ -466,7 +553,17 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
       targetLanguage?: LangCode;
       latency?: string;
       voice?: string;
+      voiceOverride?: unknown;
+      demoToken?: unknown;
+      signoff?: boolean;
     };
+    // Only the home card's Share may ask, and asking is all the client does:
+    // whether the flag is on and the caller is free tier is decided after
+    // synthesis, in shareStep.
+    share.requested =
+      body.signoff === true &&
+      parseSurface(req.headers.get(TTS_SURFACE_HEADER)) === "home-share";
+    share.target = typeof body.targetLanguage === "string" ? body.targetLanguage : null;
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const googleEnabled = process.env.TAOS_TTS_GOOGLE_ENABLED === "1";
     const engine: Engine =
@@ -526,6 +623,15 @@ async function handle(req: NextRequest, log: RequestLog): Promise<NextResponse> 
         { error: "This language is text only.", textOnly: true },
         { status: 422 }
       );
+    }
+
+    // /demo ("Tu voz"): speak in a stranger's ten-minute instant clone. The
+    // ONLY way a client names an ElevenLabs voice id on this route, so it is
+    // fenced four ways — flag, founder session, a token the clone route signed
+    // for this exact voice and founder, and the line cap — and a refusal is a
+    // refusal: no fallback to another voice (lib/demo/server.ts says why).
+    if (body.voiceOverride !== undefined) {
+      return await demoVoice(text, body.voiceOverride, body.demoToken, guard.user, log, body.targetLanguage);
     }
 
     // Wrong or absent code -> locked -> default voice. Deliberately silent:

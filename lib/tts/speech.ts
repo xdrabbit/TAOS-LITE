@@ -50,6 +50,11 @@ export interface SpeechRequest {
   engine?: TtsEngine;
   /** /live trades clone fidelity for the fastest model. */
   latency?: "flash";
+  /**
+   * The home card's Share asks for the spoken sign-off (lib/tts/shareSignoff.ts).
+   * Asking is all it does — the route decides. Never set on a Play request.
+   */
+  signoff?: boolean;
 }
 
 /** fetch, or a wrapper around it — lib/net's fetchWithRetry fits as-is. */
@@ -62,6 +67,8 @@ export interface SpeechOptions {
   failureMessage?: string;
   /** Which screen is asking — for the request log only. */
   surface?: TtsSurface;
+  /** Sees the successful response before its body is read (for headers). */
+  onResponse?: (res: Response) => void;
 }
 
 /**
@@ -127,5 +134,6 @@ export async function requestSpeech(
     if (res.status === 422 && p.textOnly === true) return null;
     throw new Error(p.details || p.error || failureMessage);
   }
+  options.onResponse?.(res);
   return res.blob();
 }

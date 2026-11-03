@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGE_OPTIONS } from "@/lib/realtime/languages";
 import { ttsDeviceHeaders } from "@/lib/tts/deviceHints";
+import { ExitHome } from "./ExitHome";
 
 function labelFor(code: string): string {
   return LANGUAGE_OPTIONS.find((o) => o.code === code)?.label ?? code.toUpperCase();
@@ -319,6 +320,7 @@ export function AtomShell(): JSX.Element {
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
         <header className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
+            <ExitHome />
             <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·ATOM</h1>
             <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-200/80">
               Free

@@ -8,6 +8,7 @@ import {
   type GuideSection
 } from "@/lib/guide";
 import { BUILD_LABEL } from "@/lib/version";
+import { ExitHome } from "@/components/ExitHome";
 
 // The quick-start page. Every word lives in lib/guide.ts, which also carries
 // the rules it is under: no personal names, and every control it names is
@@ -118,15 +119,10 @@ export default function GuidePage(): JSX.Element {
   return (
     <main className="min-h-screen px-5 pb-16 pt-[calc(env(safe-area-inset-top)+1.5rem)]">
       <div className="mx-auto max-w-2xl">
-        <header className="flex items-center justify-between py-2">
+        <header className="flex items-center gap-3 py-2">
+          <ExitHome />
           <a href="/" className="text-lg font-semibold tracking-tight text-amber-200">
             TAOS·LITE
-          </a>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
           </a>
         </header>
 

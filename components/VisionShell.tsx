@@ -8,6 +8,7 @@ import { readStoredPair } from "@/lib/translate/pair";
 import { PHOTO_TARGET_AUTO, photoTargetLanguage } from "@/lib/vision/target";
 import { supabase } from "@/lib/supabase";
 import { SignIn } from "./SignIn";
+import { ExitHome } from "./ExitHome";
 
 // /vision — point the camera at a sign, menu, or label (or pick a photo) and
 // get the text translated. The browser downscales the photo to a small JPEG
@@ -210,14 +211,9 @@ export function VisionShell(): JSX.Element {
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
         </header>
 
         <div>

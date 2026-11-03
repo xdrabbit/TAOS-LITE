@@ -4,6 +4,7 @@ import {
   type PodcastEpisodeStatus,
   type PodcastRoadmapEpisode
 } from "@/lib/podcastRoadmap";
+import { ExitHome } from "@/components/ExitHome";
 
 const DESCRIPTION =
   "Tom and Liz talk about love, language, culture, and building a life across English and Spanish.";
@@ -74,15 +75,10 @@ export default function LoveInTranslationPage(): JSX.Element {
       />
 
       <div className="relative mx-auto max-w-3xl">
-        <header className="flex items-center justify-between gap-4 py-2">
+        <header className="flex items-center gap-4 py-2">
+          <ExitHome />
           <a href="/" className="text-base font-semibold tracking-tight text-amber-200 sm:text-lg">
             TAOS·LITE
-          </a>
-          <a
-            href="/"
-            className="inline-flex min-h-[44px] items-center rounded-full border border-white/10 bg-white/5 px-4 text-sm text-amber-100/75 transition hover:border-amber-300/25 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
-          >
-            ← Back to TAOS
           </a>
         </header>
 

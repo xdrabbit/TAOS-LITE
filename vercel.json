@@ -3,6 +3,10 @@
     {
       "path": "/api/predict/rebuild",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/walkie/sweep",
+      "schedule": "30 8 * * *"
     }
   ]
 }

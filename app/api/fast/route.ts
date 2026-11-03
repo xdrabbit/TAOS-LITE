@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fastVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
 import { resolveTextLanguages, SAME_LANGUAGE } from "@/lib/translate/textRequest";
-import { FastEngineError, fastTranslate } from "@/lib/fast/engine";
+import { FastEngineError, fastTranslate, getFastModel, type FastEngine } from "@/lib/fast/engine";
 import { checkFastRate } from "@/lib/fast/rateLimit";
 import {
   abandonFastQuickie,
@@ -69,20 +69,69 @@ function bad(message: string, status: number): NextResponse {
   );
 }
 
+// ── [taos-fast-timing] ─────────────────────────────────────────────────────
+// One line per request, success or error, so the engine's latency is visible
+// next to the meter's and guardSpend's (10/27: OPENAI_FAST_MODEL moved to
+// gpt-4.1-mini). Lengths and codes only — never the typed text or an email.
+interface FastTiming {
+  engine: FastEngine | "?";
+  guardMs: number | "?";
+  meterMs: number | "?";
+  translateMs: number | "?";
+  err: string;
+}
+
+let instanceWarm = false;
+
+function since(t0: number): number {
+  return Math.round(performance.now() - t0);
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const started = performance.now();
+  const cold = instanceWarm ? 0 : 1;
+  instanceWarm = true;
+  const t: FastTiming = { engine: "?", guardMs: "?", meterMs: "?", translateMs: "?", err: "?" };
+  let res: NextResponse | undefined;
+  try {
+    res = await handle(req, t);
+    return res;
+  } finally {
+    const http = res?.status ?? 500;
+    const ok = http >= 200 && http < 300;
+    const model = t.engine === "azure" ? "azure-translator" : getFastModel();
+    console.log(
+      `[taos-fast-timing] status=${ok ? "ok" : "error"} http=${http} engine=${t.engine}` +
+        ` model=${model} guard_ms=${t.guardMs} meter_ms=${t.meterMs}` +
+        ` translate_ms=${t.translateMs} total_ms=${since(started)} cold=${cold}` +
+        ` err=${ok ? "?" : t.err === "?" ? "unhandled" : t.err}`
+    );
+  }
+}
+
+async function handle(req: NextRequest, t: FastTiming): Promise<NextResponse> {
   // Identity first, because founder-ness is the gate and only a validated
   // token can answer it. guardSpend touches Supabase, never a paid provider,
   // so a stranger's request stops here having cost nothing.
+  const guardStarted = performance.now();
   const guard = await guardSpend(req);
+  t.guardMs = since(guardStarted);
   const email = guard.ok ? (guard.user?.email ?? null) : null;
-  if (!fastVisibleTo(email)) return notFound();
-  if (!guard.ok) return guard.response;
+  if (!fastVisibleTo(email)) {
+    t.err = "not_found";
+    return notFound();
+  }
+  if (!guard.ok) {
+    t.err = "guard_blocked";
+    return guard.response;
+  }
   // allowAnonymous was never passed, so ok:true means a real session and a
   // real user id — which is what the rate limit is keyed on.
   const userId = guard.user?.id ?? "unknown";
 
   const rate = checkFastRate(userId);
   if (!rate.allowed) {
+    t.err = "rate_limited";
     return NextResponse.json(
       { error: "Too many translations in a row. Give it a moment.", window: rate.window },
       { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "5" } }
@@ -93,13 +142,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     payload = (await req.json()) as Record<string, unknown>;
   } catch {
+    t.err = "bad_json";
     return bad("Request body must be valid JSON.", 400);
   }
 
   const raw = typeof payload.text === "string" ? payload.text : "";
   const text = raw.trim();
-  if (!text) return bad("`text` is required and cannot be empty.", 400);
+  if (!text) {
+    t.err = "empty_text";
+    return bad("`text` is required and cannot be empty.", 400);
+  }
   if (text.length > FAST_MAX_CHARS) {
+    t.err = "text_too_long";
     return bad(`\`text\` is longer than ${FAST_MAX_CHARS} characters.`, 400);
   }
 
@@ -111,6 +165,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // disagree about Cantonese on some future Tuesday.
   const resolved = resolveTextLanguages(payload);
   if (resolved === SAME_LANGUAGE) {
+    t.err = "same_language";
     return bad("`sourceLanguage` and `targetLanguage` must be two different languages.", 400);
   }
   const { pair, source } = resolved;
@@ -123,6 +178,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // burst key that changed mid-word would bill a phrase twice.
   const caller = { id: userId, email };
   let begun;
+  const meterStarted = performance.now();
   try {
     begun = await beginFastQuickie({
       user: caller,
@@ -135,6 +191,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       auto: source === null
     });
   } catch (error) {
+    t.meterMs = since(meterStarted);
+    t.err = "meter_failed";
     if (error instanceof FastMeterUnavailableError) {
       // A meter that cannot answer must not be read as a green light. This is
       // the one refusal on this route that is about US, so it says so.
@@ -142,8 +200,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     throw error;
   }
+  t.meterMs = since(meterStarted);
 
   if (!begun.ok) {
+    t.err = `meter_${begun.reason}`;
     const { status, message } = fastRefusal(begun.reason);
     return NextResponse.json(
       {
@@ -161,8 +221,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const translateStarted = performance.now();
   try {
     const result = await fastTranslate(text, pair, source);
+    t.translateMs = since(translateStarted);
+    t.engine = result.engine;
     // Fill in the row the reservation bought. Auto mode only learns which
     // side was typed from this reply, which is why the languages are written
     // now rather than at reservation time.
@@ -195,6 +258,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
+    if (t.translateMs === "?") {
+      t.translateMs = since(translateStarted);
+      t.err = error instanceof FastEngineError ? `translate_${error.status}` : "translate_failed";
+    } else {
+      t.err = "record_failed";
+    }
     // The engine did not answer, so the reservation bought nothing. Give it
     // back — charging for a translation that never arrived would be the
     // mirror image of the bug this metering exists to fix.

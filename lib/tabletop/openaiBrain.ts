@@ -96,7 +96,8 @@ export function openaiSegmentPairing(silenceMs: number = SEGMENT_SILENCE_MS) {
 
 export async function startOpenAIBrain(
   events: TabletopBrainEvents,
-  openingDirection: TabletopDirection
+  openingDirection: TabletopDirection,
+  opts: { auto?: boolean } = {}
 ): Promise<ActiveTabletopBrain> {
   const pairing = openaiSegmentPairing();
   let spend: CallSpend = emptySpend();
@@ -108,6 +109,11 @@ export async function startOpenAIBrain(
       onHeard: events.onHeard,
       onTranslationDelta: events.onPartial,
       onRealtimeEvent: (ev) => {
+        // Response boundaries for auto-detect's tag reader. This tap runs
+        // BEFORE live.ts handles the event, so a start always precedes the
+        // response's first delta.
+        if (ev.type === "response.created") events.onSegmentStart?.();
+        if (ev.type === "response.done") events.onSegmentEnd?.();
         const r = pairing.event(ev, performance.now());
         if (r.transcribedSeconds) spend = addTranscribedSeconds(spend, r.transcribedSeconds);
         if (r.usage) spend = addResponseUsage(spend, r.usage);
@@ -120,7 +126,8 @@ export async function startOpenAIBrain(
         }
       }
     },
-    openingDirection
+    openingDirection,
+    opts
   );
 
   return { kind: "openai", ...live };

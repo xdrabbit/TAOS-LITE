@@ -34,6 +34,7 @@ import { requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
 import { Paywall } from "./Paywall";
 import { authHeaders } from "@/lib/authClient";
+import { ExitHome } from "./ExitHome";
 
 // Every drill is said in English — the learner's job is to produce it. Named
 // so the tier check in hear() reads a language instead of assuming one.
@@ -241,16 +242,13 @@ function TutorHeader({
 }): JSX.Element {
   return (
     <header className="flex items-center justify-between gap-2">
-      <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·TUTOR</h1>
+      <div className="flex items-center gap-2">
+        <ExitHome />
+        <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·TUTOR</h1>
+      </div>
       <div className="flex items-center gap-2">
         <MinutesChip balance={balance ?? null} />
         <ModeToggle mode={mode} onMode={onMode} />
-        <a
-          href="/"
-          className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-amber-100/70"
-        >
-          ← Translator
-        </a>
       </div>
     </header>
   );

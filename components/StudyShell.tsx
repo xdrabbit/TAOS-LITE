@@ -32,6 +32,7 @@ import type { StudyLessonResponse } from "@/lib/study/types";
 import { bestOf } from "@/lib/study/practice";
 import { StudyLessonCard } from "./study/StudyLessonCard";
 import { SignIn } from "./SignIn";
+import { ExitHome } from "./ExitHome";
 
 const LEARN_KEY = "taos.study.learn";
 const EXPLAIN_KEY = "taos.study.explain";
@@ -277,9 +278,7 @@ export function StudyShell(): JSX.Element {
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex max-w-md flex-col gap-4">
         <header className="flex items-center gap-3">
-          <a href="/" className={ghost} aria-label="Back to TAOS · Volver">
-            ←
-          </a>
+          <ExitHome />
           <h1 className="text-base font-semibold tracking-tight text-amber-200">Study · Estudio</h1>
           <span className="flex-1" />
           <button type="button" className={ghost} onClick={() => setView(view === "library" ? "pick" : "library")}>

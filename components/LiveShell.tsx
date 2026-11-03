@@ -9,6 +9,7 @@ import {
 import { keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
+import { JumpToTail, useFollowTail } from "./FollowTail";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { recognitionTag } from "@/lib/languages/recognition";
 import { languageNative } from "@/lib/languages/catalog";
@@ -16,6 +17,7 @@ import { pairDirection, type PairDirection, type PairLangCode, type PairSide } f
 import { onDeviceSttEnabled } from "@/lib/release";
 import { jsonAuthHeaders } from "@/lib/authClient";
 import { NewestFirstStack } from "./NewestFirstStack";
+import { ExitHome } from "./ExitHome";
 
 // ── /live: real-time follow-along ───────────────────────────────────────────
 // Use case: Tom & Liz at a dinner, on a call, or watching TV in a language one
@@ -755,6 +757,9 @@ export function LiveShell(): JSX.Element {
   // What the screen is doing right now, as a pair of language names. Ambient
   // AI always runs room → you; the on-device engine follows the side toggle.
   const heardLanguage = engine === "ambient" ? theirs : spoken.sourceLanguage;
+  // The draft only ever exists while a summary streams; it is cleared the
+  // moment the summary lands in the feed.
+  const draftTail = useFollowTail(!!draft, draft);
   const readLanguage = engine === "ambient" ? mine : spoken.targetLanguage;
 
   return (
@@ -764,14 +769,9 @@ export function LiveShell(): JSX.Element {
     // START; the feed never shrinks below 38vh.
     <main className="h-[100dvh] overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-full max-w-md flex-col gap-4">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <a
-            href="/"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-          >
-            ← Home
-          </a>
         </header>
 
         <div>
@@ -952,11 +952,14 @@ export function LiveShell(): JSX.Element {
               contentKey={`${feed[0]?.id ?? 0}:${feed.length}:${draft.length}`}
             >
               {draft ? (
-                <div data-stack-item className="rounded-3xl border border-emerald-300/30 bg-emerald-400/[0.06] p-5">
+                <div data-stack-item className="relative">
+                  <div ref={draftTail.ref} className="max-h-[40dvh] overflow-y-auto overscroll-contain rounded-3xl border border-emerald-300/30 bg-emerald-400/[0.06] p-5 [overflow-anchor:none]">
                   <p className="text-pretty text-[clamp(1.5rem,6vw,2.2rem)] font-semibold leading-tight tracking-tight text-emerald-50">
                     {draft}
                     <span className="animate-pulse">▍</span>
                   </p>
+                </div>
+                  <JumpToTail show={draftTail.detached} onJump={draftTail.jumpToTail} />
                 </div>
               ) : null}
 

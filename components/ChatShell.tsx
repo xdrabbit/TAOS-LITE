@@ -52,6 +52,7 @@ import {
   initialThreadId,
   type ChatThreadSummary
 } from "@/lib/chatThreads";
+import { ExitHome } from "./ExitHome";
 
 // ── /chat: private translated messages ──────────────────────────────────────
 // Tier 1+ of the private message app: as many 1:1 threads as an account wants,
@@ -698,25 +699,19 @@ export function ChatShell({ openThreadId }: { openThreadId?: string }): JSX.Elem
   return (
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex h-[calc(100dvh-1.5rem)] max-w-md flex-col gap-3">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex items-center gap-3">
+          <ExitHome />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
-          <div className="flex items-center gap-2">
-            {canReachList ? (
-              <button
-                type="button"
-                onClick={openList}
-                className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
-              >
-                {CHAT_LIST_BACK}
-              </button>
-            ) : null}
-            <a
-              href="/"
+          <span className="flex-1" />
+          {canReachList ? (
+            <button
+              type="button"
+              onClick={openList}
               className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-amber-100/80"
             >
-              ← Home
-            </a>
-          </div>
+              {CHAT_LIST_BACK}
+            </button>
+          ) : null}
         </header>
 
         {showList ? (

@@ -64,7 +64,17 @@ const GATED: Record<string, string> = {
   video: "founder",
   // /study is dark until NEXT_PUBLIC_ENABLE_STUDY — its own flag, not the
   // tutor's (lib/release.ts). Stripping this block is what a customer sees.
-  study: "studyEnabled()"
+  study: "studyEnabled()",
+  // /demo ("Tu voz") is founders-only, tiled behind `founder` like /video,
+  // and additionally needs the server-only TAOS_DEMO_ENABLED to open.
+  demo: "founder",
+  // /voz is the PUBLIC "Tu voz", reached by a texted link rather than the nav.
+  // Its only nav entry is a founder tile (how Tom walks it), and the page
+  // additionally needs the server-only TAOS_VOZ_ENABLED to open.
+  voz: "founder",
+  // /taokie is the push-to-talk translation walkie, a founders-only P0 spike
+  // (2026-11-01): a founder tile, and the page needs TAOS_WALKIE_ENABLED.
+  taokie: "founder"
 };
 
 function read(path: string): string {

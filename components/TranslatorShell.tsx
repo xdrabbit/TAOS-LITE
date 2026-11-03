@@ -19,13 +19,43 @@ import { PersonalVoiceModal, useSecretTaps } from "./PersonalVoiceUnlock";
 import { TextOnlyNote } from "./TextOnly";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
 import { requestSpeech } from "@/lib/tts/speech";
-import { shareAudioFile } from "@/lib/tts/shareAudio";
+import {
+  SHARE_COVER_ART,
+  SHARE_TEXT_WITH_FILE,
+  brandSharedAudio,
+  loadShareCoverArt,
+  logShareTap,
+  shareAudioFile,
+  shareFileName,
+  shareText
+} from "@/lib/tts/shareAudio";
+import { SIGNOFF_AVAILABLE_HEADER, SIGNOFF_HEADER } from "@/lib/tts/signoffHeaders";
 import { SUBSCRIBER_DEFAULT_ENGINE, type TtsEngine } from "@/lib/tts/engine";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
 import { type PairLangCode } from "@/lib/translate/pair";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { continueSession, type ConversationSession } from "@/lib/translate/session";
-import { canSpeak, languageLabel, languageNative } from "@/lib/languages/catalog";
+import {
+  AUDIO_BITS_PER_SECOND,
+  MIN_TURN_DURATION_MS,
+  fileNameFor,
+  pickMimeType,
+  pulsePeriod,
+  rampStyle,
+  rampWindows
+} from "@/lib/translate/recorder";
+import {
+  segmentsFromPayload,
+  speechForSegments,
+  type TranslatedSegment
+} from "@/lib/translate/segments";
+import {
+  contextForNextTurn,
+  EMPTY_CONTEXT,
+  rememberTurn,
+  type ContextStore
+} from "@/lib/translate/context";
+import { canSpeak, languageNative } from "@/lib/languages/catalog";
 import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
@@ -132,43 +162,13 @@ const TONE = "detailed" as const;
 // `maxDuration` (300s) — a longer turn can't be transcribed + paraphrased in
 // time and the turn fails silently. Change to 150000 for a 2.5-minute cap.
 const MAX_TURN_DURATION_MS = 300000; // 5 minutes
+// T-30s / T-10s for a five-minute turn (lib/translate/recorder.ts).
+const RAMP_WINDOWS = rampWindows(MAX_TURN_DURATION_MS);
 
-// A stop within this window is an accidental rapid double-tap, not a turn.
-// Sub-second clips carry no usable speech, and the really short ones don't
-// even have complete container headers — OpenAI rejects those as "corrupted
-// or unsupported". Catch them before they leave the phone.
-const MIN_TURN_DURATION_MS = 600;
-
-// Visual "wrap up" ramp on the record button. NO audio cues — the mic and
-// speaker are both live during a turn, so the only safe signal is visual.
-const RAMP_EARLY_MS = 30000; // T-30s remaining: gentle "breathing" glow begins
-const RAMP_FAST_MS = 10000; // T-10s remaining: pulse starts accelerating
-const PULSE_SLOW_MS = 600; // pulse period at the start of the fast ramp (T-10s)
-const PULSE_FAST_MS = 150; // pulse period as it reaches T-0 (fastest)
-
-// Keep the upload well under Vercel's ~4.5 MB request-body limit even on a
-// full-length turn: cap MediaRecorder at a voice-friendly bitrate
-// (32 kbps ≈ 1.2 MB for 5 min) so the audio buffer can't grow unbounded.
-const AUDIO_BITS_PER_SECOND = 32000;
-
-function pickMimeType(): string {
-  if (typeof MediaRecorder === "undefined") return "";
-  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"];
-  for (const c of candidates) {
-    try {
-      if (MediaRecorder.isTypeSupported(c)) return c;
-    } catch {
-      /* ignore */
-    }
-  }
-  return "";
-}
-
-function fileNameFor(mime: string): string {
-  if (mime.includes("webm")) return "audio.webm";
-  if (mime.includes("mp4") || mime.includes("aac")) return "audio.mp4";
-  return "audio.webm";
-}
+// The recorder's constants and helpers — MIN_TURN_DURATION_MS, the bitrate
+// cap, pickMimeType/fileNameFor and the wrap-up ramp maths — live in
+// lib/translate/recorder.ts since 2026-11-01 so Taokie's hold-to-talk button
+// can hold the exact same microphone. Nothing about them changed.
 
 /**
  * One 24x24 line icon for the launcher grid, in the stroke style every other
@@ -219,6 +219,10 @@ const NAV_ICON_PATHS = {
   photo: ["M3 8.5A2 2 0 015 6.5h2.2L8.5 4.5h7l1.3 2H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z", "M15.5 13a3.5 3.5 0 11-7 0 3.5 3.5 0 017 0z"],
   video: ["M3 7a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z", "M15 10.5l6-3.5v10l-6-3.5"],
   tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"],
+  // /demo: a person with a sound wave — your own voice, carried across.
+  demo: ["M8 7a3 3 0 106 0 3 3 0 00-6 0z", "M4 20a7 7 0 0114 0", "M19 8.5a3 3 0 010 5M21.5 6a6.5 6.5 0 010 10"],
+  // /taokie: a walkie-talkie — the antenna and the body.
+  walkie: ["M9 2v4", "M7 6h10a1 1 0 011 1v13a1 1 0 01-1 1H7a1 1 0 01-1-1V7a1 1 0 011-1z", "M9.5 10h5M12 14v3"],
   // /study: an open book — your own conversations, read back as lessons.
   study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"]
 } as const;
@@ -253,6 +257,14 @@ export function TranslatorShell({
   const engineTouchedRef = useRef(false);
   // The conversation the next saved turn belongs to; see lib/translate/session.ts.
   const sessionRef = useRef<ConversationSession | null>(null);
+  // The last few completed turns of that conversation, sent with each request
+  // so a short turn ("Pero es seguro") is read in light of what came before
+  // (lib/translate/context.ts). In memory only — never fetched, never saved.
+  const contextRef = useRef<ContextStore>(EMPTY_CONTEXT);
+  // What the memory held before the latest RECORDING was translated. Flip
+  // re-runs that same audio the other way, so it must neither see its own
+  // wrong-direction turn as context nor leave it behind once it's corrected.
+  const preTurnContextRef = useRef<ContextStore>(EMPTY_CONTEXT);
   useEffect(() => {
     if (subscriber && !engineTouchedRef.current) setEngine(SUBSCRIBER_DEFAULT_ENGINE);
   }, [subscriber]);
@@ -262,6 +274,10 @@ export function TranslatorShell({
   const [status, setStatus] = useState<Status>("idle");
   const [original, setOriginal] = useState("");
   const [translation, setTranslation] = useState("");
+  // A mixed-language turn's segments (lib/translate/segments.ts), each with its
+  // own direction; null for a one-language turn, which renders as it always did.
+  const [segments, setSegments] = useState<TranslatedSegment<LangCode>[] | null>(null);
+  const segmentsRef = useRef<TranslatedSegment<LangCode>[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioFetching, setIsAudioFetching] = useState(false);
@@ -291,6 +307,10 @@ export function TranslatorShell({
   const resultAudioRef = useRef<Blob | null>(null);
   const resultAudioRequestRef = useRef<Promise<Blob | null> | null>(null);
   const resultAudioGenerationRef = useRef(0);
+  // Whether the server offered a share sign-off for this result's line
+  // (lib/tts/shareSignoff.ts). Set from the response that fetched it.
+  const signoffOfferRef = useRef<{ generation: number; available: boolean } | null>(null);
+  const shareCoverRef = useRef<Uint8Array | null>(null);
   const wakeStopRef = useRef<(() => void) | null>(null);
   const maxStopTimerRef = useRef<number | null>(null);
   // Visual ramp state (drives the record button directly, no re-render per frame).
@@ -350,6 +370,7 @@ export function TranslatorShell({
         setSource(next[0]);
         setOriginal("");
         setTranslation("");
+        showSegments(null);
         clearResultAudio();
         setError(null);
         if (status !== "recording") setStatus("idle");
@@ -370,7 +391,11 @@ export function TranslatorShell({
   // Tier 2 (lib/languages/catalog.ts): translated, never spoken. The screen has
   // to say so up front — an audio control that silently does nothing reads as a
   // bug, and this is a known limit of the language, not of the app.
-  const textOnlyTarget = !canSpeak(target);
+  // A mixed turn speaks in both directions, so it is text only when NO
+  // segment's language can be spoken.
+  const textOnlyTarget = segments
+    ? segments.every((seg) => !canSpeak(seg.targetLanguage))
+    : !canSpeak(target);
 
   useEffect(() => {
     return () => {
@@ -496,23 +521,20 @@ export function TranslatorShell({
     const btn = recordBtnRef.current;
 
     // Surface the textual heads-up once we enter the ramp window.
-    setWrappingUp(remaining <= RAMP_EARLY_MS);
+    setWrappingUp(remaining <= RAMP_WINDOWS.early);
 
     if (btn) {
       const reduceMotion =
         typeof window !== "undefined" &&
         window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-      if (remaining > RAMP_EARLY_MS) {
+      if (remaining > RAMP_WINDOWS.early) {
         resetRecordButtonStyle();
       } else {
-        const urgent = remaining <= RAMP_FAST_MS;
+        const urgent = remaining <= RAMP_WINDOWS.fast;
         // Pulse period: constant & gentle in the early window, then shrinking
         // (faster and faster) through the final window.
-        const period = urgent
-          ? PULSE_FAST_MS +
-            (PULSE_SLOW_MS - PULSE_FAST_MS) * (Math.max(0, remaining) / RAMP_FAST_MS)
-          : 2400;
+        const period = pulsePeriod(remaining, RAMP_WINDOWS);
 
         let wave: number;
         if (reduceMotion) {
@@ -524,10 +546,9 @@ export function TranslatorShell({
           wave = (Math.sin(pulsePhaseRef.current) + 1) / 2; // 0..1
         }
 
-        const scaleAmt = urgent ? 0.08 : 0.03;
-        const glow = (urgent ? 80 : 36) * wave + 18;
-        btn.style.transform = reduceMotion ? "" : `scale(${1 + wave * scaleAmt})`;
-        btn.style.boxShadow = `0 0 ${glow}px rgba(251,191,36,${0.4 + wave * 0.5})`;
+        const style = rampStyle(remaining, wave, RAMP_WINDOWS, reduceMotion);
+        btn.style.transform = style.transform;
+        btn.style.boxShadow = style.boxShadow;
       }
     }
 
@@ -556,6 +577,26 @@ export function TranslatorShell({
     stopRamp();
   }
 
+  // The shared file's cover art, fetched once the first line is on screen so
+  // a Share never waits on it (lib/tts/shareAudio.ts).
+  useEffect(() => {
+    if (!translation || shareCoverRef.current) return;
+    let live = true;
+    void loadShareCoverArt().then((png) => {
+      if (live) shareCoverRef.current = png;
+    });
+    return () => {
+      live = false;
+    };
+  }, [translation]);
+
+  // State for the render, ref for the audio path: a turn's autoplay runs in
+  // the same tick its segments arrive, before React has re-rendered.
+  function showSegments(next: TranslatedSegment<LangCode>[] | null) {
+    segmentsRef.current = next;
+    setSegments(next);
+  }
+
   function clearResultAudio() {
     resultAudioGenerationRef.current += 1;
     resultAudioRef.current = null;
@@ -576,14 +617,45 @@ export function TranslatorShell({
     if (resultAudioRequestRef.current) return resultAudioRequestRef.current;
 
     setIsAudioFetching(true);
-    const request = requestSpeech(
-      { text, engine, sourceLanguage: src, targetLanguage: tgt },
-      {
-        fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
-        failureMessage: s.ttsFailed,
-        surface
-      }
-    ).then((blob) => {
+    const ttsOptions = {
+      fetch: (input: string, init: RequestInit) =>
+        fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+      failureMessage: s.ttsFailed,
+      surface
+    };
+    // A mixed turn: one request per segment, each with THAT segment's source
+    // language so voice-follows-speaker picks the right clone, joined once into
+    // the one mp3 that Play and Share both use. No sign-off is offered for it —
+    // the server can only append one to a single line it synthesized itself.
+    const mixed = segmentsRef.current;
+    const speech = mixed
+      ? speechForSegments(mixed, (seg) =>
+          requestSpeech(
+            {
+              text: seg.translation,
+              engine,
+              sourceLanguage: seg.sourceLanguage,
+              targetLanguage: seg.targetLanguage
+            },
+            ttsOptions
+          )
+        ).then((blob) => {
+          signoffOfferRef.current = { generation, available: false };
+          return blob;
+        })
+      : requestSpeech(
+          { text, engine, sourceLanguage: src, targetLanguage: tgt },
+          {
+            ...ttsOptions,
+            onResponse: (res) => {
+              signoffOfferRef.current = {
+                generation,
+                available: res.headers.get(SIGNOFF_AVAILABLE_HEADER) === "1"
+              };
+            }
+          }
+        );
+    const request = speech.then((blob) => {
       // A pair change or a new translation can finish while TTS is in flight.
       // Never attach that older line's audio to the new result card.
       if (generation !== resultAudioGenerationRef.current) return null;
@@ -610,7 +682,8 @@ export function TranslatorShell({
     // error under it would be the app apologizing for working as designed.
     // The screen already says "text only" next to the language, so this is a
     // limit the person met before the turn, not a surprise after it.
-    if (!canSpeak(tgt)) return;
+    const mixed = segmentsRef.current;
+    if (mixed ? mixed.every((seg) => !canSpeak(seg.targetLanguage)) : !canSpeak(tgt)) return;
     const a = ensureAudioEl();
     if (!a) return;
     try {
@@ -637,19 +710,89 @@ export function TranslatorShell({
     }
   }
 
+  /**
+   * The audio a Share hands over, and whether it ends with the spoken
+   * sign-off. Play's audio is reused whenever it can be — one TTS call per
+   * line — and the only reason to ask again is a sign-off the server offered
+   * for a free-tier line. A signed file never goes into Play's cache: Play
+   * says the line and nothing else.
+   */
+  async function audioForShare(
+    text: string,
+    src: LangCode,
+    tgt: LangCode
+  ): Promise<{ blob: Blob; signed: boolean } | null> {
+    const generation = resultAudioGenerationRef.current;
+    const existing =
+      resultAudio?.generation === generation
+        ? resultAudio.blob
+        : (resultAudioRef.current ??
+          (resultAudioRequestRef.current ? await resultAudioRequestRef.current : null));
+    if (generation !== resultAudioGenerationRef.current) return null;
+    const offer = signoffOfferRef.current;
+    const offered = offer?.generation === generation && offer.available;
+    if (existing && (subscriber || !offered)) return { blob: existing, signed: false };
+    if (!existing && (subscriber || segmentsRef.current)) {
+      const blob = await audioForResult(text, src, tgt, "home-share");
+      return blob ? { blob, signed: false } : null;
+    }
+
+    let signed = false;
+    setIsAudioFetching(true);
+    try {
+      const blob = await requestSpeech(
+        { text, engine, sourceLanguage: src, targetLanguage: tgt, signoff: true },
+        {
+          fetch: (input, init) => fetchWithRetry(input, init, { retries: 2, timeoutMs: 60000 }),
+          failureMessage: s.ttsFailed,
+          surface: "home-share",
+          onResponse: (res) => {
+            signed = res.headers.get(SIGNOFF_HEADER) === "1";
+          }
+        }
+      );
+      if (!blob || generation !== resultAudioGenerationRef.current) return null;
+      // Asked and came back clean: the server said no for this person, so
+      // don't ask again for this line.
+      signoffOfferRef.current = { generation, available: signed };
+      if (!signed && !existing) {
+        resultAudioRef.current = blob;
+        setResultAudio({ generation, blob });
+      }
+      return { blob, signed };
+    } finally {
+      if (generation === resultAudioGenerationRef.current) setIsAudioFetching(false);
+    }
+  }
+
   async function shareTranslationAudio() {
-    if (!translation || !canSpeak(target)) return;
+    if (!translation || textOnlyTarget) return;
+    const line = translation;
+    const tgt = target;
     try {
       // Await inside this click handler and hand the File to navigator.share
       // as the very next operation. If Safari has dropped user activation in
       // the meantime, shareAudioFile recovers by downloading the same File.
-      const blob = await audioForResult(translation, source, target, "home-share");
-      if (!blob) return;
-      const targetName = languageLabel(target);
-      await shareAudioFile(blob, {
-        fileName: `TAOS · ${targetName}.mp3`,
-        title: `TAOS · ${targetName}`
+      const audio = await audioForShare(line, source, tgt);
+      if (!audio) return;
+      const file = await brandSharedAudio(audio.blob, line, shareCoverRef.current);
+      const result = await shareAudioFile(file, {
+        fileName: shareFileName(tgt),
+        title: `TAOS · ${languageNative(tgt)}`,
+        text: SHARE_TEXT_WITH_FILE ? shareText(line) : undefined
       });
+      logShareTap(
+        {
+          result,
+          lang: tgt,
+          signoff: audio.signed,
+          subscriber,
+          files: 1,
+          text: SHARE_TEXT_WITH_FILE,
+          cover: SHARE_COVER_ART
+        },
+        await authHeaders()
+      );
     } catch (e) {
       console.error("[tts] share failed", e);
       setError(isConnectionError(e) ? s.connectionLost : e instanceof Error ? e.message : s.ttsFailed);
@@ -762,14 +905,23 @@ export function TranslatorShell({
     // Keep the clip so "Flip" can re-run it the other way without re-recording.
     lastBlobRef.current = blob;
     lastMimeRef.current = mime;
+    preTurnContextRef.current = contextRef.current;
     await translateBlob(blob, mime, autoDetect ? "auto" : source, autoDetect ? "auto" : target);
   }
 
   // Shared translate routine — used by a normal turn and by Flip (same audio,
   // opposite direction).
-  async function translateBlob(blob: Blob, mime: string, src: string, tgt: string) {
+  async function translateBlob(
+    blob: Blob,
+    mime: string,
+    src: string,
+    tgt: string,
+    { flip = false }: { flip?: boolean } = {}
+  ) {
+    const contextBase = flip ? preTurnContextRef.current : contextRef.current;
     setOriginal("");
     setTranslation("");
+    showSegments(null);
     clearResultAudio();
     setStatus("processing");
     try {
@@ -784,6 +936,10 @@ export function TranslatorShell({
         form.append("pairA", pair[0]);
         form.append("pairB", pair[1]);
       }
+      // The last 3 completed turns of this conversation, oldest first, each
+      // string clipped to 400 chars. Absent when there are none.
+      const context = contextForNextTurn(contextBase, sessionRef.current, Date.now());
+      if (context.length > 0) form.append("context", JSON.stringify(context));
 
       // Retry + a client-side timeout: a mid-flight connection drop (Safari's
       // "Load failed") gets one silent re-send before anyone sees an error.
@@ -799,6 +955,7 @@ export function TranslatorShell({
         translation?: string;
         sourceLanguage?: string;
         targetLanguage?: string;
+        segments?: unknown;
         error?: string;
         details?: string;
       };
@@ -816,6 +973,10 @@ export function TranslatorShell({
             : (src as LangCode);
       const resolvedTgt: LangCode = resolvedSrc === pair[0] ? pair[1] : pair[0];
       if (src === "auto") setSource(resolvedSrc);
+      // Several segments only ever come back from an auto turn; anything else
+      // (one segment, a malformed array) is a one-language turn, as before.
+      const mixed = src === "auto" ? segmentsFromPayload(payload.segments, pair) : null;
+      showSegments(mixed);
 
       setOriginal(typeof payload.original === "string" ? payload.original : "");
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
@@ -827,19 +988,44 @@ export function TranslatorShell({
         // the table will ever contain.
         const session = continueSession(sessionRef.current, Date.now());
         sessionRef.current = session;
-        void saveTranslation({
-          session_id: session.id,
+        // A mixed turn saves one row per segment, each with its own true
+        // direction, in order (awaited one by one so created_at keeps that
+        // order) — so history, /study and the viewer never see a row whose
+        // source_lang is half wrong.
+        const rows = mixed
+          ? mixed.map((seg) => ({
+              source_lang: seg.sourceLanguage,
+              target_lang: seg.targetLanguage,
+              original_text: seg.original,
+              translation_text: seg.translation
+            }))
+          : [
+              {
+                source_lang: resolvedSrc,
+                target_lang: resolvedTgt,
+                original_text: payload.original ?? "",
+                translation_text: payload.translation
+              }
+            ];
+        // One context turn per exchange, even a mixed one (joined text,
+        // direction from the first segment) — it is read-only background, and
+        // the auto prompt tells the model not to take language from it.
+        contextRef.current = rememberTurn(contextBase, session.id, {
           source_lang: resolvedSrc,
           target_lang: resolvedTgt,
-          tone: TONE,
-          original_text: payload.original ?? "",
-          translation_text: payload.translation,
-          engine
-        }).catch(() => {});
-        // Count this translation toward the free-trial allowance.
+          original: payload.original ?? "",
+          translation: payload.translation
+        });
+        void (async () => {
+          for (const row of rows) {
+            await saveTranslation({ session_id: session.id, tone: TONE, engine, ...row });
+          }
+        })().catch(() => {});
+        // Count this translation toward the free-trial allowance — by rows,
+        // because the server's monthly count is a count of rows.
         if (!subscriber) {
           setUsage((u) => ({
-            translations: (u?.translations ?? 0) + 1,
+            translations: (u?.translations ?? 0) + rows.length,
             tutorSeconds: u?.tutorSeconds ?? 0
           }));
         }
@@ -866,7 +1052,9 @@ export function TranslatorShell({
     const newTarget: LangCode = source;
     setSource(newSource);
     setError(null);
-    void translateBlob(blob, lastMimeRef.current || "audio/webm", newSource, newTarget);
+    void translateBlob(blob, lastMimeRef.current || "audio/webm", newSource, newTarget, {
+      flip: true
+    });
   }
 
   function toggleRecord() {
@@ -882,6 +1070,7 @@ export function TranslatorShell({
     setSource((prev) => (prev === pair[0] ? pair[1] : pair[0]));
     setOriginal("");
     setTranslation("");
+    showSegments(null);
     clearResultAudio();
     setError(null);
     if (status !== "recording") setStatus("idle");
@@ -1233,6 +1422,66 @@ export function TranslatorShell({
                           {nav.navVideo}
                         </a>
                       ) : null}
+                      {/* /demo — "Tu voz", the founders' sidewalk voice-clone
+                          demo. The tile is founder-only like Video; the page
+                          also needs TAOS_DEMO_ENABLED (server-only), and says
+                          "not enabled" when it is off rather than hiding. */}
+                      {founder ? (
+                        <a
+                          href="/demo"
+                          role="menuitem"
+                          aria-label={nav.navDemo}
+                          aria-current={pathname === "/demo" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/demo"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="demo" />
+                          {nav.navDemo}
+                        </a>
+                      ) : null}
+                      {/* /voz — the PUBLIC "Tu voz", a stranger on their own
+                          phone. Reached by a texted link, not the nav; this
+                          founder tile is how Tom walks it on his own phone.
+                          The page also needs TAOS_VOZ_ENABLED (server-only). */}
+                      {founder ? (
+                        <a
+                          href="/voz"
+                          role="menuitem"
+                          aria-label={nav.navVoz}
+                          aria-current={pathname === "/voz" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/voz"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="demo" />
+                          {nav.navVoz}
+                        </a>
+                      ) : null}
+                      {/* /taokie — the push-to-talk translation walkie, a
+                          founders-only P0 spike (2026-11-01). Tiled behind
+                          `founder` like /voz; the page additionally needs the
+                          server-only TAOS_WALKIE_ENABLED to open. */}
+                      {founder ? (
+                        <a
+                          href="/taokie"
+                          role="menuitem"
+                          aria-label={nav.navTaokie}
+                          aria-current={pathname === "/taokie" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/taokie"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="walkie" />
+                          {nav.navTaokie}
+                        </a>
+                      ) : null}
                       {tutorEnabled() ? (
                         <a
                           href="/tutor"
@@ -1419,33 +1668,39 @@ export function TranslatorShell({
 
               min-h-[44px] with inline-flex, not padding: min-height does
               nothing to an inline element. These were 48x30 until #54 — the row
-              a thumb reaches for most, 14px under the floor. */}
-          <nav aria-label={nav.navScreens} className="flex flex-wrap items-center justify-end gap-2">
+              a thumb reaches for most, 14px under the floor.
+
+              px-2 / gap-1.5 / whitespace-nowrap so a founder's five fit ONE line
+              on a 375px iPhone (10/23): at px-3 / gap-2 the Spanish row needed
+              345.7px of a 343px line and Llamada wrapped alone. min-w-[44px]
+              keeps Live, Chat and Call a fingertip wide at the tighter padding.
+              flex-wrap stays as the backstop for a narrower phone. */}
+          <nav aria-label={nav.navScreens} className="flex flex-wrap items-center justify-end gap-1.5">
             <a
               href="/translate"
               aria-label={nav.navTranslate}
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               {nav.navTranslate}
             </a>
             <a
               href="/live"
               aria-label={nav.navLive}
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               {nav.navLive}
             </a>
             <a
               href="/tabletop"
               aria-label={nav.navTable}
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               {nav.navTable}
             </a>
             <a
               href="/chat"
               aria-label="Chat"
-              className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
             >
               Chat
             </a>
@@ -1453,7 +1708,7 @@ export function TranslatorShell({
               <a
                 href="/call"
                 aria-label={nav.navCall}
-                className="inline-flex min-h-[44px] items-center rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-200"
               >
                 {nav.navCall}
               </a>
@@ -1521,7 +1776,7 @@ export function TranslatorShell({
               </div>
               <div className="text-2xl font-semibold text-white">
                 {/* The language, never a name — see speakerFor above. */}
-                {status === "done"
+                {status === "done" && !segments
                   ? speaker.label
                   : `${pair[0].toUpperCase()} ⇄ ${pair[1].toUpperCase()}`}
               </div>
@@ -1560,7 +1815,8 @@ export function TranslatorShell({
                   in a different one, which read as a broken screen. */}
               {translation ? (
                 <span>
-                  {s.translationLabel} · {listener.label}
+                  {/* A mixed turn goes both ways; each segment names its own. */}
+                  {segments ? s.translationLabel : `${s.translationLabel} · ${listener.label}`}
                 </span>
               ) : null}
               {translation ? (
@@ -1613,12 +1869,32 @@ export function TranslatorShell({
                 </div>
               ) : null}
             </div>
-            <div className="flex flex-1 items-center">
-              <p className="text-pretty text-[clamp(1.8rem,7vw,2.8rem)] font-semibold leading-tight tracking-tight text-white">
-                {translation || (processing ? s.translating : recording ? s.listening : s.idle)}
-              </p>
-            </div>
-            {original ? (
+            {segments ? (
+              // A mixed turn: one line pair per segment, in the order spoken,
+              // each with its direction (the HistoryDrawer's "Español → English").
+              <ol className="flex flex-1 flex-col justify-center gap-4">
+                {segments.map((seg, i) => (
+                  <li key={i} className="border-t border-white/10 pt-3 first:border-t-0 first:pt-0">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/45">
+                      {languageNative(seg.sourceLanguage)} → {languageNative(seg.targetLanguage)}
+                    </div>
+                    <p className="text-pretty text-[clamp(1.4rem,5.5vw,2.1rem)] font-semibold leading-tight tracking-tight text-white">
+                      {seg.translation}
+                    </p>
+                    {seg.original ? (
+                      <p className="mt-1 text-sm text-emerald-50/55">{seg.original}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <div className="flex flex-1 items-center">
+                <p className="text-pretty text-[clamp(1.8rem,7vw,2.8rem)] font-semibold leading-tight tracking-tight text-white">
+                  {translation || (processing ? s.translating : recording ? s.listening : s.idle)}
+                </p>
+              </div>
+            )}
+            {original && !segments ? (
               <p className="mt-4 border-t border-white/10 pt-3 text-sm text-emerald-50/55">
                 <span className="uppercase tracking-wider text-emerald-100/40">{s.heard}:</span>{" "}
                 {original}
