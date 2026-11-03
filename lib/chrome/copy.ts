@@ -374,6 +374,7 @@ const EN = {
   walkiePlaybackFailed: "Could not play the last message — the speaker is locked. Tap to go on air again.",
   walkieHoldExpired: "{name} went quiet — channel is free.",
   walkieStalled: "Not delivered",
+  walkieSoundOff: "Tap anywhere to turn on sound",
   vozWhat: "Hear yourself speak another language — in your own voice.",
   vozConsent:
     "We record your voice only to make this one clip. The voice is deleted within 10 minutes and nothing is stored. Live microphone only — no uploads.",
@@ -683,6 +684,7 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     walkiePlaybackFailed: "No se pudo reproducir el último mensaje — el altavoz está bloqueado. Toca para salir al aire de nuevo.", // pendiente de revisión por Liz
     walkieHoldExpired: "{name} se quedó en silencio — el canal está libre.", // pendiente de revisión por Liz
     walkieStalled: "No entregado", // pendiente de revisión por Liz
+    walkieSoundOff: "Toca en cualquier parte para activar el sonido", // pendiente de revisión por Liz
     vozWhat: "Escúchate hablar otro idioma — con tu propia voz.",
     vozConsent:
       "Grabamos tu voz solo para hacer este clip. La voz se borra en menos de 10 minutos y no se guarda nada. Solo micrófono en vivo — no se suben archivos.",

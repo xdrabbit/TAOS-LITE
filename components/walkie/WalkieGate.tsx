@@ -22,7 +22,21 @@ function Card({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
-export function WalkieGate({ enabled, children }: { enabled: boolean; children: ReactNode }): JSX.Element {
+export function WalkieGate({
+  enabled,
+  redirectPath = "/taokie",
+  children
+}: {
+  enabled: boolean;
+  /**
+   * Where Google sign-in puts this person back down. An invite is
+   * /taokie/<code>, and the code has to survive the bounce: Supabase comes
+   * back to this PATH with its own ?code= appended, so a query string would
+   * be lost — and was, for both founders, on 2026-11-02.
+   */
+  redirectPath?: string;
+  children: ReactNode;
+}): JSX.Element {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -79,7 +93,7 @@ export function WalkieGate({ enabled, children }: { enabled: boolean; children: 
   }
 
   if (state === "sign-in") {
-    if (showSignIn) return <SignIn redirectPath="/taokie" title="Taokie" />;
+    if (showSignIn) return <SignIn redirectPath={redirectPath} title="Taokie" />;
     return (
       <Card>
         <h1 className="text-xl font-semibold text-amber-200">Inicia sesión · Sign in</h1>
