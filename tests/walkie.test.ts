@@ -784,7 +784,14 @@ describe("a busy lock that cannot stick", () => {
 
   it("the channel beats while holding, lets the partner's hold expire, and reports a lost socket", () => {
     const src = readFileSync(new URL("../lib/walkie/channel.ts", import.meta.url), "utf8");
-    expect(src).toContain("heartbeat = setInterval(track, HOLD_HEARTBEAT_MS)");
+    // The beat is a BROADCAST, not a presence re-track (2026-11-02: Supabase
+    // shuts a client's channel down at the sixth presence update in 30 s,
+    // and a 4 s re-track reached six on every hold past ~16 s).
+    expect(src).toContain("heartbeat = setInterval(beat, HOLD_HEARTBEAT_MS)");
+    expect(src).toContain('send("hold", { holding: mine.holding, beat: Date.now() })');
+    expect(src).not.toContain("setInterval(track");
+    expect(src).toMatch(/channel\.track\(\{ lang: mine\.lang, name: mine\.name, joined_at/);
+    expect(src).not.toMatch(/channel\.track\(\{[^}]*holding/);
     expect(src).toContain("beat: Date.now()");
     expect(src).toContain("holdingExpired(holdClock, now, config.maxTurnMs)");
     expect(src).toContain("events.onHoldExpired?.()");
@@ -793,6 +800,20 @@ describe("a busy lock that cannot stick", () => {
     expect(src).toContain("resync: () =>");
     // A rejoin re-announces this phone: presence is not re-sent for us.
     expect(src).toMatch(/if \(status === "SUBSCRIBED"\) \{[\s\S]*?track\(\);/);
+  });
+
+  it("presence is rationed one under Supabase's 5-per-30-s limit, and a burst waits for the window", () => {
+    expect(state.PRESENCE_MAX_PER_WINDOW).toBe(4);
+    expect(state.PRESENCE_WINDOW_MS).toBe(30_000);
+    expect(state.presenceWaitMs([], 100_000)).toBe(0);
+    expect(state.presenceWaitMs([80_000, 85_000, 90_000], 100_000)).toBe(0); // the fourth may go
+    expect(state.presenceWaitMs([80_000, 85_000, 90_000, 95_000], 100_000)).toBe(10_000); // until 80 s leaves the window
+    expect(state.presenceWaitMs([60_000, 85_000, 90_000, 95_000], 100_000)).toBe(0); // 60 s is already out
+    expect(state.presenceWaitMs([80_000, 85_000, 90_000, 95_000, 99_000], 100_000)).toBe(15_000);
+    // The sender re-sends "ready" twice inside the delivery window, then asks the server.
+    expect(state.READY_RETRY_AT_MS).toEqual([2_500, 5_000]);
+    expect(Math.max(...state.READY_RETRY_AT_MS)).toBeLessThan(state.DELIVERY_WAIT_MS);
+    expect(state.RECEIPT_REFRESH_WINDOW_MS).toBe(120_000);
   });
 
   it("the shell offers Resync, polls for missed turns, catches up on return, and stays awake on air", () => {
@@ -930,6 +951,27 @@ describe("errors that show: fail_stage on the line, a banner on the phone", () =
     expect(src).toContain("setError(s.walkieChannelLost)");
     // and a refused playback is no longer reported as played
     expect(src).toMatch(/if \(outcome === "failed"\) \{[\s\S]*?continue;/);
+  });
+
+  it("the receipts lookup returns stamps only — no text, no audio — for at most ten ids", async () => {
+    tableAnswer = () => ({
+      data: [{ id: "11111111-2222-4333-8444-555555555555", delivered_at: "2026-11-02T23:53:35.751Z", played_at: null }],
+      error: null
+    });
+    const res = await messages.GET(
+      json("/api/walkie/messages?ids=11111111-2222-4333-8444-555555555555,22222222-2222-4333-8444-555555555555", "tom", undefined, "GET")
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { receipts: Array<Record<string, unknown>> };
+    expect(body.receipts).toEqual([{ id: "11111111-2222-4333-8444-555555555555", delivered_at: "2026-11-02T23:53:35.751Z", played_at: null }]);
+    const select = ops.find((o) => o.kind === "table" && o.method === "select");
+    expect(select?.args[0]).toBe("id, delivered_at, played_at");
+    expect(ops.some((o) => o.kind === "storage")).toBe(false);
+    expect(ops.some((o) => o.method === "delete")).toBe(false);
+    for (const bad of ["", "not-a-uuid", Array.from({ length: 11 }, () => "11111111-2222-4333-8444-555555555555").join(",")]) {
+      expect((await messages.GET(json(`/api/walkie/messages?ids=${bad}`, "tom", undefined, "GET"))).status, bad.slice(0, 20)).toBe(400);
+    }
+    expect((await messages.GET(json("/api/walkie/messages?ids=11111111-2222-4333-8444-555555555555", "stranger", undefined, "GET"))).status).toBe(404);
   });
 
   it("the catch-up poll asks only for rows after the last one, and does not kick the sweep", async () => {

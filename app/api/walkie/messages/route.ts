@@ -4,7 +4,9 @@ import { guardWalkie } from "@/lib/walkie/guard";
 import { isWalkieRoom, normalizeWalkieRoom } from "@/lib/walkie/room";
 import {
   getWalkieMessage,
+  getWalkieReceipts,
   listWalkieMessages,
+  WALKIE_RECEIPTS_LIMIT,
   signWalkieAudio,
   sweepWalkieMessages,
   WalkieStoreError,
@@ -21,6 +23,12 @@ export const maxDuration = 30;
 //                                          a "ready" broadcast that found no
 //                                          subscriber is otherwise lost)
 // GET /api/walkie/messages?id=<uuid>       one message (the partner, on "ready")
+// GET /api/walkie/messages?ids=<uuid,…>    receipts only — { receipts: [{ id,
+//                                          delivered_at, played_at }] }: the
+//                                          SENDER re-reads what the partner
+//                                          stamped when the "got" / "played"
+//                                          broadcast may have been lost
+//                                          (2026-11-02). At most 10 ids.
 //
 // Each message comes back with a signed link to its spoken translation. Text
 // is returned in BOTH languages; the screen shows the reader's — the sender
@@ -45,8 +53,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
+  const idsRaw = url.searchParams.get("ids");
   const room = normalizeWalkieRoom(url.searchParams.get("room"));
   try {
+    if (idsRaw !== null) {
+      const ids = idsRaw.split(",").map((v) => v.trim()).filter(Boolean);
+      if (ids.length === 0 || ids.length > WALKIE_RECEIPTS_LIMIT || ids.some((v) => !UUID.test(v))) {
+        return NextResponse.json({ error: "Bad ids." }, { status: 400 });
+      }
+      const receipts = await getWalkieReceipts(ids);
+      return NextResponse.json({ receipts }, { headers: { "Cache-Control": "no-store" } });
+    }
     if (id) {
       if (!UUID.test(id)) return NextResponse.json({ error: "Bad id." }, { status: 400 });
       const row = await getWalkieMessage(id);

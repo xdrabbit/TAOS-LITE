@@ -73,3 +73,48 @@ export function holdingExpired(clock: HoldClock, nowMs: number, capMs: number): 
 export const DELIVERY_WAIT_MS = 8_000;
 /** How often an on-air phone asks the server for turns the channel missed. */
 export const CATCH_UP_EVERY_MS = 5_000;
+
+// ── After the first production session (Tom + Liz, 2026-11-02) ─────────────
+// Ten "Not delivered" banners that night; eight of them were LIES. The row
+// said delivered_at (and then played_at) within a second or two, but the
+// sender's phone never heard the partner's "got" broadcast, because its own
+// channel had just been shut down by Supabase (see PRESENCE_* below) and was
+// still rejoining. So before the sender says "not delivered" it now asks the
+// server — the row carries both receipts — and only an undelivered row earns
+// the banner. The "ready" broadcast is re-sent at these offsets (sender's
+// clock, from the send) while no "got" has arrived, so a broadcast that fell
+// into a rejoin gap is retried without waiting for the partner's 5 s poll.
+export const READY_RETRY_AT_MS: readonly number[] = [2_500, 5_000];
+/** Own messages younger than this, not yet played, get their receipts re-read on the catch-up tick. */
+export const RECEIPT_REFRESH_WINDOW_MS = 120_000;
+
+// ── Presence is rationed; the hold heartbeat is NOT presence any more ──────
+// Supabase Realtime allows each client 5 presence updates per 30 s window and
+// SHUTS THE CHANNEL DOWN on the sixth (logged server-side as
+// ClientPresenceRateLimitReached; the client sees CHANNEL_ERROR and rejoins
+// with backoff). PR #114's heartbeat re-tracked presence every 4 s while
+// recording: join + "holding" + three beats + "released" = six, so every hold
+// longer than ~16 s killed the sender's own channel at the moment it needed
+// it most — the "ready" went out over the HTTP fallback (it arrived), and
+// every "got" / "played" coming back was lost until the rejoin. Six such
+// shutdowns on 2026-11-02, one per long turn, each followed by a false
+// "Not delivered".
+//
+// Now presence carries only what is slow-changing — name, language — and the
+// hold (flag + beat) travels as a broadcast, which has no such limit. The
+// clocks above are unchanged: a beat is a beat whichever wire it came on.
+// And the few presence updates that remain (join, rejoin, a language change,
+// Resync) are budgeted on the phone so a tap storm cannot reach the sixth.
+export const PRESENCE_MAX_PER_WINDOW = 4; // one under the limit, by design
+export const PRESENCE_WINDOW_MS = 30_000;
+
+/**
+ * May this phone send a presence update now? `sentAt` are the send times of
+ * recent updates (this phone's clock). Returns how long to wait (0 = now).
+ */
+export function presenceWaitMs(sentAt: readonly number[], nowMs: number): number {
+  const inWindow = sentAt.filter((t) => nowMs - t < PRESENCE_WINDOW_MS).sort((a, b) => a - b);
+  if (inWindow.length < PRESENCE_MAX_PER_WINDOW) return 0;
+  const oldest = inWindow[inWindow.length - PRESENCE_MAX_PER_WINDOW] ?? nowMs;
+  return Math.max(1, oldest + PRESENCE_WINDOW_MS - nowMs);
+}

@@ -48,6 +48,17 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   socket — so an on-air phone now stays awake, polls for missed turns every
   5 s, and catches up on every return to the foreground. Second two-phone
   test pending.
+  → Merged to production 2026-11-02 (#114). First production session that
+  evening (Tom + Liz, iPhone + Android, 16:49–17:03 MT): 18 turns, every one
+  transcribed, translated and spoken; 16 of 18 played on the other phone.
+  Two bugs, fixed on the follow-up PR: (1) the invite link did not carry the
+  code through Google sign-in (the link was `?room=`, Supabase bounces back
+  to a PATH), so it is now `/taokie/<code>` and an invite goes on air by
+  itself; (2) Supabase shuts a client's channel down at the sixth presence
+  update in 30 s, and the 4 s hold heartbeat was a presence re-track — six
+  shutdowns that night, each followed by a false "Not delivered" (8 of 10
+  banners were false; the partner had the turn). The beat is now a broadcast,
+  presence is budgeted, and "Not delivered" asks the server first.
 
 - **Practica con Liz — ACTIVE; spike dispatched 2026-10-18** — a
   scene-based conversational tutor with one live face. The learner picks the
@@ -386,6 +397,17 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   the product. (added 2026-08-25)
 
 ## Ideas
+
+- **Taokie invite should open in the installed app, not Safari (iOS).** On
+  2026-11-02 Liz's first turns came from the Home Screen app (`standalone=1`,
+  her own voice unlocked) and, after tapping Tom's invite, from Safari
+  (`standalone=0`, stock voice, language pair reset to the device default) —
+  iOS opens a tapped link in Safari, and the two have separate storage. Until
+  the PWA owns its links (Universal Links need an Apple-signed app; a web
+  manifest cannot), the invite screen could at least say "open this in the
+  TAOS app" when it detects a Safari visit from an installed-app household,
+  and the personal-voice unlock + language pair could follow the ACCOUNT
+  rather than the browser.
 
 - **TAOS as a WhatsApp translation contact — PARKED.** The TAOS WhatsApp
   number described in `claude/whatsapp-bridge.md` becomes a forward-based

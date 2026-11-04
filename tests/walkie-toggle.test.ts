@@ -24,6 +24,9 @@ const rig = vi.hoisted(() => ({
   turns: [] as FormData[],
   acks: [] as Array<Record<string, unknown>>,
   chirps: [] as string[],
+  /** What the server says about own turns when the shell asks (?ids=). */
+  receipts: [] as Array<{ id: string; delivered_at: string | null; played_at: string | null }>,
+  receiptPolls: [] as string[],
   partnerEvents: null as null | {
     onPartner?: (s: unknown) => void;
     onGot?: (id: string) => void;
@@ -51,7 +54,8 @@ vi.mock("@/lib/supabase", () => ({
   supabase: {
     auth: {
       getSession: async () => ({ data: { session: { access_token: "t", user: { id: "u-tom", email: "xdrabbit@gmail.com" } } } }),
-      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } })
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+      refreshSession: async () => ({ data: { session: null }, error: null })
     },
     getChannels: () => [],
     removeChannel: async () => {}
@@ -121,12 +125,18 @@ beforeEach(() => {
   rig.turns.length = 0;
   rig.acks.length = 0;
   rig.chirps.length = 0;
+  rig.receipts.length = 0;
+  rig.receiptPolls.length = 0;
   rig.micDelayMs = 300;
   rig.partnerEvents = null;
   for (const f of Object.values(rig.channel)) (f as { mockClear?: () => void }).mockClear?.();
   rig.channel.isJoined.mockReturnValue(true);
   window.localStorage.clear();
   window.localStorage.setItem(PAIR_STORAGE_KEY, JSON.stringify(["en", "es"]));
+  // Going on air writes /taokie/<code> to the address bar, and a mount on
+  // that address joins by itself (tests/walkie-invite.test.ts). Each test
+  // here starts in the lobby.
+  window.history.replaceState(null, "", "/taokie");
   vi.stubGlobal("MediaRecorder", FakeRecorder);
   vi.stubGlobal(
     "Audio",
@@ -160,6 +170,10 @@ beforeEach(() => {
       if (u.includes("/api/walkie/ack")) {
         rig.acks.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
         return new Response("{}", { status: 200 });
+      }
+      if (u.includes("/api/walkie/messages?ids=")) {
+        rig.receiptPolls.push(u);
+        return new Response(JSON.stringify({ receipts: rig.receipts }), { status: 200 });
       }
       if (u.includes("/api/walkie/messages")) return new Response(JSON.stringify({ messages: [] }), { status: 200 });
       return new Response("{}", { status: 200 });
@@ -334,18 +348,112 @@ describe("/taokie button, mounted: tap to talk, tap to send", () => {
     });
     expect(rig.turns).toHaveLength(1);
     expect(c.querySelector("[data-walkie-receipt]")?.getAttribute("data-walkie-receipt")).toBe("sent");
+    const sentId = (rig.channel.sendReady.mock.calls[0] as unknown[])[0] as string;
+    // "ready" is re-sent while no "got" has come back: at 2.5 s and 5 s.
     await act(async () => {
-      vi.advanceTimersByTime(8_100);
+      vi.advanceTimersByTime(5_100);
     });
+    expect(rig.channel.sendReady.mock.calls.map((a) => (a as unknown[])[0])).toEqual([sentId, sentId, sentId]);
+    await act(async () => {
+      vi.advanceTimersByTime(3_000);
+      await sleep(30); // the server is asked first; it has no receipt for this one
+    });
+    expect(rig.receiptPolls.some((u) => u.includes(sentId))).toBe(true);
     expect(c.querySelector("[data-walkie-receipt]")?.getAttribute("data-walkie-receipt")).toBe("stalled");
     expect(c.querySelector("[data-walkie-error]")?.textContent).toMatch(/not delivered/i);
     expect(rig.acks.some((a) => a.kind === "failed" && a.stage === "deliver")).toBe(true);
-    const sentId = (rig.channel.sendReady.mock.calls[0] as unknown[])[0] as string;
     await act(async () => {
       rig.partnerEvents?.onGot?.(sentId);
     });
     expect(c.querySelector("[data-walkie-receipt]")?.getAttribute("data-walkie-receipt")).toBe("delivered");
     expect(c.querySelector("[data-walkie-error]")).toBeNull();
+  });
+
+  it("the partner's 'got' broadcast is lost but the row is stamped: ✓, no banner, no fail_stage (2026-11-02's false alarm)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { c, btn } = await mount();
+    await act(async () => {
+      tap(btn);
+      await sleep(1000);
+      tap(btn, 2);
+      await sleep(50);
+    });
+    const sentId = (rig.channel.sendReady.mock.calls[0] as unknown[])[0] as string;
+    // The partner fetched and played it; their broadcasts never reached this phone.
+    rig.receipts.push({ id: sentId, delivered_at: new Date().toISOString(), played_at: null });
+    await act(async () => {
+      vi.advanceTimersByTime(8_100);
+      await sleep(30);
+    });
+    expect(c.querySelector("[data-walkie-receipt]")?.getAttribute("data-walkie-receipt")).toBe("delivered");
+    expect(c.querySelector("[data-walkie-error]")).toBeNull();
+    expect(rig.acks.some((a) => a.kind === "failed")).toBe(false);
+    // No more "ready" re-sends once it is known to be delivered.
+    const sends = rig.channel.sendReady.mock.calls.length;
+    rig.receipts[0] = { id: sentId, delivered_at: rig.receipts[0].delivered_at, played_at: new Date().toISOString() };
+    await act(async () => {
+      vi.advanceTimersByTime(5_100); // the catch-up tick re-reads receipts
+      await sleep(30);
+    });
+    expect(rig.channel.sendReady.mock.calls.length).toBe(sends);
+    expect(c.querySelector("[data-walkie-receipt]")?.getAttribute("data-walkie-receipt")).toBe("played");
+  });
+
+  it("a 'got' that arrives on time stops the re-sends", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { c, btn } = await mount();
+    await act(async () => {
+      tap(btn);
+      await sleep(1000);
+      tap(btn, 2);
+      await sleep(50);
+    });
+    const sentId = (rig.channel.sendReady.mock.calls[0] as unknown[])[0] as string;
+    await act(async () => {
+      rig.partnerEvents?.onGot?.(sentId);
+      vi.advanceTimersByTime(9_000);
+      await sleep(30);
+    });
+    expect(rig.channel.sendReady).toHaveBeenCalledTimes(1);
+    expect(c.querySelector("[data-walkie-receipt]")?.getAttribute("data-walkie-receipt")).toBe("delivered");
+    // (The catch-up tick still re-reads it until ✓✓ — that is the point.)
+    expect(c.querySelector("[data-walkie-error]")).toBeNull();
+    expect(rig.acks.some((a) => a.kind === "failed")).toBe(false);
+  });
+
+  it("a 401 on the turn (a lapsed token) refreshes the session and sends the same recording once more", async () => {
+    const { supabase } = await import("@/lib/supabase");
+    const refresh = vi.fn(async () => ({ data: { session: null }, error: null }));
+    (supabase.auth as unknown as { refreshSession: unknown }).refreshSession = refresh;
+    let first = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/api/walkie/turn")) {
+          rig.turns.push(init?.body as FormData);
+          if (first) {
+            first = false;
+            return new Response(JSON.stringify({ error: "Sign in required." }), { status: 401 });
+          }
+          return new Response(JSON.stringify({ message: MSG }), { status: 200 });
+        }
+        if (u.includes("/api/walkie/ack")) return new Response("{}", { status: 200 });
+        if (u.includes("/api/walkie/messages")) return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+        return new Response("{}", { status: 200 });
+      })
+    );
+    const { c, btn } = await mount();
+    await act(async () => {
+      tap(btn);
+      await sleep(1000);
+      tap(btn, 2);
+      await sleep(50);
+    });
+    expect(rig.turns).toHaveLength(2);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(c.querySelector("[data-walkie-error]")).toBeNull();
+    expect(c.querySelector('[data-walkie-msg="own"]')).not.toBeNull();
   });
 
   it("a lost socket shows on the presence line with Resync; Resync re-reads and catches up", async () => {

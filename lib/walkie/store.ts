@@ -224,6 +224,33 @@ export async function signWalkieAudio(path: string | null): Promise<string | nul
   return data.signedUrl;
 }
 
+/** How many receipts one poll may ask for. */
+export const WALKIE_RECEIPTS_LIMIT = 10;
+
+export interface WalkieReceiptRow {
+  id: string;
+  delivered_at: string | null;
+  played_at: string | null;
+}
+
+/**
+ * The two receipt stamps for a handful of messages — what the SENDER's
+ * phone re-reads when the partner's "got" / "played" broadcast may have been
+ * lost (2026-11-02: the sender's own channel was rejoining). Ids only, no
+ * text, no audio link.
+ */
+export async function getWalkieReceipts(ids: string[], nowMs: number = Date.now()): Promise<WalkieReceiptRow[]> {
+  if (ids.length === 0) return [];
+  requireAdmin();
+  const { data, error } = await supabaseAdmin
+    .from(WALKIE_TABLE)
+    .select("id, delivered_at, played_at")
+    .in("id", ids.slice(0, WALKIE_RECEIPTS_LIMIT))
+    .gt("expires_at", new Date(nowMs).toISOString());
+  if (error) throw new WalkieStoreError(`Could not read the receipts: ${error.message}`, "receipts_failed");
+  return (data ?? []) as WalkieReceiptRow[];
+}
+
 export type WalkieAck = "delivered" | "played";
 
 /** Stamp a receipt. Only the first of each kind sticks. */

@@ -3,7 +3,7 @@
 import { supabase } from "@/lib/supabase";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { normalizeWalkieRoom } from "./room";
-import { HOLD_HEARTBEAT_MS, holdingExpired, type HoldClock } from "./state";
+import { HOLD_HEARTBEAT_MS, holdingExpired, presenceWaitMs, type HoldClock } from "./state";
 
 // Taokie's channel IS /call's signaling, reused (Tom's decision #1,
 // 2026-11-01): a Supabase Realtime channel named by the room code, with
@@ -17,15 +17,24 @@ import { HOLD_HEARTBEAT_MS, holdingExpired, type HoldClock } from "./state";
 //
 // ── What travels ───────────────────────────────────────────────────────────
 // PRESENCE (state, synced to everyone, survives a late join):
-//   { lang, name, holding, beat, joined_at }
+//   { lang, name, joined_at }
 //   The partner's language is read from here, which is what makes "translate
 //   into the PARTNER's language" work without /call's announce-and-echo
-//   dance: presence has retention. `holding` is a HEARTBEAT: while a phone
-//   records it re-tracks every HOLD_HEARTBEAT_MS with a fresh `beat`, and the
-//   partner's phone stops believing it when the beats stop or the turn cap
-//   is past (lib/walkie/state.ts holdingExpired). A release that never
-//   arrives cannot lock the channel.
+//   dance: presence has retention. Presence is RATIONED: Supabase shuts a
+//   client's channel down at the sixth update in 30 s (lib/walkie/state.ts
+//   PRESENCE_*), so this phone budgets its own updates and never puts
+//   anything fast-changing here. PR #114 put the hold heartbeat here, and
+//   every long turn on 2026-11-02 killed the sender's channel.
 // BROADCAST (fire and forget, only to those listening now):
+//   hold    { holding, beat }   the sender's button state. `holding` is a
+//                               HEARTBEAT: while a phone records it re-sends
+//                               every HOLD_HEARTBEAT_MS with a fresh `beat`,
+//                               and the partner's phone stops believing it
+//                               when the beats stop or the turn cap is past
+//                               (lib/walkie/state.ts holdingExpired). A
+//                               release that never arrives cannot lock the
+//                               channel; a beat that never arrives is
+//                               covered by the next one.
 //   ready   { id, releasedAt }  a turn is stored and spoken; come and get it
 //   got     { id }              the partner's phone has it          → ✓
 //   played  { id }              the partner's phone finished it     → ✓✓
@@ -91,6 +100,12 @@ interface Signal {
   releasedAt?: number | null;
 }
 
+interface HoldSignal {
+  from: string;
+  holding: boolean;
+  beat: number;
+}
+
 function randomPeerId(): string {
   const c = crypto as Crypto & { randomUUID?: () => string };
   if (typeof c.randomUUID === "function") return c.randomUUID();
@@ -112,14 +127,19 @@ export async function joinWalkieChannel(
   const peerId = randomPeerId();
   let mine: WalkiePeerState = { lang: config.lang, name: config.name, holding: false };
   let partnerId: string | null = null;
+  // The partner's hold, as last broadcast (their flag and their beat), and
+  // on THIS phone's clock.
+  let partnerHold: { holding: boolean; beat: number } | null = null;
   let ended = false;
   let joined = false;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let holdCheck: ReturnType<typeof setInterval> | null = null;
-  // The partner's hold, on THIS phone's clock.
   let holdClock: HoldClock | null = null;
   let lastBeat: unknown = null;
   let expiredRaised = false;
+  // Presence budget: when this phone sent its recent updates.
+  const presenceSentAt: number[] = [];
+  let trackTimer: ReturnType<typeof setTimeout> | null = null;
 
   // One channel per room, never two — the same double-tap trap /call hit
   // (lib/call/session.ts explains the "cannot add presence callbacks after
@@ -135,14 +155,40 @@ export async function joinWalkieChannel(
     config: { broadcast: { self: false }, presence: { key: peerId } }
   });
 
-  const track = () => {
+  // Presence, budgeted. A sixth update inside 30 s would have the server
+  // shut this channel down, so an update that would be the fifth waits for
+  // the window to open — coalesced, so a burst becomes one late update
+  // carrying the latest state (presence is state, not a log).
+  const trackNow = () => {
     if (ended) return;
-    void channel.track({ ...mine, beat: Date.now(), joined_at: new Date().toISOString() });
+    presenceSentAt.push(Date.now());
+    while (presenceSentAt.length > 8) presenceSentAt.shift();
+    void channel.track({ lang: mine.lang, name: mine.name, joined_at: new Date().toISOString() });
+  };
+  const track = () => {
+    if (ended || trackTimer !== null) return;
+    const wait = presenceWaitMs(presenceSentAt, Date.now());
+    if (wait === 0) {
+      trackNow();
+      return;
+    }
+    trackTimer = setTimeout(() => {
+      trackTimer = null;
+      trackNow();
+    }, wait);
   };
 
-  const send = (msg: Omit<Signal, "from">) => {
+  const send = (event: "signal" | "hold", payload: Record<string, unknown>) => {
     if (ended) return;
-    void channel.send({ type: "broadcast", event: "signal", payload: { ...msg, from: peerId } });
+    void channel.send({ type: "broadcast", event, payload: { ...payload, from: peerId } });
+  };
+
+  const signal = (msg: Omit<Signal, "from">) => send("signal", msg);
+
+  // The hold is a broadcast with a fresh beat; the heartbeat re-sends it.
+  const beat = () => {
+    if (ended) return;
+    send("hold", { holding: mine.holding, beat: Date.now() });
   };
 
   const stopHeartbeat = () => {
@@ -167,8 +213,8 @@ export async function joinWalkieChannel(
     return {
       lang: typeof entry.lang === "string" ? entry.lang : "",
       name: typeof entry.name === "string" ? entry.name : "",
-      holding: entry.holding === true,
-      beat: entry.beat ?? null
+      holding: partnerHold?.holding === true,
+      beat: partnerHold?.beat ?? null
     };
   };
 
@@ -226,6 +272,14 @@ export async function joinWalkieChannel(
     else if (msg.kind === "played") events.onPlayed?.(msg.id);
   });
 
+  channel.on("broadcast", { event: "hold" }, ({ payload }) => {
+    const msg = payload as HoldSignal;
+    if (!msg || msg.from === peerId || typeof msg.holding !== "boolean") return;
+    if (partnerId && msg.from !== partnerId) return; // strictly 1:1
+    partnerHold = { holding: msg.holding, beat: typeof msg.beat === "number" ? msg.beat : Date.now() };
+    events.onPartner?.(readPartner());
+  });
+
   channel.on("presence", { event: "sync" }, () => {
     if (ended) return;
     const others = Object.keys(channel.presenceState()).filter((k) => k !== peerId);
@@ -243,6 +297,9 @@ export async function joinWalkieChannel(
       holdClock = null;
       lastBeat = null;
       expiredRaised = false;
+      partnerHold = null;
+      // A partner who just arrived has not heard our button state: say it.
+      if (next) beat();
     }
     partnerId = next;
     events.onPartner?.(readPartner());
@@ -254,6 +311,10 @@ export async function joinWalkieChannel(
     joined = false;
     stopHeartbeat();
     stopHoldCheck();
+    if (trackTimer !== null) {
+      clearTimeout(trackTimer);
+      trackTimer = null;
+    }
     try {
       // removeChannel, not unsubscribe — see lib/call/session.ts hangUp().
       await supabase.removeChannel(channel);
@@ -275,7 +336,10 @@ export async function joinWalkieChannel(
           events.onJoined?.();
           resolve();
         }
-        if (rejoin) events.onStatus?.("joined");
+        if (rejoin) {
+          beat(); // and the button state, which only ever travelled by broadcast
+          events.onStatus?.("joined");
+        }
         return;
       }
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
@@ -296,10 +360,10 @@ export async function joinWalkieChannel(
     setHolding: (holding) => {
       if (mine.holding === holding) return;
       mine = { ...mine, holding };
-      track();
+      beat();
       stopHeartbeat();
       if (holding) {
-        heartbeat = setInterval(track, HOLD_HEARTBEAT_MS);
+        heartbeat = setInterval(beat, HOLD_HEARTBEAT_MS);
       }
     },
     setLanguage: (lang) => {
@@ -310,11 +374,12 @@ export async function joinWalkieChannel(
     resync: () => {
       if (ended) return false;
       track();
+      beat();
       events.onPartner?.(readPartner());
       return joined;
     },
-    sendReady: (id, releasedAt) => send({ kind: "ready", id, releasedAt }),
-    sendGot: (id) => send({ kind: "got", id }),
-    sendPlayed: (id) => send({ kind: "played", id })
+    sendReady: (id, releasedAt) => signal({ kind: "ready", id, releasedAt }),
+    sendGot: (id) => signal({ kind: "got", id }),
+    sendPlayed: (id) => signal({ kind: "played", id })
   };
 }

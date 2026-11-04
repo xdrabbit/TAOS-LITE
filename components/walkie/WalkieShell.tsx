@@ -35,8 +35,15 @@ import { keepWake } from "@/lib/wakeLock";
 import { joinWalkieChannel, type WalkieChannel, type WalkiePeerState } from "@/lib/walkie/channel";
 import { WALKIE_DEFAULT_MAX_TURN_MS, WALKIE_DEFAULT_RETENTION_DAYS } from "@/lib/walkie/flag";
 import { createWalkieChirps, type WalkieChirps } from "@/lib/walkie/chirps";
-import { normalizeWalkieRoom } from "@/lib/walkie/room";
-import { CATCH_UP_EVERY_MS, DELIVERY_WAIT_MS, canHold, holdRefusal } from "@/lib/walkie/state";
+import { isWalkieRoom, normalizeWalkieRoom } from "@/lib/walkie/room";
+import {
+  CATCH_UP_EVERY_MS,
+  DELIVERY_WAIT_MS,
+  READY_RETRY_AT_MS,
+  RECEIPT_REFRESH_WINDOW_MS,
+  canHold,
+  holdRefusal
+} from "@/lib/walkie/state";
 import { toggleLabelKey, toggleStep, type ToggleState } from "@/lib/walkie/toggle";
 import type { WalkieFailStage } from "@/lib/walkie/timing";
 
@@ -72,6 +79,25 @@ import type { WalkieFailStage } from "@/lib/walkie/timing";
 //    the sender hears about a turn nobody picked up (DELIVERY_WAIT_MS), and a
 //    playback the speaker refused shows "tap to go on air" again. Every
 //    failure lands on the timing line as fail_stage=.
+//
+// ── After the first production session (Tom + Liz, 2026-11-02) ─────────────
+// 4. THE INVITE JOINS THE CHANNEL. The link is /taokie/<code> — a PATH, not
+//    ?room=, because Google sign-in bounces through Supabase and comes back
+//    to a path with its own ?code= appended; a query would not survive and
+//    did not (both founders signed in fresh that night and landed on an
+//    empty lobby). WalkieGate carries the path into the sign-in redirect,
+//    and a room that came from a link goes on air by itself: no typing. The
+//    one thing a link cannot do is unlock the speaker (iOS wants a gesture),
+//    so the screen asks for one tap anywhere, and a turn that arrives before
+//    it is held by the existing "tap to go on air" banner. Old ?room= links
+//    still work the same way.
+// 5. "NOT DELIVERED" ASKS THE SERVER FIRST. Eight of ten banners that night
+//    were false: the partner had the turn (delivered_at was stamped within
+//    seconds) but the sender's own channel was rejoining — Supabase had shut
+//    it down for too many presence updates (lib/walkie/state.ts PRESENCE_*),
+//    so the partner's "got" never arrived. Now "ready" is re-sent a bounded
+//    number of times, the row's receipts are re-read on the catch-up tick,
+//    and the banner fires only for a row the server says is undelivered.
 
 type Phase = "lobby" | "joining" | "on-air";
 type Receipt = "sent" | "stalled" | "delivered" | "played";
@@ -92,6 +118,24 @@ interface WalkieMessage {
 const MESSAGE_FETCH_TIMEOUT_MS = 20_000;
 const TURN_FETCH_TIMEOUT_MS = 210_000;
 
+interface WalkieReceiptOut {
+  id: string;
+  delivered_at: string | null;
+  played_at: string | null;
+}
+
+/** Where a channel lives in the address bar: the invite link and the on-air URL are the same thing. */
+export function walkiePath(code: string): string {
+  return code ? `/taokie/${code}` : "/taokie";
+}
+
+/** The room an invite put in the address bar: the path form, else the old ?room= form. Empty when neither. */
+export function roomFromLocation(pathname: string, search: string): string {
+  const fromPath = pathname.match(/^\/taokie\/([^/?#]+)\/?$/i)?.[1];
+  const code = normalizeWalkieRoom(fromPath ? decodeURIComponent(fromPath) : new URLSearchParams(search).get("room"));
+  return isWalkieRoom(code) ? code : "";
+}
+
 function displayNameOf(user: { email?: string | null; user_metadata?: Record<string, unknown> } | null | undefined): string {
   const meta = user?.user_metadata ?? {};
   for (const key of ["full_name", "name", "given_name"]) {
@@ -110,12 +154,15 @@ function receiptOf(m: WalkieMessage, local: Receipt | undefined): Receipt {
 
 export function WalkieShell({
   maxTurnMs = WALKIE_DEFAULT_MAX_TURN_MS,
-  retentionDays = WALKIE_DEFAULT_RETENTION_DAYS
+  retentionDays = WALKIE_DEFAULT_RETENTION_DAYS,
+  initialRoom
 }: {
   /** TAOS_WALKIE_MAX_TURN_MS, read on the server by the page. */
   maxTurnMs?: number;
   /** TAOS_WALKIE_RETENTION_DAYS, likewise. */
   retentionDays?: number;
+  /** The code in the path (/taokie/<code>): an invite. Goes on air by itself. */
+  initialRoom?: string;
 }): JSX.Element {
   const { pair, mine, theirs, pills, sheetOpen, setSheetOpen, selectLanguage } = useLanguagePair({
     lockMine: false
@@ -138,6 +185,13 @@ export function WalkieShell({
   const [channelLost, setChannelLost] = useState(false);
   const [unlockNeeded, setUnlockNeeded] = useState<WalkieMessage | null>(null);
   const [notifyText, setNotifyText] = useState<boolean | null>(null);
+  // The speaker is blessed only by a gesture. An invite joins without one,
+  // so until the first tap the screen says so.
+  const [soundReady, setSoundReady] = useState(false);
+  const soundReadyRef = useRef(false);
+  // The room an invite link carried: joined by itself, once.
+  const inviteRef = useRef("");
+  const autoJoinedRef = useRef(false);
 
   const phaseRef = useRef<Phase>("lobby");
   phaseRef.current = phase;
@@ -185,6 +239,8 @@ export function WalkieShell({
   const knownIdsRef = useRef<Set<string>>(new Set());
   const lastCreatedRef = useRef<string | null>(null);
   const deliveryTimersRef = useRef<Map<string, number>>(new Map());
+  const readyRetryTimersRef = useRef<Map<string, number[]>>(new Map());
+  const sentAtRef = useRef<Map<string, number>>(new Map());
   const catchingUpRef = useRef(false);
   const playQueueRef = useRef<Array<{ m: WalkieMessage; releasedAt: number | null; readyAt: number }>>([]);
   const playingRef = useRef(false);
@@ -205,12 +261,17 @@ export function WalkieShell({
       const user = data.session?.user;
       if (user) setMe({ id: user.id, name: displayNameOf(user) });
     });
-    const q = new URLSearchParams(window.location.search).get("room");
-    if (q) setRoom(normalizeWalkieRoom(q));
+    const fromLink = isWalkieRoom(normalizeWalkieRoom(initialRoom))
+      ? normalizeWalkieRoom(initialRoom)
+      : roomFromLocation(window.location.pathname, window.location.search);
+    if (fromLink) {
+      setRoom(fromLink);
+      inviteRef.current = fromLink;
+    }
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialRoom]);
 
   useEffect(() => {
     let active = true;
@@ -253,6 +314,15 @@ export function WalkieShell({
     a.play().catch(() => {});
     a.pause();
   }, [ensureAudioEl]);
+
+  /** Inside a gesture: unlock the chirps and bless the speaker, once. */
+  const armSound = useCallback(() => {
+    if (!chirpsRef.current) chirpsRef.current = createWalkieChirps();
+    void chirpsRef.current.unlock();
+    blessAudio();
+    soundReadyRef.current = true;
+    setSoundReady(true);
+  }, [blessAudio]);
 
   /** Resolves "played" when the audio finished, "failed" when it never started. */
   const playSpeech = useCallback(
@@ -346,7 +416,68 @@ export function WalkieShell({
       window.clearTimeout(t);
       deliveryTimersRef.current.delete(id);
     }
+    for (const r of readyRetryTimersRef.current.get(id) ?? []) window.clearTimeout(r);
+    readyRetryTimersRef.current.delete(id);
   }, []);
+
+  /**
+   * What the server has stamped: ✓ / ✓✓ from the row, for when the broadcast
+   * was lost. Returns the server's word per id, whatever this phone thought.
+   */
+  const applyReceipts = useCallback(
+    (rows: WalkieReceiptOut[]): Map<string, Receipt> => {
+      const stamped = new Map<string, Receipt>();
+      const updates: Record<string, Receipt> = {};
+      for (const r of rows) {
+        const server: Receipt | null = r.played_at ? "played" : r.delivered_at ? "delivered" : null;
+        if (!server) continue;
+        stamped.set(r.id, server);
+        const current = receiptsRef.current[r.id];
+        if (current === "played" || current === server) continue;
+        updates[r.id] = server;
+        clearDeliveryTimer(r.id);
+      }
+      const ids = Object.keys(updates);
+      if (ids.length > 0) {
+        setReceipts((prev) => ({ ...prev, ...updates }));
+        setError((e) => (e === s.walkieNotDelivered ? null : e));
+      }
+      return stamped;
+    },
+    [clearDeliveryTimer, s.walkieNotDelivered]
+  );
+
+  /** Own turns still short of ✓✓ and young enough to matter. */
+  const pendingOwnIds = useCallback((): string[] => {
+    const now = Date.now();
+    const ids: string[] = [];
+    for (const [id, at] of sentAtRef.current) {
+      if (now - at > RECEIPT_REFRESH_WINDOW_MS) {
+        sentAtRef.current.delete(id);
+        continue;
+      }
+      if (receiptsRef.current[id] !== "played") ids.push(id);
+    }
+    return ids.slice(-10);
+  }, []);
+
+  /** Ask the server for the pending receipts. Empty when nothing is stamped, or it could not be asked. */
+  const refreshReceipts = useCallback(async (): Promise<Map<string, Receipt>> => {
+    const ids = pendingOwnIds();
+    if (ids.length === 0) return new Map();
+    try {
+      const res = await fetchWithRetry(
+        `/api/walkie/messages?ids=${encodeURIComponent(ids.join(","))}`,
+        { headers: await authHeaders(), cache: "no-store" },
+        { retries: 0, timeoutMs: MESSAGE_FETCH_TIMEOUT_MS }
+      );
+      const payload = (await res.json().catch(() => ({}))) as { receipts?: WalkieReceiptOut[] };
+      if (!res.ok || !Array.isArray(payload.receipts)) return new Map();
+      return applyReceipts(payload.receipts);
+    } catch {
+      return new Map();
+    }
+  }, [applyReceipts, pendingOwnIds]);
 
   // ── Playback: one at a time, in arrival order ───────────────────────────
   const drainPlayQueue = useCallback(async () => {
@@ -468,8 +599,11 @@ export function WalkieShell({
       return 0;
     } finally {
       catchingUpRef.current = false;
+      // And the other direction: receipts the partner stamped that this
+      // phone's socket never heard about.
+      void refreshReceipts();
     }
-  }, [appendMessage, deliver]);
+  }, [appendMessage, deliver, refreshReceipts]);
 
   const replay = useCallback(
     async (m: WalkieMessage) => {
@@ -493,14 +627,20 @@ export function WalkieShell({
     onAirWakeRef.current = null;
     for (const t of deliveryTimersRef.current.values()) window.clearTimeout(t);
     deliveryTimersRef.current.clear();
+    for (const list of readyRetryTimersRef.current.values()) for (const r of list) window.clearTimeout(r);
+    readyRetryTimersRef.current.clear();
     playQueueRef.current = [];
     await ch?.leave();
     setPartner(null);
     setChannelLost(false);
     setPhase("lobby");
+    inviteRef.current = "";
+    if (typeof window !== "undefined" && window.location.pathname.startsWith("/taokie/")) {
+      window.history.replaceState(null, "", walkiePath(""));
+    }
   }, []);
 
-  const goOnAir = useCallback(async () => {
+  const goOnAir = useCallback(async (opts: { gesture: boolean } = { gesture: true }) => {
     const code = normalizeWalkieRoom(room);
     if (!code) return;
     setError(null);
@@ -509,9 +649,9 @@ export function WalkieShell({
     setChannelLost(false);
     setPhase("joining");
     // Inside the tap, before any await: the whole reason this button exists.
-    if (!chirpsRef.current) chirpsRef.current = createWalkieChirps();
-    void chirpsRef.current.unlock();
-    blessAudio();
+    // An invite joins WITHOUT a tap, so it cannot do this part; the first
+    // gesture on the screen does (see onAnyTap).
+    if (opts.gesture) armSound();
     try {
       // The log first, so a partner's turns from before this phone arrived
       // are on screen before the channel starts delivering live ones.
@@ -571,13 +711,13 @@ export function WalkieShell({
       onAirWakeRef.current?.();
       onAirWakeRef.current = keepWake("walkie-on-air");
       setPhase("on-air");
-      window.history.replaceState(null, "", `/taokie?room=${code}`);
+      window.history.replaceState(null, "", walkiePath(code));
     } catch (e) {
       setError(e instanceof Error ? e.message : s.walkieFailed);
       setPhase("lobby");
     }
   }, [
-    blessAudio,
+    armSound,
     catchUp,
     clearDeliveryTimer,
     leaveChannel,
@@ -592,6 +732,16 @@ export function WalkieShell({
     s.walkieHoldExpired,
     s.walkieNotDelivered
   ]);
+
+  // An invite goes on air by itself — once, after this phone knows who it is
+  // (the name travels in presence). A gesture is still owed for the speaker.
+  useEffect(() => {
+    const invite = inviteRef.current;
+    if (!invite || autoJoinedRef.current || !me || phase !== "lobby") return;
+    if (normalizeWalkieRoom(room) !== invite) return;
+    autoJoinedRef.current = true;
+    void goOnAir({ gesture: false });
+  }, [goOnAir, me, phase, room]);
 
   // Resync: re-announce, re-read the partner, fetch what was missed. If the
   // socket is gone, rejoin outright.
@@ -632,6 +782,7 @@ export function WalkieShell({
 
   useEffect(() => {
     const deliveryTimers = deliveryTimersRef.current;
+    const readyRetryTimers = readyRetryTimersRef.current;
     return () => {
       void channelRef.current?.leave();
       chirpsRef.current?.close();
@@ -639,6 +790,7 @@ export function WalkieShell({
       wakeStopRef.current?.();
       onAirWakeRef.current?.();
       for (const t of deliveryTimers.values()) window.clearTimeout(t);
+      for (const list of readyRetryTimers.values()) for (const r of list) window.clearTimeout(r);
     };
   }, []);
 
@@ -826,15 +978,23 @@ export function WalkieShell({
       form.append("cancelled", String(cancelledRef.current));
       const context = contextForNextTurn(contextRef.current, sessionRef.current, Date.now());
       if (context.length > 0) form.append("context", JSON.stringify(context));
-      const res = await fetchWithRetry(
-        "/api/walkie/turn",
-        {
-          method: "POST",
-          headers: { ...(await authHeaders()), ...personalVoiceHeaders(), ...ttsDeviceHeaders("walkie") },
-          body: form
-        },
-        { retries: 1, timeoutMs: TURN_FETCH_TIMEOUT_MS }
-      );
+      const post = async () =>
+        fetchWithRetry(
+          "/api/walkie/turn",
+          {
+            method: "POST",
+            headers: { ...(await authHeaders()), ...personalVoiceHeaders(), ...ttsDeviceHeaders("walkie") },
+            body: form
+          },
+          { retries: 1, timeoutMs: TURN_FETCH_TIMEOUT_MS }
+        );
+      let res = await post();
+      if (res.status === 401) {
+        // One 401 on 2026-11-02: a token that had just lapsed. Refresh the
+        // session and send the same recording once more rather than lose it.
+        await supabase.auth.refreshSession().catch(() => null);
+        res = await post();
+      }
       const payload = (await res.json().catch(() => ({}))) as {
         message?: WalkieMessage;
         tts_failed?: boolean;
@@ -845,20 +1005,42 @@ export function WalkieShell({
       const sent = payload.message;
       busyBlockedRef.current = 0;
       sentIdsRef.current.add(sent.id);
+      sentAtRef.current.set(sent.id, Date.now());
       appendMessage(sent);
       setReceipts((r) => ({ ...r, [sent.id]: "sent" }));
       if (payload.tts_failed) setError(s.walkieVoiceFailed);
-      channelRef.current?.sendReady(sent.id, releasedAtRef.current || null);
-      // Nobody picked it up inside the window: say so, and log the stage.
+      const releasedAt = releasedAtRef.current || null;
+      channelRef.current?.sendReady(sent.id, releasedAt);
+      // A "ready" that fell into a rejoin gap is re-sent, a bounded number
+      // of times, until the partner's "got" arrives.
+      readyRetryTimersRef.current.set(
+        sent.id,
+        READY_RETRY_AT_MS.map((at) =>
+          window.setTimeout(() => {
+            const r = receiptsRef.current[sent.id];
+            if (r === "delivered" || r === "played") return;
+            channelRef.current?.sendReady(sent.id, releasedAt);
+          }, at)
+        )
+      );
+      // Nobody picked it up inside the window? Ask the server before saying
+      // so: the partner may have it while THIS phone's socket missed the
+      // "got". Only a row the server says is undelivered earns the banner.
       deliveryTimersRef.current.set(
         sent.id,
         window.setTimeout(() => {
           deliveryTimersRef.current.delete(sent.id);
-          const r = receiptsRef.current[sent.id];
-          if (r === "delivered" || r === "played") return;
-          setReceipts((prev) => ({ ...prev, [sent.id]: "stalled" }));
-          setError(s.walkieNotDelivered);
-          void postAck(sent.id, "failed", { stage: "deliver" });
+          void (async () => {
+            const r = receiptsRef.current[sent.id];
+            if (r === "delivered" || r === "played") return;
+            if ((await refreshReceipts()).has(sent.id)) return; // the partner has it; only this phone's socket missed it
+            const after = receiptsRef.current[sent.id];
+            if (after === "delivered" || after === "played") return; // the "got" landed meanwhile
+            clearDeliveryTimer(sent.id);
+            setReceipts((prev) => ({ ...prev, [sent.id]: "stalled" }));
+            setError(s.walkieNotDelivered);
+            void postAck(sent.id, "failed", { stage: "deliver" });
+          })();
         }, DELIVERY_WAIT_MS)
       );
     } catch (e) {
@@ -918,7 +1100,7 @@ export function WalkieShell({
   async function shareChannel() {
     const code = normalizeWalkieRoom(room);
     if (!code) return;
-    const url = `${window.location.origin}/taokie?room=${code}`;
+    const url = `${window.location.origin}${walkiePath(code)}`;
     const nav = navigator as Navigator & { share?: (d: { url: string; title?: string }) => Promise<void> };
     try {
       if (nav.share) await nav.share({ url, title: "Taokie" });
@@ -951,12 +1133,17 @@ export function WalkieShell({
   // The speaker refused a turn: this tap re-blesses the element and plays it.
   function unlockAndReplay() {
     const m = unlockNeeded;
-    if (!chirpsRef.current) chirpsRef.current = createWalkieChirps();
-    void chirpsRef.current.unlock();
-    blessAudio();
+    armSound();
     setUnlockNeeded(null);
     setError((e) => (e === s.walkiePlaybackFailed ? null : e));
     if (m) void replay(m);
+  }
+
+  // The first gesture anywhere on the screen blesses the speaker — an invite
+  // joined without one. pointerdown, like the button: it is the gesture.
+  function onAnyTap() {
+    if (soundReadyRef.current) return;
+    armSound();
   }
 
   const partnerName = partner?.name || "—";
@@ -967,7 +1154,10 @@ export function WalkieShell({
     sentIdsRef.current.has(m.id) || (!receivedIdsRef.current.has(m.id) && me !== null && m.sender_id === me.id);
 
   return (
-    <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
+    <main
+      onPointerDownCapture={onAnyTap}
+      className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1rem)]"
+    >
       <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md flex-col gap-4">
         <header className="flex items-center justify-between gap-3">
           <ExitHome lang={mine} />
@@ -1079,6 +1269,17 @@ export function WalkieShell({
               {s.walkieResync}
             </button>
           </div>
+        ) : null}
+
+        {onAir && !soundReady ? (
+          <button
+            type="button"
+            data-walkie-sound-off=""
+            onClick={armSound}
+            className="min-h-[44px] rounded-xl border border-amber-300/50 bg-amber-400/15 px-3 text-sm text-amber-100"
+          >
+            🔈 {s.walkieSoundOff}
+          </button>
         ) : null}
 
         {error ? (

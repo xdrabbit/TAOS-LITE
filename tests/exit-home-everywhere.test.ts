@@ -108,7 +108,13 @@ const SCREENS: Record<string, Loader> = {
  * Routes that are not a screen of their own: the invite link is a one-card
  * hand-off that sends you straight into /chat, and api/ is not a page.
  */
-const NOT_A_SCREEN = new Set(["api", "chat/join/[token]"]);
+const NOT_A_SCREEN = new Set([
+  "api",
+  "chat/join/[token]",
+  // /taokie/<code> is the Taokie invite link: the same shell as /taokie with
+  // the channel filled in and joined (components/walkie/TaokieScreen.tsx).
+  "taokie/[room]"
+]);
 
 function pageRoutes(dir = "app", prefix = ""): string[] {
   const out: string[] = [];
