@@ -74,7 +74,10 @@ const GATED: Record<string, string> = {
   voz: "founder",
   // /taokie is the push-to-talk translation walkie, a founders-only P0 spike
   // (2026-11-01): a founder tile, and the page needs TAOS_WALKIE_ENABLED.
-  taokie: "founder"
+  taokie: "founder",
+  // /review is the founder translation review (2026-11-04): a founder tile;
+  // the routes 404 anyone else, and nothing is kept without the opt-in.
+  review: "founder"
 };
 
 function read(path: string): string {

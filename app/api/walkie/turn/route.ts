@@ -10,6 +10,7 @@ import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
 import { PERSONAL_VOICE_HEADER } from "@/lib/tts/personalVoice";
 import { TTS_STANDALONE_HEADER, TTS_SURFACE_HEADER } from "@/lib/tts/deviceHints";
 import { walkieEnabled } from "@/lib/walkie/flag";
+import { keepTurnForReview, speakerKeepsAudio } from "@/lib/review/capture";
 import { walkieNotFound } from "@/lib/walkie/guard";
 import { guardSpend } from "@/lib/spendGuard";
 import { isFounder } from "@/lib/release";
@@ -154,6 +155,10 @@ async function handle(req: NextRequest, t: WalkieTimingFields): Promise<NextResp
       t.err = "not_founder";
       return walkieNotFound();
     }
+
+    // Founder review (2026-11-04): does the SENDER keep their own audio?
+    // Asked now, awaited after the turn, overlapped with the pipeline.
+    const keepPromise = speakerKeepsAudio(user).catch(() => false);
 
     const apiKey = getOpenAIKey();
     if (!apiKey) {
@@ -336,6 +341,39 @@ async function handle(req: NextRequest, t: WalkieTimingFields): Promise<NextResp
         translationText: translation
       }).catch(() => false)
     );
+
+    // Kept for review when the sender opted in — a second copy of the
+    // recording in the review bucket with its own 14-day clock, so the
+    // review store never points into walkie-audio (lib/review/capture.ts).
+    if (await keepPromise) {
+      waitUntil(
+        audio
+          .arrayBuffer()
+          .then((bytes) =>
+            keepTurnForReview({
+              user,
+              surface: "taokie",
+              mode: "manual",
+              audio: bytes,
+              audioMime: mime,
+              sourceLang: sourceLanguage,
+              targetLang: targetLanguage,
+              originalText: original,
+              translationText: translation,
+              recMs,
+              transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "gpt-4o-transcribe",
+              translateModel: translateModel(),
+              timings: {
+                rec_ms: recMs ?? undefined,
+                transcribe_ms: typeof t.transcribeMs === "number" ? t.transcribeMs : undefined,
+                translate_ms: typeof t.translateMs === "number" ? t.translateMs : undefined,
+                tts_ms: typeof t.ttsMs === "number" ? t.ttsMs : undefined
+              }
+            })
+          )
+          .catch(() => null)
+      );
+    }
 
     const speechUrl = await signWalkieAudio(speechPath);
     return NextResponse.json(

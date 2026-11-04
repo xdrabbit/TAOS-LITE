@@ -25,12 +25,17 @@
 // each with a sidecar `<name>.txt` holding what was actually said. A line may
 // start with `en:` or `es:` to say which language it is in; a clip whose lines
 // carry two different tags is scored as mixed (did both languages survive?).
-// Untagged lines are guessed from accents and Spanish stopwords.
-import { mkdirSync, readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+// Untagged lines are guessed from accents and Spanish stopwords. The format
+// is defined ONCE, in lib/review/clipSet.ts, and the founder review export
+// (GET /api/review/export, a tar) writes exactly it — so flagged real turns
+// from /review are this probe's test set: `tar xf` and `--clips <dir>`.
+import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { join } from "node:path";
 import { describe, it } from "vitest";
 import { transcribeAudio } from "@/lib/translate/transcribe";
+import { readClipDir } from "@/lib/review/clipDir";
+import type { ClipLang, ClipPart } from "@/lib/review/clipSet";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
 const CLIPS_DIR = process.env.TRANSCRIBE_CLIPS_DIR?.trim() ?? "";
@@ -48,11 +53,8 @@ const PER_MINUTE: Record<string, number> = {
 /** gpt-4o-mini-tts, ~$0.015/min of audio out (cached after the first run). */
 const TTS_PER_MINUTE = 0.015;
 
-type Lang = "en" | "es";
-interface Part {
-  lang: Lang;
-  text: string;
-}
+type Lang = ClipLang;
+type Part = ClipPart;
 interface Clip {
   id: string;
   group: "EN" | "ES" | "EN+noise" | "ES+noise" | "borrowed" | "mixed" | "real";
@@ -279,37 +281,9 @@ function addNoise(pcm: Buffer, snrDb: number): void {
   }
 }
 
-const MIME: Record<string, string> = {
-  ".wav": "audio/wav",
-  ".mp3": "audio/mpeg",
-  ".m4a": "audio/mp4",
-  ".mp4": "audio/mp4",
-  ".webm": "audio/webm",
-  ".ogg": "audio/ogg",
-  ".flac": "audio/flac"
-};
-
-function guessLang(line: string): Lang {
-  if (/[ñ¿¡áéíóú]/i.test(line)) return "es";
-  return /\b(que|el|la|los|las|de|y|es|por|para|con|una?|yo|tu|mi)\b/i.test(line) ? "es" : "en";
-}
-
-function parseScript(text: string): Part[] {
-  return text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const tagged = /^(en|es)\s*:\s*(.*)$/i.exec(line);
-      return tagged
-        ? { lang: tagged[1].toLowerCase() as Lang, text: tagged[2] }
-        : { lang: guessLang(line), text: line };
-    });
-}
-
 /** Duration from a WAV header; other containers are estimated at 64 kbps. */
-function seconds(buf: Buffer, ext: string): number {
-  if (ext === ".wav" && buf.toString("ascii", 0, 4) === "RIFF") {
+function seconds(buf: Buffer, mime: string): number {
+  if (mime === "audio/wav" && buf.toString("ascii", 0, 4) === "RIFF") {
     const byteRate = buf.readUInt32LE(28);
     return byteRate ? (buf.length - 44) / byteRate : 0;
   }
@@ -317,25 +291,11 @@ function seconds(buf: Buffer, ext: string): number {
 }
 
 function realAudio(dir: string): Audio[] {
-  const out: Audio[] = [];
-  for (const name of readdirSync(dir).sort()) {
-    const ext = extname(name).toLowerCase();
-    if (!MIME[ext]) continue;
-    const stem = basename(name, extname(name));
-    const script = join(dir, `${stem}.txt`);
-    if (!existsSync(script)) {
-      console.log(`  skip ${name}: no ${stem}.txt beside it`);
-      continue;
-    }
-    const parts = parseScript(readFileSync(script, "utf8"));
-    const buf = readFileSync(join(dir, name));
-    out.push({
-      clip: { id: stem, group: "real", parts },
-      file: new File([new Uint8Array(buf)], name, { type: MIME[ext] }),
-      seconds: seconds(buf, ext)
-    });
-  }
-  return out;
+  return readClipDir(dir, (name) => console.log(`  skip ${name}: no script beside it`)).map((clip) => ({
+    clip: { id: clip.stem, group: "real", parts: clip.parts },
+    file: new File([new Uint8Array(clip.bytes)], clip.name, { type: clip.mime }),
+    seconds: seconds(clip.bytes, clip.mime)
+  }));
 }
 
 // ── Measure ─────────────────────────────────────────────────────────────────

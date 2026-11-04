@@ -190,7 +190,7 @@ RLS-filtered.
 | | |
 |---|---|
 | **Rows** | 17 (= `auth.users`; created by the `handle_new_user` trigger) |
-| **Content** | `email`, `plan`, `tier`, `subscription_status`, `stripe_customer_id`, `stripe_subscription_id`, `trial_ends_at`, `current_period_end`, `usage_chars`, `usage_period_start`, **`pack_seconds`**, ~~`bonus_seconds`, `bonus_period`~~. |
+| **Content** | `email`, `plan`, `tier`, `subscription_status`, `stripe_customer_id`, `stripe_subscription_id`, `trial_ends_at`, `current_period_end`, `usage_chars`, `usage_period_start`, **`pack_seconds`**, ~~`bonus_seconds`, `bonus_period`~~, `walkie_notify_text`, **`review_keep_audio`** (2026-11-04, default off — the founder review opt-in, governs only the owner's own turns). |
 | **User ids** | `id` = `auth.users.id`. |
 | **Second party** | None. No partner column, no household, no shared plan. |
 | **Retention** | CASCADE from `auth.users`. |
@@ -328,6 +328,19 @@ The only table in the schema that holds no user-attributable data at all.
 | **Constraint** | `direction = ANY (ARRAY['en-es','es-en'])` — another two-language ceiling in the database, from before the 100-language catalog. |
 | **RLS** | Enabled, no policies — service role only. |
 
+### 15. `taos_lite_review_turns` — founder translation review *(new 2026-11-04)*
+
+| | |
+|---|---|
+| **Content** | One row per KEPT turn: `user_id` (the speaker), `surface` (`home` / `taokie`), `mode`, both languages, `original_text`, `translation_text`, `segments`, `audio_path` (one object in `review-audio`), `transcribe_model`, `translate_model`, `timings`, and the flag (`flag_reason` ∈ words / meaning / tone / other, `flag_note`, `flagged_at`, `flagged_by`). |
+| **Who** | Founders only, and only when the SPEAKER's own `profiles.review_keep_audio` is on (default off). A non-founder's profile is never read. |
+| **Retention** | `expires_at` = insert + `TAOS_REVIEW_RETENTION_DAYS` (14). Swept objects-first by the daily walkie cron, `/api/review/sweep`, and on opening `/review`. CASCADE from `auth.users`. |
+| **RLS** | Enabled, **no policies** — service role only through `lib/review/store.ts`, behind `lib/review/guard.ts` (404 to anyone but a founder). |
+
+The home-history row (§1) is untouched: it still has no audio. This is a
+second, short-lived copy of the clip with its own clock, never a pointer into
+`walkie-audio`.
+
 ### 14. `taos_leads` — dead lead capture ⚠️
 
 | | |
@@ -355,6 +368,7 @@ The only table in the schema that holds no user-attributable data at all.
 |---|---|---|---|---|
 | `chat-voice` | no | **27** | `/api/chat/voice` → `<thread_id>/<uuid>.<ext>` | only the rollback path on a failed message insert |
 | `video-uploads` | no | 0 | `/api/video/upload-url` (founders-only `/video`) | `/api/video/process` removes the object on every outcome — transport only |
+| `review-audio` | no | — | `/api/translate` and `/api/walkie/turn` → `<user_id>/<turn_id>.<ext>`, only for a founder with `review_keep_audio` on | the review sweep, objects first, after 14 days *(new 2026-11-04)* |
 
 `storage.objects` policy `chat members read voice notes`: SELECT for
 `{authenticated}` where `bucket_id = 'chat-voice'` and
@@ -414,6 +428,7 @@ progress), `PAIR_STORAGE_KEY` / `RECENT_STORAGE_KEY` (language pair), `STORAGE_K
 | data | kept until | user can delete? | survives account deletion? |
 |---|---|---|---|
 | translate history | deleted by user | **yes** (per-row + clear all) | no (CASCADE) |
+| founder review turns (audio + text) | 14 days (`TAOS_REVIEW_RETENTION_DAYS`), opt-in per speaker | founders can clear the flag; rows go on the clock | no (CASCADE; objects via the sweep) |
 | translate backups (2 tables) | ~~forever~~ **dropped (PR #37)** | n/a | n/a |
 | chat messages (text + translation) | ~~forever~~ **until either member deletes the thread (PR #37)** | **yes — either member, whole thread** | no — the thread goes with the account |
 | chat voice audio | ~~forever~~ **goes with its thread (PR #37)** | **yes, via the thread** | rows: no. objects: sweep `/api/chat/voice/orphans` ⚠️ |
