@@ -1023,6 +1023,11 @@ blank.
 
 ## Shipped
 
+- Taokie invite link + sync fixes — invite is `/taokie/<code>` (a path
+  survives the sign-in bounce) and auto-joins; hold heartbeat is a broadcast,
+  not a presence re-track (Supabase kills the channel on the 6th presence
+  update per 30 s); "Not delivered" asks the server first — 2026-11-04,
+  PR #115
 - Taokie — push-to-talk translation walkie (/taokie, founders only, behind
   server-only `TAOS_WALKIE_ENABLED`; routes 404 and the page says "Not
   enabled" with the flag unset) — 2026-11-02, PR #114
