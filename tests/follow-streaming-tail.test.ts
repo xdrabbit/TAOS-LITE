@@ -186,9 +186,9 @@ describe("wired into Tabletop and Live", () => {
     expect(live).toMatch(/ref=\{draftTail\.ref\}\s+className="[^"]*overflow-y-auto[^"]*\[overflow-anchor:none\]/);
   });
 
-  it("no reordering: Live still prepends, Tabletop panes still render oldest-first", () => {
+  it("newest-first stacks coexist with streaming followers", () => {
     expect(live).toContain("...prev].slice(0, MAX_FEED)");
-    expect(tabletop).not.toMatch(/NewestFirst/);
-    expect(live).not.toMatch(/NewestFirst/);
+    expect(tabletop).toContain("<NewestFirstStack");
+    expect(live).toContain("<NewestFirstStack");
   });
 });
