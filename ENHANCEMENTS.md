@@ -41,6 +41,33 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   other screen (gate cards, count line and the language names included;
   Spanish wording is Tom's, pending Liz). Draft PR, phone test pending.
 
+- **/review second opinion — a model checks each kept turn; built
+  2026-11-04, draft PR open, founders only.** Tom (2026-11-04 20:27 MT): have a
+  model check each kept turn — transcription quality and A→B translation
+  quality — so he and Liz can verify the SUSPECTS by ear instead of reading
+  every row. Per turn, on demand: a DIFFERENT transcriber re-reads the stored
+  clip (`TAOS_REVIEW_STT_MODEL`, default `whisper-1` — it retires 2026-02-26,
+  hence a knob) and is word-diffed against the transcript (agreement ratio +
+  differing spans, highlighted in the transcript column); a strong text model
+  (`TAOS_REVIEW_GRADER_MODEL`, default the study lessons' `gpt-5.5`, no
+  temperature) grades the translation in strict JSON — meaning 1–5, tone 1–5,
+  issues (dropped / invented / wrong-word / wrong-register / other, one line
+  why) and a suggested translation — shown under the translation column. One
+  "Second opinion" button per row, one "Check all unreviewed on this day"
+  button at the top (one day at a time, `TAOS_REVIEW_BATCH_MAX` = 50 per
+  click), and a "Suspects first" sort (lowest grade / lowest agreement at the
+  top, unreviewed last). A grader's issue NEVER sets a flag: it highlights,
+  the founder flags. Stored on the turn (`opinion`, `opinion_score`,
+  `opinion_at`; `supabase/migrations/20261105_review_second_opinion.sql`),
+  gone with the row at 14 days. Never runs on a turn's own path; an opt-in
+  nightly pass rides the walkie cron behind `TAOS_REVIEW_NIGHTLY=1` (off).
+  The transcript and translation go to the model provider, as translating
+  already does; logs carry counts and codes only. Routes:
+  `/api/review/opinion`, `/api/review/opinion/batch`, both behind
+  `guardReview` (guardSpend first).
+  → Phone test pending: Tom opens /review on the laptop, taps Second opinion
+  on a turn with a known mistake, then Check all on one day.
+
 - **Taokie — push-to-talk translation walkie; P0 spike built 2026-11-01,
   draft PR open, founders only.** Two people in a channel. Hold the big
   button, talk, let go: the turn goes through the EXISTING home pipeline

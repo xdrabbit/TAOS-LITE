@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-// GET /api/review/turns?from=<iso>&to=<iso>&speaker=<user_id>&flagged=1
+// GET /api/review/turns?from=<iso>&to=<iso>&speaker=<user_id>&flagged=1&sort=suspects
 //   → { turns: [...row, audio_url], speakers: [{ id, email }], retentionDays }
 //
 // Newest first, unexpired only, each with a one-hour signed link to its
@@ -43,7 +43,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     fromIso: isoOrNull(url.searchParams.get("from")),
     toIso: isoOrNull(url.searchParams.get("to")),
     speakerId: speaker && UUID.test(speaker) ? speaker : null,
-    flaggedOnly: url.searchParams.get("flagged") === "1"
+    flaggedOnly: url.searchParams.get("flagged") === "1",
+    // Second opinion: ?sort=suspects puts the lowest grade / lowest word
+    // agreement first and the unreviewed last (lib/review/opinion.ts).
+    sort: url.searchParams.get("sort") === "suspects" ? ("suspects" as const) : ("newest" as const)
   };
   try {
     const [rows, speakers] = await Promise.all([listReviewTurns(filter, Date.now(), REVIEW_LIST_LIMIT), listReviewSpeakers()]);

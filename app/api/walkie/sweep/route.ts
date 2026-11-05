@@ -3,6 +3,8 @@ import { walkieEnabled } from "@/lib/walkie/flag";
 import { guardWalkie, walkieNotFound } from "@/lib/walkie/guard";
 import { sweepWalkieMessages } from "@/lib/walkie/store";
 import { sweepReviewTurns } from "@/lib/review/store";
+import { reviewNightlyEnabled } from "@/lib/review/opinion";
+import { runNightlyOpinions } from "@/lib/review/secondOpinion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +29,15 @@ export const maxDuration = 60;
 // deployment with Taokie switched off needs /api/review/sweep pointed at by
 // a cron line of its own — the review page kicks the sweep too, so a
 // founder who looks never sees an expired turn either way.
+//
+// Since 2026-11-05 the CRON path may also run the review second-opinion
+// nightly pass (lib/review/secondOpinion.ts) — only when TAOS_REVIEW_NIGHTLY=1
+// (off by default), only over the last day's unreviewed kept turns, and only
+// one batch's worth (TAOS_REVIEW_BATCH_MAX). A founder calling this route by
+// hand never triggers it: that is what the page's "check all" button is for.
+// Who may reach the spend: the cron, by CRON_SECRET, or a founder session
+// through guardWalkie (guardSpend first, lib/walkie/guard.ts) — and the
+// founder path never runs the batch at all.
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!walkieEnabled()) return walkieNotFound();
@@ -49,6 +60,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     `[taos-review] sweep by=${isCron ? "cron" : "founder"} scanned=${review.scanned}` +
       ` objects_removed=${review.objectsRemoved} rows_deleted=${review.rowsDeleted} err=${review.error ?? "?"}`
   );
+  if (isCron && reviewNightlyEnabled()) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    const nightly = apiKey
+      ? await runNightlyOpinions({ apiKey }).catch(() => ({ checked: 0, failed: 0, more: false }))
+      : { checked: 0, failed: 0, more: false };
+    console.log(`[taos-review] nightly checked=${nightly.checked} failed=${nightly.failed} more=${nightly.more ? 1 : 0} key=${apiKey ? 1 : 0}`);
+  }
   return NextResponse.json({ ...result, review }, {
     status: result.error || review.error ? 502 : 200,
     headers: { "Cache-Control": "no-store" }

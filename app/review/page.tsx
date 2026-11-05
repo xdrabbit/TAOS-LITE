@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ReviewGate } from "@/components/review/ReviewGate";
 import { ReviewShell } from "@/components/review/ReviewShell";
 import { reviewRetentionDays } from "@/lib/review/flag";
+import { reviewBatchMax } from "@/lib/review/opinion";
 
 // /review — founder translation review (Tom, 2026-11-04): every kept turn,
 // newest first, with the audio beside the transcript and the translation, and
@@ -21,7 +22,7 @@ export function generateMetadata(): Metadata {
 export default function ReviewPage(): JSX.Element {
   return (
     <ReviewGate>
-      <ReviewShell retentionDays={reviewRetentionDays()} />
+      <ReviewShell retentionDays={reviewRetentionDays()} batchMax={reviewBatchMax()} />
     </ReviewGate>
   );
 }
