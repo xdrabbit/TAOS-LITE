@@ -762,8 +762,8 @@ export function LiveShell(): JSX.Element {
   const readLanguage = engine === "ambient" ? mine : spoken.targetLanguage;
 
   return (
-    <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
-      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
+    <main className="min-h-screen px-4 pt-[calc(env(safe-area-inset-top)+1rem)]">
+      <div className="mx-auto flex min-h-[calc(100vh-1rem)] max-w-md flex-col gap-4">
         <header className="flex items-center gap-3">
           <ExitHome lang={mine} />
           <h1 className="text-lg font-semibold tracking-tight text-amber-200">TAOS·LITE</h1>
@@ -905,15 +905,6 @@ export function LiveShell(): JSX.Element {
                       : "🔊 Voice on"
                     : "🔇 Voice off"}
               </button>
-              {feed.length > 0 ? (
-                <button
-                  type="button"
-                  onClick={clearAll}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] normal-case tracking-normal text-amber-100/70"
-                >
-                  Clear
-                </button>
-              ) : null}
             </div>
           </div>
 
@@ -999,31 +990,57 @@ export function LiveShell(): JSX.Element {
           </div>
         </section>
 
-        {/* Primary control */}
-        <section className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4">
-          <button
-            type="button"
-            onClick={handlePrimary}
-            disabled={engine === "device" && !supported}
-            className={`flex h-20 items-center justify-center gap-3 rounded-2xl text-xl font-semibold transition active:scale-[0.99] disabled:opacity-50 ${
-              running
-                ? "animate-pulse bg-amber-400 text-stone-950 shadow-[0_0_34px_rgba(251,191,36,0.6)]"
-                : "border border-amber-300/30 bg-stone-50 text-stone-900 hover:bg-white"
-            }`}
-          >
-            <span
-              className={`inline-block rounded-[6px] ${
-                running ? "h-5 w-5 bg-stone-900/85" : "h-6 w-6 bg-amber-500"
-              }`}
-            />
-            {running ? "STOP" : "START LISTENING"}
-          </button>
-          {engine === "ambient" && !running ? (
-            <p className="text-center text-[11px] text-amber-100/40">
-              Ambient AI streams audio to OpenAI while live — hears any language, any number of
-              voices. Auto-stops after 5 quiet minutes.
-            </p>
-          ) : null}
+        {/* Primary controls — pinned (Tom, 11/04). With a long feed, STOP and
+            Clear used to live wherever the page ended, a full scroll away. The
+            bar is `sticky bottom-0` and the LAST child of the scrolling column,
+            so it rides the bottom edge of the viewport while the feed scrolls
+            underneath it, and — being in flow, not `fixed` — it reserves its
+            own height at the end of the page: nothing can end up hidden under
+            it, whatever the bar's height is at the time (the idle caption
+            comes and goes). It carries the safe-area inset itself so it sits
+            flush on the home indicator, not over it. The green exit pill stays
+            in the header. Reading order and the draft card's follow-the-tail
+            (components/FollowTail.tsx) are untouched. */}
+        <section
+          data-live-controls=""
+          className="sticky bottom-0 z-10 -mx-4 mt-auto bg-[#100d0b]/95 px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-2 backdrop-blur-sm"
+        >
+          <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-[rgba(20,16,14,0.86)] p-4">
+            <div className="flex items-stretch gap-2">
+              <button
+                type="button"
+                onClick={handlePrimary}
+                disabled={engine === "device" && !supported}
+                className={`flex h-20 flex-1 items-center justify-center gap-3 rounded-2xl text-xl font-semibold transition active:scale-[0.99] disabled:opacity-50 ${
+                  running
+                    ? "animate-pulse bg-amber-400 text-stone-950 shadow-[0_0_34px_rgba(251,191,36,0.6)]"
+                    : "border border-amber-300/30 bg-stone-50 text-stone-900 hover:bg-white"
+                }`}
+              >
+                <span
+                  className={`inline-block rounded-[6px] ${
+                    running ? "h-5 w-5 bg-stone-900/85" : "h-6 w-6 bg-amber-500"
+                  }`}
+                />
+                {running ? "STOP" : "START LISTENING"}
+              </button>
+              {feed.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="shrink-0 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm text-amber-100/70"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            {engine === "ambient" && !running ? (
+              <p className="text-center text-[11px] text-amber-100/40">
+                Ambient AI streams audio to OpenAI while live — hears any language, any number of
+                voices. Auto-stops after 5 quiet minutes.
+              </p>
+            ) : null}
+          </div>
         </section>
       </div>
 

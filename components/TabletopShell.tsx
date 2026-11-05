@@ -936,7 +936,17 @@ export function TabletopShell({
 
     return (
       <section
-        className={`flex flex-1 flex-col gap-2 overflow-hidden p-4 ${rotated ? "rotate-180" : ""}`}
+        // Each pane's talk button sits BELOW its scroll box, not inside it, so
+        // it never scrolls away (the page itself is 100dvh and does not
+        // scroll). The pane's DOM bottom is the screen's bottom for this end
+        // and the screen's TOP for the rotated end, so each gets the inset of
+        // the edge it is actually drawn against — above the home indicator,
+        // below the notch. Zero on a phone without either.
+        className={`flex flex-1 flex-col gap-2 overflow-hidden p-4 ${
+          rotated
+            ? "rotate-180 pb-[calc(1rem+env(safe-area-inset-top))]"
+            : "pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        }`}
       >
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-xs uppercase tracking-[0.25em] text-amber-100/50">
@@ -1001,6 +1011,7 @@ export function TabletopShell({
 
         <button
           type="button"
+          data-tabletop-talk=""
           onPointerDown={(e) => press.down(e.clientX, e.clientY)}
           onPointerMove={(e) => press.move(e.clientX, e.clientY)}
           onPointerUp={() => press.up()}
