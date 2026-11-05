@@ -1045,6 +1045,15 @@ blank.
 
 ## Shipped
 
+- Founder translation review — each founder opts their OWN audio in
+  (`profiles.review_keep_audio`, default off); home and Taokie turns keep the
+  clip 14 days (`TAOS_REVIEW_RETENTION_DAYS`) in the private `review-audio`
+  bucket; `/review` lists newest first with ▶ audio, day + speaker filter,
+  one-tap flag, and "Download flagged clips" in the transcriber probe's
+  clip-set format; swept by the walkie cron — 2026-11-04, PR #118
+- Pinned Stop/Clear on /live — sticky bottom bar that stays above the
+  scroll (in-flow, last child); /tabletop needed no bar because nothing
+  there scrolls — 2026-11-04, PR #117
 - Taokie invite link + sync fixes — invite is `/taokie/<code>` (a path
   survives the sign-in bounce) and auto-joins; hold heartbeat is a broadcast,
   not a presence re-track (Supabase kills the channel on the 6th presence
