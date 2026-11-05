@@ -37,6 +37,9 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   page. Live and Tabletop store nothing today and are out of scope; they could
   join later only by adding a server hop that sees the audio.
   → Phone test pending: Liz opts in on her phone, Tom reviews on the laptop.
+  → 2026-11-04: `/review` reads in the phone owner's language like every
+  other screen (gate cards, count line and the language names included;
+  Spanish wording is Tom's, pending Liz). Draft PR, phone test pending.
 
 - **Taokie — push-to-talk translation walkie; P0 spike built 2026-11-01,
   draft PR open, founders only.** Two people in a channel. Hold the big

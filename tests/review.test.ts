@@ -511,7 +511,9 @@ describe("the gate: founders only, 404 for anyone else", () => {
     expect(flag.reviewGateState({ ready: true, email: "someone@example.com", signedIn: true })).toBe("denied");
     expect(flag.reviewGateState({ ready: true, email: LIZ_EMAIL, signedIn: true })).toBe("open");
     const gate = readFileSync(new URL("../components/review/ReviewGate.tsx", import.meta.url), "utf8");
-    expect(gate).toContain("404 · Not found");
+    // The card's words live in lib/chrome/copy.ts since the Spanish pass
+    // (tests/review-chrome-language.test.ts renders it in both languages).
+    expect(gate).toContain("404 · {s.reviewNotFound}");
     expect(gate).not.toContain("Coming soon");
   });
 
