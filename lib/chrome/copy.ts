@@ -380,7 +380,47 @@ const EN = {
     "We record your voice only to make this one clip. The voice is deleted within 10 minutes and nothing is stored. Live microphone only — no uploads.",
   vozRevealHint: "Say or type one line in your language. You'll hear it in {language}, in your voice.",
   vozUsedToday: "That was today's free try.",
-  vozAgainSignUp: "Again? Create your free account"
+  vozAgainSignUp: "Again? Create your free account",
+
+  // ── Review (/review) — founder translation review ─────────────────────────
+  // Founders-only (2026-11-04): the turns Tom and Liz spoke, with the audio
+  // beside the transcript and the translation, so a bad one can be flagged
+  // as "wrong words" (the transcript) or "wrong meaning" (the translation).
+  // The Spanish strings below are PLACEHOLDERS marked "pendiente de revisión
+  // por Liz" — nobody at this table who reads Spanish has checked them yet.
+  navReview: "Review",
+  reviewTitle: "Review",
+  reviewTagline: "Listen, read, flag the ones that went wrong.",
+  reviewKeepAudio: "Keep my audio for review",
+  reviewKeepAudioHint: "Only your own turns on Home and Taokie. Clips are deleted after {days} days.",
+  reviewKeepAudioOff: "Your turns are not being kept. Turn this on and your next turns will appear here.",
+  reviewDay: "Day",
+  reviewAllDays: "All days",
+  reviewSpeaker: "Speaker",
+  reviewAllSpeakers: "Everyone",
+  reviewFlaggedOnly: "Flagged only",
+  reviewSaid: "Said",
+  reviewHeard: "Heard (transcript)",
+  reviewTranslated: "Translated",
+  reviewFlag: "Flag",
+  reviewFlagWords: "Wrong words",
+  reviewFlagMeaning: "Wrong meaning",
+  reviewFlagTone: "Wrong tone",
+  reviewFlagOther: "Other",
+  reviewFlagNote: "Note (optional, one line)",
+  reviewFlagNoteWords: "What was actually said",
+  reviewFlagSave: "Save flag",
+  reviewFlagClear: "Clear flag",
+  reviewFlagged: "Flagged",
+  reviewExport: "Download flagged clips (.tar)",
+  reviewExportHint: "The flagged turns as a clip set for the transcriber probe.",
+  reviewNothing: "No turns here yet.",
+  reviewLoading: "Loading…",
+  reviewFailed: "Could not load. Try again.",
+  reviewModels: "Models",
+  reviewTiming: "Timing",
+  reviewNotFound: "Not found",
+  reviewRefresh: "↻ Refresh"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -690,7 +730,40 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
       "Grabamos tu voz solo para hacer este clip. La voz se borra en menos de 10 minutos y no se guarda nada. Solo micrófono en vivo — no se suben archivos.",
     vozRevealHint: "Di o escribe una frase en tu idioma. La escucharás en {language}, con tu voz.",
     vozUsedToday: "Esa fue tu prueba gratis de hoy.",
-    vozAgainSignUp: "¿Otra vez? Crea tu cuenta gratis"
+    vozAgainSignUp: "¿Otra vez? Crea tu cuenta gratis",
+    navReview: "Revisión", // pendiente de revisión por Liz
+    reviewTitle: "Revisión", // pendiente de revisión por Liz
+    reviewTagline: "Escucha, lee y marca las que salieron mal.", // pendiente de revisión por Liz
+    reviewKeepAudio: "Guardar mi audio para revisión", // pendiente de revisión por Liz
+    reviewKeepAudioHint: "Solo tus propios turnos en Inicio y Taokie. Los clips se borran a los {days} días.", // pendiente de revisión por Liz
+    reviewKeepAudioOff: "Tus turnos no se están guardando. Actívalo y tus próximos turnos aparecerán aquí.", // pendiente de revisión por Liz
+    reviewDay: "Día", // pendiente de revisión por Liz
+    reviewAllDays: "Todos los días", // pendiente de revisión por Liz
+    reviewSpeaker: "Quién habló", // pendiente de revisión por Liz
+    reviewAllSpeakers: "Todos", // pendiente de revisión por Liz
+    reviewFlaggedOnly: "Solo marcadas", // pendiente de revisión por Liz
+    reviewSaid: "Dicho", // pendiente de revisión por Liz
+    reviewHeard: "Escuchado (transcripción)", // pendiente de revisión por Liz
+    reviewTranslated: "Traducido", // pendiente de revisión por Liz
+    reviewFlag: "Marcar", // pendiente de revisión por Liz
+    reviewFlagWords: "Palabras mal", // pendiente de revisión por Liz
+    reviewFlagMeaning: "Sentido mal", // pendiente de revisión por Liz
+    reviewFlagTone: "Tono mal", // pendiente de revisión por Liz
+    reviewFlagOther: "Otro", // pendiente de revisión por Liz
+    reviewFlagNote: "Nota (opcional, una línea)", // pendiente de revisión por Liz
+    reviewFlagNoteWords: "Lo que realmente se dijo", // pendiente de revisión por Liz
+    reviewFlagSave: "Guardar marca", // pendiente de revisión por Liz
+    reviewFlagClear: "Quitar marca", // pendiente de revisión por Liz
+    reviewFlagged: "Marcada", // pendiente de revisión por Liz
+    reviewExport: "Descargar clips marcados (.tar)", // pendiente de revisión por Liz
+    reviewExportHint: "Los turnos marcados como clips para la prueba del transcriptor.", // pendiente de revisión por Liz
+    reviewNothing: "Aún no hay turnos aquí.", // pendiente de revisión por Liz
+    reviewLoading: "Cargando…", // pendiente de revisión por Liz
+    reviewFailed: "No se pudo cargar. Intenta de nuevo.", // pendiente de revisión por Liz
+    reviewModels: "Modelos", // pendiente de revisión por Liz
+    reviewTiming: "Tiempos", // pendiente de revisión por Liz
+    reviewNotFound: "No encontrado", // pendiente de revisión por Liz
+    reviewRefresh: "↻ Actualizar" // pendiente de revisión por Liz
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

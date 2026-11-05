@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
+import { keepTurnForReview, speakerKeepsAudio, type Speaker } from "@/lib/review/capture";
 import {
   getLanguageLabel,
   isSupportedLanguageCode,
@@ -222,6 +224,56 @@ async function paraphraseAuto(
  */
 const ANON_MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 
+// ── Founder review (2026-11-04) ────────────────────────────────────────────
+// A founder who turned on "Keep my audio for review" gets this turn's clip,
+// transcript and translation copied into the review store for 14 days
+// (lib/review/capture.ts). Off the response path (waitUntil), only after the
+// turn succeeded, and only ever for the SPEAKER's own setting — an
+// anonymous or non-founder caller never reaches the database for this.
+// The home-history row stays exactly what it was: text, no audio.
+function keepForReview(input: {
+  user: Speaker | null;
+  keep: boolean;
+  audio: File;
+  mode: "manual" | "auto";
+  sourceLang: string;
+  targetLang: string;
+  original: string;
+  translation: string;
+  segments: unknown | null;
+  t: TranslateTiming;
+  startedAt: number;
+}): void {
+  if (!input.keep || !input.user) return;
+  const { audio, t } = input;
+  waitUntil(
+    audio
+      .arrayBuffer()
+      .then((bytes) =>
+        keepTurnForReview({
+          user: input.user as Speaker,
+          surface: "home",
+          mode: input.mode,
+          audio: bytes,
+          audioMime: audio.type || "audio/webm",
+          sourceLang: input.sourceLang,
+          targetLang: input.targetLang,
+          originalText: input.original,
+          translationText: input.translation,
+          segments: input.segments,
+          transcribeModel: t.transcribeModel === "?" ? null : t.transcribeModel,
+          translateModel: getTranslateModel(),
+          timings: {
+            transcribe_ms: typeof t.transcribeMs === "number" ? t.transcribeMs : undefined,
+            translate_ms: typeof t.translateMs === "number" ? t.translateMs : undefined,
+            total_ms: Date.now() - input.startedAt
+          }
+        })
+      )
+      .catch(() => null)
+  );
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const started = performance.now();
   const cold = instanceWarm ? 0 : 1;
@@ -276,6 +328,9 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
       t.err = "guard_blocked";
       return guard.response;
     }
+    // Asked now, awaited after the turn: one profile read for a founder,
+    // overlapped with the transcription; nothing at all for anyone else.
+    const keepPromise = speakerKeepsAudio(guard.user).catch(() => false);
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -383,6 +438,19 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
           Date.now() - startedAt
         }`
       );
+      keepForReview({
+        user: guard.user,
+        keep: await keepPromise,
+        audio,
+        mode: "auto",
+        sourceLang: top.sourceLanguage,
+        targetLang: top.targetLanguage,
+        original,
+        translation: top.translation,
+        segments: segments.length > 1 ? segments : null,
+        t,
+        startedAt
+      });
       // One segment is today's response exactly. Several keep the same
       // top-level fields (joined, direction from the first) so any reader of
       // them still works, plus the segments themselves.
@@ -436,6 +504,20 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
     );
     t.translateMs = since(t.stageStarted);
     t.outChars = translation.length;
+
+    keepForReview({
+      user: guard.user,
+      keep: await keepPromise,
+      audio,
+      mode: "manual",
+      sourceLang: sourceLanguage,
+      targetLang: targetLanguage,
+      original,
+      translation,
+      segments: null,
+      t,
+      startedAt
+    });
 
     return NextResponse.json({
       original,

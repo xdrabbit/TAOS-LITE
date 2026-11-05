@@ -223,6 +223,8 @@ const NAV_ICON_PATHS = {
   demo: ["M8 7a3 3 0 106 0 3 3 0 00-6 0z", "M4 20a7 7 0 0114 0", "M19 8.5a3 3 0 010 5M21.5 6a6.5 6.5 0 010 10"],
   // /taokie: a walkie-talkie — the antenna and the body.
   walkie: ["M9 2v4", "M7 6h10a1 1 0 011 1v13a1 1 0 01-1 1H7a1 1 0 01-1-1V7a1 1 0 011-1z", "M9.5 10h5M12 14v3"],
+  // /review: a waveform with a flag — listen to the turn, mark the bad one.
+  review: ["M3 12h2l2-5 3 10 3-8 2 5 2-2h4", "M19 4v6M19 4h3l-1 1.5L22 7h-3"],
   // /study: an open book — your own conversations, read back as lessons.
   study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"]
 } as const;
@@ -1480,6 +1482,26 @@ export function TranslatorShell({
                         >
                           <NavIcon name="walkie" />
                           {nav.navTaokie}
+                        </a>
+                      ) : null}
+                      {/* /review — founder translation review (2026-11-04):
+                          audio + transcript + translation side by side, with
+                          a flag. Founders only; nothing is kept until the
+                          founder flips their own opt-in on that screen. */}
+                      {founder ? (
+                        <a
+                          href="/review"
+                          role="menuitem"
+                          aria-label={nav.navReview}
+                          aria-current={pathname === "/review" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/review"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="review" />
+                          {nav.navReview}
                         </a>
                       ) : null}
                       {tutorEnabled() ? (

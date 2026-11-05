@@ -16,6 +16,28 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Founder translation review — keep audio (opt-in, 14 days) + /review with
+  flagging; built 2026-11-04, draft PR open, founders only.** Tom: translations
+  between him and Liz have "pretty horrible mistakes" and the text alone cannot
+  say whether the transcript or the translation went wrong. So: each founder
+  flips their OWN "Keep my audio for review" (`profiles.review_keep_audio`,
+  default off; nobody flips it for anyone else), and from then on their home
+  (`/api/translate`) and Taokie turns copy the clip into a private
+  `review-audio` bucket beside the transcript, the translation, the models and
+  the timings (`taos_lite_review_turns`, service role only). `/review` shows
+  them newest first — three columns on a laptop, stacked on a phone — with
+  ▶ audio, a day + speaker filter, and a one-tap flag: wrong words
+  (transcript) / wrong meaning (translation) / wrong tone / other, plus a
+  one-line note. "Download flagged clips" writes a tar in the exact clip-set
+  format `tests/live-fire/transcribe-accuracy.run.mjs --clips` reads
+  (`lib/review/clipSet.ts` is the one definition), so flagged real turns become
+  the transcriber probe's test set. Retention `TAOS_REVIEW_RETENTION_DAYS`
+  (14), stamped per row, swept by the existing daily walkie cron
+  (`/api/walkie/sweep`), by `/api/review/sweep`, and when a founder opens the
+  page. Live and Tabletop store nothing today and are out of scope; they could
+  join later only by adding a server hop that sees the audio.
+  → Phone test pending: Liz opts in on her phone, Tom reviews on the laptop.
+
 - **Taokie — push-to-talk translation walkie; P0 spike built 2026-11-01,
   draft PR open, founders only.** Two people in a channel. Hold the big
   button, talk, let go: the turn goes through the EXISTING home pipeline
