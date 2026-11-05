@@ -24,6 +24,7 @@ is `TAOS-LITE-arch.md` at the repo root. Agent rules: `CLAUDE.md`.
 ## Maps and wiring
 
 - `data-map.md` — live schema audit (2026-08-26; updated for PR #37 and tutor metering).
+- `merge-authority.md` — what an agent may land on `main` without asking: resolve vs stop rules, never-delegated guards, report format (2026-11-04).
 - `api-translation.md` — `/api/live-translate` and `/api/text-translate`.
 - `supabase-auth-redirects.md` — the Supabase dashboard allow-list paired with `lib/authRedirect.ts`.
 - `realtime-cost-model.md` — what a realtime minute costs on `/call`, `/live`, `/tabletop`.
