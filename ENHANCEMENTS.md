@@ -17,7 +17,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 ## Up next (roughly prioritized)
 
 - **Transcriber quits early on Spanish in auto mode — auto-retry, Redo,
-  quiet normalize; built 2026-11-05, draft PR open, founders see the
+  quiet normalize; built 2026-11-05, draft PR #122 open, founders see the
   buttons.** Production 2026-11-05 ~19:24 MT, home, auto, in a car: a 69 s
   clip came back from `gpt-4o-mini-transcribe` as five English words in
   2.6 s — Tom's few English words, then Liz's minute of Spanish read as
