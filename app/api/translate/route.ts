@@ -6,25 +6,26 @@ import {
   isSupportedLanguageCode,
   type SupportedLanguageCode
 } from "@/lib/realtime/languages";
-import {
-  buildAutoDetectInstructions,
-  buildInstructions,
-  CANTONESE_STT_HINT,
-  parseTone,
-  type Tone
-} from "@/lib/translate/prompts";
-import { parseContextField, type ContextTurn } from "@/lib/translate/context";
+import { CANTONESE_STT_HINT, parseTone } from "@/lib/translate/prompts";
+import { parseContextField } from "@/lib/translate/context";
 import {
   autoTranscribeModel,
   defaultTranscribeModel,
   transcribeAudio
 } from "@/lib/translate/transcribe";
-import { guardSpend } from "@/lib/spendGuard";
+import { getTranslateModel, paraphrase, paraphraseAuto } from "@/lib/translate/paraphrase";
+import { normalizeForStt, sttNormalizeEnabled } from "@/lib/translate/normalize";
 import {
-  parseAutoSegments,
-  topLevelFromSegments,
-  type TranslatedSegment
-} from "@/lib/translate/segments";
+  estimateClipSeconds,
+  fallbackTranscribeModel,
+  otherPairLanguage,
+  pickLongerTranscript,
+  retryTranscribeOptions,
+  shortTranscriptVerdict,
+  wordCount
+} from "@/lib/translate/shortTranscript";
+import { guardSpend } from "@/lib/spendGuard";
+import { topLevelFromSegments } from "@/lib/translate/segments";
 
 export const runtime = "nodejs";
 // 300s is the max on Vercel Pro. The client per-turn cap (MAX_TURN_DURATION_MS
@@ -37,17 +38,11 @@ export const maxDuration = 300;
 // opaque "Load failed". Cap each upstream call well under maxDuration so a
 // stall becomes a fast, retryable JSON error instead of a dead socket.
 // Transcription gets longer (it re-uploads up to 5 minutes of audio) and its
-// cap now lives with the transcriber, in lib/translate/transcribe.ts.
-const PARAPHRASE_TIMEOUT_MS = 60000;
+// cap now lives with the transcriber, in lib/translate/transcribe.ts; the
+// chat completion's cap lives with it in lib/translate/paraphrase.ts.
 
 function isTimeout(e: unknown): boolean {
   return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError");
-}
-
-// Full gpt-4.1 unless overridden — see paraphrase() for why this is not the
-// shared OPENAI_PARAPHRASE_MODEL var.
-function getTranslateModel(): string {
-  return process.env.OPENAI_TRANSLATE_MODEL?.trim() || "gpt-4.1";
 }
 
 // ── [taos-translate-timing] ────────────────────────────────────────────────
@@ -75,6 +70,27 @@ interface TranslateTiming {
   /** The stage in flight, so a thrown error can be named (and timed) after it. */
   stage: "guard" | "form" | "transcribe" | "translate";
   stageStarted: number;
+  // ── Short-transcript retry + quiet normalize (2026-11-05) ────────────────
+  /** The phone's own stopwatch for the recording, ms; "?" when it sent none. */
+  recMs: number | "?";
+  /** Words/s of the FIRST transcript against the clip length; "?" before transcription. */
+  wps: number | "?";
+  /** 1 when the fallback transcriber ran, else 0. */
+  retryStt: 0 | 1;
+  retryReason: "short" | "?";
+  retryModel: string;
+  /** The language the retry was hinted toward; "none" for no hint. */
+  retryHint: string;
+  /** Word counts of the first and the retry transcript. */
+  stt1Words: number | "?";
+  stt2Words: number | "?";
+  /** Which transcript the turn went on with. */
+  sttPicked: "first" | "retry" | "?";
+  /** Wall time of the retry transcription alone (transcribe_ms includes it). */
+  retryMs: number | "?";
+  /** Gain applied before transcription, dB; 0 = loud enough; "na" = no ffmpeg; "?" = off. */
+  normGainDb: number | "na" | "?";
+  normMs: number | "?";
 }
 
 // First request on this function instance — a cold start's tax lands here.
@@ -98,121 +114,18 @@ function attemptFlag(req: NextRequest): "0" | "1" | "?" {
   return n > 1 ? "1" : "0";
 }
 
+/** A non-negative integer form field, or null. */
+function intField(form: FormData, name: string): number | null {
+  const raw = form.get(name);
+  if (typeof raw !== "string") return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 // parseTone / buildInstructions / isUnusableAudioError live in
-// lib/translate/prompts.ts so their behavior is unit-tested, and the
-// transcriber itself now lives in lib/translate/transcribe.ts — unchanged,
-// but shared, so /fast's mic gets this route's STT fences rather than a
-// fourth hand-rolled copy of the same fetch without them.
-
-async function paraphrase(
-  apiKey: string,
-  text: string,
-  sourceLabel: string,
-  targetLabel: string,
-  tone: Tone,
-  context: ContextTurn[] | null
-): Promise<string> {
-  // Full gpt-4.1, not mini: field reports (7/23, Yellowstone) had casual-mode
-  // translations drifting to a different meaning entirely — mini paraphrases
-  // too loosely for a conversation that matters. Text tokens are cheap; the
-  // realtime voice features dominate cost, not this. Deliberately NOT the
-  // shared OPENAI_PARAPHRASE_MODEL var: that one is pinned to mini for the
-  // latency-sensitive /live and chat routes, and a deployed env value would
-  // silently drag this route back down to mini.
-  const model = getTranslateModel();
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      // 0.2 for BOTH tones (casual was 0.4 until 7/27): the adversarial probe's
-      // one leak was casual mode inventing an unspoken request, and the higher
-      // temperature is the knob that invites it. Fidelity is the priority now
-      // ("never loose meaning in Casual, no hallucinating, ever" — Tom, 7/27);
-      // the casual REGISTER comes from the prompt, not the sampler.
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: buildInstructions(sourceLabel, targetLabel, tone, context) },
-        { role: "user", content: text }
-      ]
-    }),
-    cache: "no-store",
-    signal: AbortSignal.timeout(PARAPHRASE_TIMEOUT_MS)
-  });
-
-  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!res.ok) {
-    const detail =
-      payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
-    throw Object.assign(new Error(`Translation failed: ${detail}`), { upstreamStatus: res.status });
-  }
-
-  const choices = Array.isArray(payload?.choices) ? payload?.choices : [];
-  const first = choices[0] as Record<string, unknown> | undefined;
-  const message = first?.message as Record<string, unknown> | undefined;
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
-  if (!content) {
-    throw new Error("Translation response was empty.");
-  }
-  return content;
-}
-
-// Auto-detect mode: the model decides which of the conversation PAIR's two
-// languages each part of the transcript is, and translates each part to the
-// other — returning ordered segments so the client knows every resolved
-// direction (for voice + display). A one-language turn is one segment.
-async function paraphraseAuto(
-  apiKey: string,
-  text: string,
-  tone: Tone,
-  a: { code: SupportedLanguageCode; label: string },
-  b: { code: SupportedLanguageCode; label: string },
-  context: ContextTurn[] | null
-): Promise<TranslatedSegment<SupportedLanguageCode>[]> {
-  const model = getTranslateModel(); // full, see paraphrase()
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2, // both tones — see paraphrase() for the 7/27 rationale
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: buildAutoDetectInstructions(a, b, tone, context) },
-        { role: "user", content: text }
-      ]
-    }),
-    cache: "no-store",
-    signal: AbortSignal.timeout(PARAPHRASE_TIMEOUT_MS)
-  });
-
-  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!res.ok) {
-    const detail =
-      payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
-    throw Object.assign(new Error(`Translation failed: ${detail}`), { upstreamStatus: res.status });
-  }
-  const choices = Array.isArray(payload?.choices) ? payload?.choices : [];
-  const first = choices[0] as Record<string, unknown> | undefined;
-  const message = first?.message as Record<string, unknown> | undefined;
-  const content = typeof message?.content === "string" ? message.content : "";
-  // source_lang is the language the SPEAKER used (see buildAutoDetectInstructions
-  // for why the field is named this and must not be renamed back to "lang").
-  // It becomes each segment's sourceLanguage for /api/tts, which is what picks
-  // Tom's clone vs Liz's — read it wrong and the turn plays the wrong voice.
-  //
-  // A segment with a code outside the pair is folded into its neighbour, and a
-  // reply with no usable segments falls back to the old single-source reading
-  // (pair's first language when even that code is missing). Both are logged:
-  // that silent fallback is exactly how the old inversion hid for five weeks.
-  // See lib/translate/segments.ts.
-  return parseAutoSegments(content, text, a.code, b.code).segments;
-}
+// lib/translate/prompts.ts so their behavior is unit-tested, the transcriber
+// in lib/translate/transcribe.ts (shared with /fast's mic), and the two chat
+// completions in lib/translate/paraphrase.ts (shared with /review's Redo).
 
 /**
  * The longest recording an anonymous /try caller may upload.
@@ -224,6 +137,43 @@ async function paraphraseAuto(
  */
 const ANON_MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 
+// ── Transcribe, with one bounded retry ─────────────────────────────────────
+// lib/translate/shortTranscript.ts has the why and the numbers. The first
+// transcription runs exactly as before; if its words-per-second says the
+// transcriber gave up on most of the clip, the SAME audio goes once through
+// the fallback transcriber — hinted toward the pair's other language in auto
+// mode, the known language in manual — and the turn goes on with the retry
+// only when it clearly says more. One retry, ever; transcribe_ms on the
+// timing line covers both.
+async function retryShort(
+  apiKey: string,
+  audio: File,
+  t: TranslateTiming,
+  first: string,
+  hint: { code: string; label: string } | null,
+  extraHint: string | undefined
+): Promise<string> {
+  t.retryStt = 1;
+  t.retryReason = "short";
+  const model = fallbackTranscribeModel();
+  t.retryModel = model;
+  t.retryHint = hint?.code ?? "none";
+  const t0 = performance.now();
+  let again = "";
+  try {
+    again = await transcribeAudio(apiKey, audio, retryTranscribeOptions(model, hint, extraHint));
+  } catch {
+    // The retry is a bonus, not a dependency: a failed second call keeps the
+    // first transcript and says so with stt2_words=? on the timing line.
+    again = "";
+  }
+  t.retryMs = since(t0);
+  t.stt2Words = again ? wordCount(again) : "?";
+  const picked = pickLongerTranscript(first, again);
+  t.sttPicked = picked.picked === "second" ? "retry" : "first";
+  return picked.text;
+}
+
 // ── Founder review (2026-11-04) ────────────────────────────────────────────
 // A founder who turned on "Keep my audio for review" gets this turn's clip,
 // transcript and translation copied into the review store for 14 days
@@ -231,7 +181,11 @@ const ANON_MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 // turn succeeded, and only ever for the SPEAKER's own setting — an
 // anonymous or non-founder caller never reaches the database for this.
 // The home-history row stays exactly what it was: text, no audio.
+//
+// The row id is minted HERE and returned to the phone as `reviewId`, so the
+// result card can offer Redo · Rehacer on a turn whose copy is still landing.
 function keepForReview(input: {
+  id: string;
   user: Speaker | null;
   keep: boolean;
   audio: File;
@@ -243,14 +197,15 @@ function keepForReview(input: {
   segments: unknown | null;
   t: TranslateTiming;
   startedAt: number;
-}): void {
-  if (!input.keep || !input.user) return;
+}): string | null {
+  if (!input.keep || !input.user) return null;
   const { audio, t } = input;
   waitUntil(
     audio
       .arrayBuffer()
       .then((bytes) =>
         keepTurnForReview({
+          id: input.id,
           user: input.user as Speaker,
           surface: "home",
           mode: input.mode,
@@ -261,6 +216,7 @@ function keepForReview(input: {
           originalText: input.original,
           translationText: input.translation,
           segments: input.segments,
+          recMs: t.recMs === "?" ? null : t.recMs,
           transcribeModel: t.transcribeModel === "?" ? null : t.transcribeModel,
           translateModel: getTranslateModel(),
           timings: {
@@ -272,6 +228,7 @@ function keepForReview(input: {
       )
       .catch(() => null)
   );
+  return input.id;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -293,7 +250,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     err: "?",
     transcribeModel: "?",
     stage: "guard",
-    stageStarted: started
+    stageStarted: started,
+    recMs: "?",
+    wps: "?",
+    retryStt: 0,
+    retryReason: "?",
+    retryModel: "?",
+    retryHint: "?",
+    stt1Words: "?",
+    stt2Words: "?",
+    sttPicked: "?",
+    retryMs: "?",
+    normGainDb: "?",
+    normMs: "?"
   };
   let res: NextResponse | undefined;
   try {
@@ -309,7 +278,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         ` translate_ms=${t.translateMs} translate_model=${getTranslateModel()}` +
         ` guard_ms=${t.guardMs} form_ms=${t.formMs} total_ms=${since(started)} src_chars=${t.srcChars}` +
         ` out_chars=${t.outChars} cold=${cold} retry=${attemptFlag(req)}` +
-        ` err=${ok ? "?" : t.err === "?" ? "unhandled" : t.err}`
+        ` err=${ok ? "?" : t.err === "?" ? "unhandled" : t.err}` +
+        ` rec_ms=${t.recMs} wps=${t.wps} retry_stt=${t.retryStt} retry_reason=${t.retryReason}` +
+        ` retry_model=${t.retryModel} retry_hint=${t.retryHint} stt1_words=${t.stt1Words}` +
+        ` stt2_words=${t.stt2Words} stt_picked=${t.sttPicked} retry_ms=${t.retryMs}` +
+        ` norm_gain_db=${t.normGainDb} norm_ms=${t.normMs}`
     );
   }
 }
@@ -354,6 +327,11 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
     // translates exactly as it did before context existed. Request-only:
     // never logged, never saved, never echoed back.
     const context = parseContextField(form.get("context"));
+    // How long the phone recorded, by its own clock. The short-transcript
+    // check needs the clip's length, and a MediaRecorder WebM does not carry
+    // one; absent, the length is estimated from the bytes.
+    const recMs = intField(form, "rec_ms");
+    t.recMs = recMs ?? "?";
     t.mode = sourceLanguage === "auto" ? "auto" : "manual";
     if (sourceLanguage === "auto") t.src = "auto";
     else if (isSupportedLanguageCode(sourceLanguage)) t.src = sourceLanguage;
@@ -375,6 +353,25 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
         { status: 413 }
       );
     }
+
+    // Quiet normalize (lib/translate/normalize.ts): founders by default,
+    // TAOS_STT_NORMALIZE=1/0 for everyone/nobody. The transcriber gets the
+    // normalized WAV; the review copy keeps the ORIGINAL clip, so a Redo and
+    // the probe see what the phone sent. Also the only honest clip length.
+    let sttAudio: File = audio;
+    let decodedSeconds: number | null = null;
+    if (sttNormalizeEnabled(guard.user?.email)) {
+      const norm = await normalizeForStt(audio);
+      if (norm) {
+        sttAudio = norm.file;
+        decodedSeconds = norm.seconds;
+        t.normGainDb = norm.gainDb;
+        t.normMs = norm.ms;
+      } else {
+        t.normGainDb = "na";
+      }
+    }
+    const clipSeconds = estimateClipSeconds({ recMs, decodedSeconds, bytes: audio.size, mime: audio.type });
 
     // Auto-detect direction: transcribe with no language hint, then let the
     // model decide which of the conversation pair's two languages it heard
@@ -398,10 +395,19 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
       t.transcribeModel = transcriber;
       t.stage = "transcribe";
       t.stageStarted = performance.now();
-      const original = await transcribeAudio(apiKey, audio, {
-        extraHint: autoHint,
-        model: transcriber
-      });
+      // The retry's hint is decided from the FIRST transcript: the language
+      // it locked onto is the one it heard first, so the retry is hinted
+      // toward the pair's other side (null when that cannot be told).
+      const first = await transcribeAudio(apiKey, sttAudio, { extraHint: autoHint, model: transcriber });
+      const verdict = shortTranscriptVerdict(first, clipSeconds);
+      t.stt1Words = verdict.words;
+      t.wps = verdict.wps;
+      let original = first;
+      if (verdict.short) {
+        const other = otherPairLanguage(first, pairA, pairB);
+        const hint = other && isSupportedLanguageCode(other) ? { code: other, label: getLanguageLabel(other) } : null;
+        original = await retryShort(apiKey, sttAudio, t, first, hint, autoHint);
+      }
       t.transcribeMs = since(t.stageStarted);
       t.srcChars = original.length;
       if (!original) {
@@ -438,7 +444,8 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
           Date.now() - startedAt
         }`
       );
-      keepForReview({
+      const reviewId = keepForReview({
+        id: crypto.randomUUID(),
         user: guard.user,
         keep: await keepPromise,
         audio,
@@ -458,7 +465,8 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
         ...top,
         tone,
         autoDetected: true,
-        ...(segments.length > 1 ? { segments } : {})
+        ...(segments.length > 1 ? { segments } : {}),
+        ...(reviewId ? { reviewId } : {})
       });
     }
 
@@ -481,7 +489,15 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
     t.transcribeModel = defaultTranscribeModel();
     t.stage = "transcribe";
     t.stageStarted = performance.now();
-    const original = await transcribeAudio(apiKey, audio, { sourceLabel });
+    // Manual direction: the language is known, so the retry keeps the same
+    // hint and only changes the model.
+    const first = await transcribeAudio(apiKey, sttAudio, { sourceLabel });
+    const verdict = shortTranscriptVerdict(first, clipSeconds);
+    t.stt1Words = verdict.words;
+    t.wps = verdict.wps;
+    const original = verdict.short
+      ? await retryShort(apiKey, sttAudio, t, first, { code: sourceLanguage, label: sourceLabel }, undefined)
+      : first;
     t.transcribeMs = since(t.stageStarted);
     t.srcChars = original.length;
     if (!original) {
@@ -505,7 +521,8 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
     t.translateMs = since(t.stageStarted);
     t.outChars = translation.length;
 
-    keepForReview({
+    const reviewId = keepForReview({
+      id: crypto.randomUUID(),
       user: guard.user,
       keep: await keepPromise,
       audio,
@@ -524,7 +541,8 @@ async function handle(req: NextRequest, t: TranslateTiming): Promise<NextRespons
       translation,
       sourceLanguage,
       targetLanguage,
-      tone
+      tone,
+      ...(reviewId ? { reviewId } : {})
     });
   } catch (error) {
     t.err = errorCode(t.stage, error);

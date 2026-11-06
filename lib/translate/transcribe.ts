@@ -54,6 +54,24 @@ export interface TranscribeOptions {
    * autoTranscribeModel()).
    */
   model?: string;
+  /**
+   * The API's own `language` field (ISO-639-1, "es"). Only the short-transcript
+   * retry and /review's Redo pass it (lib/translate/shortTranscript.ts); every
+   * first transcription is sent exactly as before. It exists because whisper-1
+   * reads `prompt` as sample text to continue, not as instructions — an
+   * English prompt that SAYS "Spoken Spanish" pulls whisper-1 toward English
+   * output (measured on the 11/5 clip: 48 English words for a minute of
+   * Spanish). The gpt-4o transcribers honour the field too.
+   */
+  languageCode?: string;
+  /**
+   * Send NO `prompt` at all. Set by the retry for the whisper family only
+   * (lib/translate/shortTranscript.ts retryTranscribeOptions): measured on the
+   * 11/5 clip, whisper-1 with `language=es` and no prompt returned 109–123
+   * Spanish words twice running; with the English instruction prompt beside
+   * it, 32 and 81. Never set on a first transcription.
+   */
+  omitPrompt?: boolean;
 }
 
 /** The model every surface's mic uses: OPENAI_TRANSCRIBE_MODEL, else gpt-4o-transcribe. */
@@ -98,6 +116,7 @@ export async function transcribeAudio(
   const form = new FormData();
   form.append("file", file, file.name || "audio.webm");
   form.append("model", model);
+  if (options.languageCode) form.append("language", options.languageCode);
   // A language hint sharpens accuracy; omit it in auto-detect mode so the model
   // is free to recognize whichever language was spoken. Cantonese always gets
   // the colloquial-written-form hint or the transcript comes back as Standard
@@ -108,7 +127,7 @@ export async function transcribeAudio(
     ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
     : `Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`;
   const hint = extraHint ?? (sourceLabel === "Cantonese" ? CANTONESE_STT_HINT : "");
-  form.append("prompt", hint ? `${base} ${hint}` : base);
+  if (!options.omitPrompt) form.append("prompt", hint ? `${base} ${hint}` : base);
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",

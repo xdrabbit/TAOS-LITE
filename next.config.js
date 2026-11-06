@@ -13,7 +13,17 @@ const nextConfig = {
       "/api/tutor/lessons": ["./content/tutor-course/**/*"],
       // The ffmpeg binary is resolved at runtime by path, which file tracing
       // can't see — without this the deployed function has no ffmpeg.
-      "/api/video/process": ["./node_modules/ffmpeg-static/ffmpeg"]
+      "/api/video/process": ["./node_modules/ffmpeg-static/ffmpeg"],
+      // Quiet normalize (lib/translate/normalize.ts) runs the same binary
+      // before transcription on /api/translate and /review's Redo. ~80 MB in
+      // each function's bundle; TAOS_STT_NORMALIZE=0 at BUILD time leaves it
+      // out, and at runtime the routes answer norm_gain_db=na without it.
+      ...(process.env.TAOS_STT_NORMALIZE?.trim() === "0"
+        ? {}
+        : {
+            "/api/translate": ["./node_modules/ffmpeg-static/ffmpeg"],
+            "/api/review/redo": ["./node_modules/ffmpeg-static/ffmpeg"]
+          })
     }
   }
 };

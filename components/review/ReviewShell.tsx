@@ -19,7 +19,9 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 //
 // Data: GET /api/review/turns (newest first, filtered by day and speaker),
 // POST /api/review/flag (one tap = one reason, saved at once), GET/POST
-// /api/review/settings (the opt-in), GET /api/review/export (the tar).
+// /api/review/settings (the opt-in), GET /api/review/export (the tar),
+// POST /api/review/redo (Redo · Rehacer: the kept clip through the fallback
+// transcriber + the same translation, shown beside the first result).
 
 type Turn = ReviewTurnRow & { audio_url: string | null };
 
@@ -68,6 +70,7 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [redoing, setRedoing] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
   const reasonLabel: Record<FlagReason, string> = useMemo(
@@ -156,6 +159,29 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
       setError(s.reviewFailed);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function redo(turn: Turn): Promise<void> {
+    setRedoing(turn.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/review/redo", {
+        method: "POST",
+        headers: await jsonAuthHeaders(),
+        body: JSON.stringify({ id: turn.id })
+      });
+      const payload = (await res.json().catch(() => ({}))) as { turn?: ReviewTurnRow };
+      if (res.ok && payload.turn) {
+        const saved = payload.turn;
+        setTurns((list) => list.map((t) => (t.id === saved.id ? { ...t, ...saved } : t)));
+      } else {
+        setError(s.redoFailed);
+      }
+    } catch {
+      setError(s.redoFailed);
+    } finally {
+      setRedoing(null);
     }
   }
 
@@ -332,6 +358,46 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
                     <span className="text-xs text-amber-100/50">{s.reviewTranslated} · {langLabel(turn.target_lang)}</span>
                     <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.translation_text}</p>
                   </div>
+                </div>
+
+                {/* Redo · Rehacer: the same clip through the fallback transcriber,
+                    kept beside the first result and marked. Both stay. */}
+                <div className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-3" data-review-redo={turn.id}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      data-review-redo-button=""
+                      disabled={redoing === turn.id}
+                      onClick={() => void redo(turn)}
+                      className="min-h-[44px] rounded-xl border border-sky-300/40 bg-sky-400/10 px-3 text-sm text-sky-100 transition hover:bg-sky-400/20 disabled:opacity-50"
+                    >
+                      {redoing === turn.id ? s.redoBusy : `↻ ${s.redo}`}
+                    </button>
+                    {turn.redo ? (
+                      <span className="text-xs text-amber-100/50">
+                        {s.redoFirst}: {turn.transcribe_model ?? "?"} · {s.redoSecond}: {turn.redo.model}
+                        {turn.redo.language_hint ? ` (${langLabel(turn.redo.language_hint)})` : ""}
+                        {typeof turn.redo.norm_gain_db === "number" ? ` · +${turn.redo.norm_gain_db} dB` : ""}
+                        {" · "}stt {ms(turn.redo.timings?.transcribe_ms)} · tr {ms(turn.redo.timings?.translate_ms)}
+                      </span>
+                    ) : null}
+                  </div>
+                  {turn.redo ? (
+                    <div className="grid gap-3 rounded-xl border border-sky-300/20 bg-sky-400/5 p-3 md:grid-cols-2">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-sky-100/60">
+                          {s.redoSecond} · {s.reviewHeard} · {langLabel(turn.redo.source_lang)}
+                        </span>
+                        <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.redo.original_text || "–"}</p>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-sky-100/60">
+                          {s.redoSecond} · {s.reviewTranslated} · {langLabel(turn.redo.target_lang)}
+                        </span>
+                        <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.redo.translation_text || "–"}</p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 {/* The flag: one tap saves it; the note is optional. */}

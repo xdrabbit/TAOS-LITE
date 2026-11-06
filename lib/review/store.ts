@@ -70,8 +70,31 @@ export interface ReviewTurnRow {
   flag_note: string;
   flagged_at: string | null;
   flagged_by: string | null;
+  /** Redo · Rehacer (supabase/migrations/20261106_review_redo.sql). Null = never redone. */
+  redo: ReviewRedo | null;
+  redo_at: string | null;
   created_at: string;
   expires_at: string;
+}
+
+/**
+ * The kept clip re-run through the fallback transcriber and the same
+ * translation (app/api/review/redo/route.ts). The row's own original_text /
+ * translation_text are the "first" half of the pair; this is the "redo"
+ * half. Latest only.
+ */
+export interface ReviewRedo {
+  model: string;
+  /** The language the retry was hinted toward, or null for no hint. */
+  language_hint: string | null;
+  source_lang: string;
+  target_lang: string;
+  original_text: string;
+  translation_text: string;
+  segments: unknown | null;
+  norm_gain_db: number | null;
+  timings: ReviewTimings;
+  at: string;
 }
 
 export interface NewReviewTurn {
@@ -256,6 +279,47 @@ export async function flagReviewTurn(
     .select("*")
     .maybeSingle();
   if (error) throw new ReviewStoreError(`Could not save the flag: ${error.message}`, "flag_failed");
+  return (data as ReviewTurnRow | null) ?? null;
+}
+
+/** One unexpired turn by id, or null. */
+export async function readReviewTurn(id: string, nowMs: number = Date.now()): Promise<ReviewTurnRow | null> {
+  requireAdmin();
+  const { data, error } = await supabaseAdmin
+    .from(REVIEW_TABLE)
+    .select("*")
+    .eq("id", id)
+    .gt("expires_at", new Date(nowMs).toISOString())
+    .maybeSingle();
+  if (error) throw new ReviewStoreError(`Could not read the turn: ${error.message}`, "read_failed");
+  return (data as ReviewTurnRow | null) ?? null;
+}
+
+const MAX_REDO_TEXT_CHARS = 4000;
+
+/**
+ * Store a Redo on a turn. Only the two redo columns: this path cannot touch
+ * the first result, the flag, or anything a person wrote.
+ */
+export async function saveReviewRedo(
+  id: string,
+  redo: ReviewRedo,
+  nowMs: number = Date.now()
+): Promise<ReviewTurnRow | null> {
+  requireAdmin();
+  const clipped: ReviewRedo = {
+    ...redo,
+    original_text: redo.original_text.slice(0, MAX_REDO_TEXT_CHARS),
+    translation_text: redo.translation_text.slice(0, MAX_REDO_TEXT_CHARS)
+  };
+  const { data, error } = await supabaseAdmin
+    .from(REVIEW_TABLE)
+    .update({ redo: clipped, redo_at: new Date(nowMs).toISOString() })
+    .eq("id", id)
+    .gt("expires_at", new Date(nowMs).toISOString())
+    .select("*")
+    .maybeSingle();
+  if (error) throw new ReviewStoreError(`Could not save the redo: ${error.message}`, "redo_failed");
   return (data as ReviewTurnRow | null) ?? null;
 }
 

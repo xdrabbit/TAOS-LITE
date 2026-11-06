@@ -284,6 +284,13 @@ export function TranslatorShell({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioFetching, setIsAudioFetching] = useState(false);
   const [resultAudio, setResultAudio] = useState<{ generation: number; blob: Blob } | null>(null);
+  // Redo · Rehacer (2026-11-05): the review row this turn was kept as, when
+  // the speaker is a founder who opted in — the server says so with
+  // `reviewId`; nobody else ever gets the button. The redo result sits
+  // beside the first one on the card; both stay until the next turn.
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [redo, setRedo] = useState<{ original: string; translation: string; model: string } | null>(null);
+  const [redoState, setRedoState] = useState<"idle" | "busy" | "failed" | "gone">("idle");
   const [wrappingUp, setWrappingUp] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   // Two menus, and the names say which is which now: the nine-dot GRID is the
@@ -304,6 +311,7 @@ export function TranslatorShell({
   const mimeRef = useRef<string>("");
   const lastBlobRef = useRef<Blob | null>(null);
   const lastMimeRef = useRef<string>("");
+  const lastTurnMsRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const resultAudioRef = useRef<Blob | null>(null);
@@ -907,6 +915,7 @@ export function TranslatorShell({
     // Keep the clip so "Flip" can re-run it the other way without re-recording.
     lastBlobRef.current = blob;
     lastMimeRef.current = mime;
+    lastTurnMsRef.current = turnMs;
     preTurnContextRef.current = contextRef.current;
     await translateBlob(blob, mime, autoDetect ? "auto" : source, autoDetect ? "auto" : target);
   }
@@ -925,6 +934,9 @@ export function TranslatorShell({
     setTranslation("");
     showSegments(null);
     clearResultAudio();
+    setReviewId(null);
+    setRedo(null);
+    setRedoState("idle");
     setStatus("processing");
     try {
       const form = new FormData();
@@ -932,6 +944,11 @@ export function TranslatorShell({
       form.append("sourceLanguage", src);
       form.append("targetLanguage", tgt);
       form.append("tone", TONE);
+      // How long this clip is, by the phone's clock: the server's
+      // short-transcript check (lib/translate/shortTranscript.ts) needs the
+      // length and a MediaRecorder WebM does not carry one. Flip re-sends
+      // the same clip, so the same number.
+      if (lastTurnMsRef.current > 0) form.append("rec_ms", String(Math.round(lastTurnMsRef.current)));
       if (src === "auto") {
         // Auto-detect is scoped to the active pair — the server decides which
         // of THESE two languages was spoken, never guessing beyond them.
@@ -958,6 +975,7 @@ export function TranslatorShell({
         sourceLanguage?: string;
         targetLanguage?: string;
         segments?: unknown;
+        reviewId?: unknown;
         error?: string;
         details?: string;
       };
@@ -982,6 +1000,7 @@ export function TranslatorShell({
 
       setOriginal(typeof payload.original === "string" ? payload.original : "");
       setTranslation(typeof payload.translation === "string" ? payload.translation : "");
+      setReviewId(typeof payload.reviewId === "string" && founder ? payload.reviewId : null);
       setStatus("done");
       if (payload.translation) {
         // Stamp the turn with its conversation: the same id while the turns
@@ -1046,6 +1065,38 @@ export function TranslatorShell({
 
   // Re-translate the LAST recording in the opposite direction — fixes the
   // "wrong person's side was selected" mix-up with no re-recording.
+  // Redo · Rehacer: the kept clip through the fallback transcriber and the
+  // same translation (POST /api/review/redo). The copy lands behind the
+  // response (waitUntil), so a tap within a second of the result can meet a
+  // row that is not there yet — one quiet retry after a short wait.
+  async function redoLast(attempt = 1): Promise<void> {
+    if (!reviewId) return;
+    setRedoState("busy");
+    try {
+      const res = await fetch("/api/review/redo", {
+        method: "POST",
+        headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+        body: JSON.stringify({ id: reviewId })
+      });
+      if (res.status === 404 && attempt === 1) {
+        await new Promise((r) => setTimeout(r, 1500));
+        return redoLast(2);
+      }
+      const payload = (await res.json().catch(() => ({}))) as {
+        turn?: { redo?: { original_text?: string; translation_text?: string; model?: string } | null };
+      };
+      const r = payload.turn?.redo;
+      if (!res.ok || !r) {
+        setRedoState(res.status === 404 ? "gone" : "failed");
+        return;
+      }
+      setRedo({ original: r.original_text ?? "", translation: r.translation_text ?? "", model: r.model ?? "?" });
+      setRedoState("idle");
+    } catch {
+      setRedoState("failed");
+    }
+  }
+
   function flipLast() {
     const blob = lastBlobRef.current;
     if (!blob || status === "recording" || status === "processing") return;
@@ -1862,6 +1913,19 @@ export function TranslatorShell({
                     <TextOnlyNote />
                   ) : (
                     <>
+                      {reviewId ? (
+                        <button
+                          type="button"
+                          data-redo-button=""
+                          onClick={() => void redoLast()}
+                          disabled={redoState === "busy"}
+                          className="flex items-center gap-1 rounded-full border border-sky-300/30 bg-sky-400/10 px-3 py-1 text-sky-100 transition disabled:opacity-50"
+                          aria-label={s.redo}
+                        >
+                          <span aria-hidden="true" className="text-base">↻</span>
+                          <span className="text-[11px]">{redoState === "busy" ? s.redoBusy : s.redo}</span>
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => void shareTranslationAudio()}
@@ -1921,6 +1985,27 @@ export function TranslatorShell({
                 <span className="uppercase tracking-wider text-emerald-100/40">{s.heard}:</span>{" "}
                 {original}
               </p>
+            ) : null}
+            {redo ? (
+              // The redo beside the first result, both marked: the first
+              // stays above exactly as it was.
+              <div
+                data-redo-result=""
+                className="mt-3 rounded-2xl border border-sky-300/20 bg-sky-400/5 p-3 text-sm"
+              >
+                <div className="text-[11px] uppercase tracking-[0.18em] text-sky-100/60">
+                  {s.redoSecond} · {redo.model}
+                </div>
+                <p className="mt-1 text-pretty text-lg font-semibold leading-tight text-white">{redo.translation || "–"}</p>
+                {redo.original ? (
+                  <p className="mt-1 text-emerald-50/55">
+                    <span className="uppercase tracking-wider text-emerald-100/40">{s.heard}:</span> {redo.original}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            {redoState === "failed" || redoState === "gone" ? (
+              <p className="mt-2 text-xs text-rose-200/80">{redoState === "gone" ? s.redoGone : s.redoFailed}</p>
             ) : null}
           </div>
 
