@@ -16,6 +16,48 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Transcriber quits early on Spanish in auto mode — auto-retry, Redo,
+  quiet normalize; built 2026-11-05, draft PR open, founders see the
+  buttons.** Production 2026-11-05 ~19:24 MT, home, auto, in a car: a 69 s
+  clip came back from `gpt-4o-mini-transcribe` as five English words in
+  2.6 s — Tom's few English words, then Liz's minute of Spanish read as
+  silence (the October probe's weakness; the clip is kept in the review
+  bucket, Tom's turn 11/5 07:24 PM, 1:09, and
+  `tests/live-fire/short-transcript-retry.measure.ts` replays it). Three
+  things, in order:
+  1. **Auto-retry on short transcripts** (`/api/translate`,
+     `lib/translate/shortTranscript.ts`): under 0.4 words/s on a clip of 8 s
+     or more, the same audio goes ONCE through `TAOS_TRANSCRIBE_FALLBACK_MODEL`
+     (default `whisper-1`; it retires 2027-02-26, `gpt-transcribe` is the
+     named successor) hinted toward the pair's other language — in the API's
+     `language` field, and with NO prompt for the whisper family, because
+     whisper-1 reads an English instruction prompt as text to continue
+     (measured: 48 English words for a minute of Spanish). The retry replaces
+     the first transcript only when it says at least 2× as much (a wrong hint
+     makes whisper-1 invent the hinted language at ~1.7×). The phone now
+     sends `rec_ms`; the timing line carries `rec_ms wps retry_stt
+     retry_reason retry_model retry_hint stt1_words stt2_words stt_picked
+     retry_ms norm_gain_db norm_ms`. On the 11/5 clip: 7 words → 100+
+     Spanish words from either whisper-1 (language=es, no prompt) or
+     gpt-4o-transcribe; the auto-retry would have caught it.
+  2. **Redo · Rehacer** (`POST /api/review/redo`): on `/review` and on home's
+     result card (only a turn the server kept, `reviewId` in the response),
+     the kept clip through the fallback transcriber + the same translation,
+     stored on the row as `redo` beside the first result, both shown and
+     marked. Founders only, `guardSpend` first. Every tap is one more
+     real-clip transcriber comparison.
+  3. **Quiet normalize** (`lib/translate/normalize.ts`): ffmpeg-static
+     (already shipped for /video) peak-normalizes the clip to −1 dBFS before
+     transcription, +30 dB cap, boost only; `TAOS_STT_NORMALIZE` 1/0/unset =
+     everyone/nobody/founders. The binary rides along in the /api/translate
+     and /api/review/redo bundles (~80 MB each) unless the flag is 0 at build.
+  → Decisions for Tom: the fallback model (whisper-1 vs gpt-4o-transcribe —
+  both recover the 11/5 clip; whisper-1 is the other model family but
+  hallucinates harder under a wrong hint and retires in Feb 2027), whether
+  the ffmpeg bundle cost is worth it before normalize is measured, and
+  whether `rec_ms` should also feed the review row for Taokie-style timing.
+  → Phone test pending: a car turn with Liz, then Redo on /review.
+
 - **Founder translation review — keep audio (opt-in, 14 days) + /review with
   flagging; built 2026-11-04, draft PR open, founders only.** Tom: translations
   between him and Liz have "pretty horrible mistakes" and the text alone cannot
