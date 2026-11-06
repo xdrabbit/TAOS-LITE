@@ -49,6 +49,12 @@ export async function speakerKeepsAudio(user: Speaker | null | undefined): Promi
 }
 
 export interface KeepTurnInput {
+  /**
+   * The row id, when the caller minted it first. /api/translate does, so it
+   * can hand the phone a `reviewId` for Redo in the same response the copy
+   * is still being written behind (waitUntil). Omitted = minted here.
+   */
+  id?: string;
   user: Speaker;
   surface: ReviewSurface;
   mode: "manual" | "auto";
@@ -69,7 +75,7 @@ const MAX_TEXT_CHARS = 4000;
 
 /** Copy the clip and write the row. Resolves to the new row id, or null. */
 export async function keepTurnForReview(input: KeepTurnInput): Promise<string | null> {
-  const id = crypto.randomUUID();
+  const id = input.id ?? crypto.randomUUID();
   const mime = input.audioMime || "audio/webm";
   const path = reviewAudioPath(input.user.id, id, mime);
   const bytes = input.audio.byteLength;
