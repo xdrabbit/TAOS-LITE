@@ -1075,6 +1075,14 @@ blank.
 
 ## Shipped
 
+- /review in Spanish for Liz — the review page's chrome (gate, filters,
+  counts, language names, flag buttons) follows the phone owner's language
+  via `lib/chrome/copy.ts`, keyed on `mine` — 2026-11-06, PR #120
+- Second opinion on /review — a second transcriber re-reads each kept clip
+  (word-diffed) and a text model grades the translation (meaning, tone,
+  issues) per turn or per day; "Suspects first" sorts by the lowest score;
+  it highlights, a founder flags; nightly pass stays off
+  (`TAOS_REVIEW_NIGHTLY` unset) — 2026-11-06, PR #121
 - Founder translation review — each founder opts their OWN audio in
   (`profiles.review_keep_audio`, default off); home and Taokie turns keep the
   clip 14 days (`TAOS_REVIEW_RETENTION_DAYS`) in the private `review-audio`
