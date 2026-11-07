@@ -386,8 +386,11 @@ const EN = {
   // Founders-only (2026-11-04): the turns Tom and Liz spoke, with the audio
   // beside the transcript and the translation, so a bad one can be flagged
   // as "wrong words" (the transcript) or "wrong meaning" (the translation).
-  // The Spanish strings below are PLACEHOLDERS marked "pendiente de revisión
-  // por Liz" — nobody at this table who reads Spanish has checked them yet.
+  // The Spanish strings are marked "pendiente de revisión por Liz" — Tom wrote
+  // the wording on 2026-11-04 and Liz has not read it yet. Everything the
+  // screen says is here, the sign-in and not-found cards included: the gate
+  // follows the same `mine` as the shell, so a Spanish phone never meets an
+  // English card on the way in.
   navReview: "Review",
   reviewTitle: "Review",
   reviewTagline: "Listen, read, flag the ones that went wrong.",
@@ -420,7 +423,17 @@ const EN = {
   reviewModels: "Models",
   reviewTiming: "Timing",
   reviewNotFound: "Not found",
-  reviewRefresh: "↻ Refresh"
+  reviewRefresh: "↻ Refresh",
+  // The count under the filters. {count} is turns shown, {flagged} how many of
+  // them carry a flag — a template, because Spanish puts the noun first.
+  reviewCount: "{count} turns · {flagged} flagged",
+  // The last figure on the timing line (rec · stt · tr · tts are codes, not
+  // words, and stay as they are in every language).
+  reviewTimingTotal: "all",
+  // The gate's two cards: signed out, and signed in but not a founder.
+  reviewSignIn: "Sign in",
+  reviewSignInHint: "Sign in with a founder account to review turns.",
+  reviewBackHome: "← Back to TAOS"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -731,15 +744,15 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     vozRevealHint: "Di o escribe una frase en tu idioma. La escucharás en {language}, con tu voz.",
     vozUsedToday: "Esa fue tu prueba gratis de hoy.",
     vozAgainSignUp: "¿Otra vez? Crea tu cuenta gratis",
-    navReview: "Revisión", // pendiente de revisión por Liz
-    reviewTitle: "Revisión", // pendiente de revisión por Liz
+    navReview: "Revisar", // pendiente de revisión por Liz
+    reviewTitle: "Revisar", // pendiente de revisión por Liz
     reviewTagline: "Escucha, lee y marca las que salieron mal.", // pendiente de revisión por Liz
-    reviewKeepAudio: "Guardar mi audio para revisión", // pendiente de revisión por Liz
-    reviewKeepAudioHint: "Solo tus propios turnos en Inicio y Taokie. Los clips se borran a los {days} días.", // pendiente de revisión por Liz
+    reviewKeepAudio: "Guardar mi audio para revisar", // pendiente de revisión por Liz
+    reviewKeepAudioHint: "Solo tus turnos en Inicio y Taokie. Los clips se borran a los {days} días.", // pendiente de revisión por Liz
     reviewKeepAudioOff: "Tus turnos no se están guardando. Actívalo y tus próximos turnos aparecerán aquí.", // pendiente de revisión por Liz
     reviewDay: "Día", // pendiente de revisión por Liz
     reviewAllDays: "Todos los días", // pendiente de revisión por Liz
-    reviewSpeaker: "Quién habló", // pendiente de revisión por Liz
+    reviewSpeaker: "Quién habla", // pendiente de revisión por Liz
     reviewAllSpeakers: "Todos", // pendiente de revisión por Liz
     reviewFlaggedOnly: "Solo marcadas", // pendiente de revisión por Liz
     reviewSaid: "Dicho", // pendiente de revisión por Liz
@@ -751,19 +764,24 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     reviewFlagTone: "Tono mal", // pendiente de revisión por Liz
     reviewFlagOther: "Otro", // pendiente de revisión por Liz
     reviewFlagNote: "Nota (opcional, una línea)", // pendiente de revisión por Liz
-    reviewFlagNoteWords: "Lo que realmente se dijo", // pendiente de revisión por Liz
+    reviewFlagNoteWords: "Lo que de verdad se dijo", // pendiente de revisión por Liz
     reviewFlagSave: "Guardar marca", // pendiente de revisión por Liz
     reviewFlagClear: "Quitar marca", // pendiente de revisión por Liz
     reviewFlagged: "Marcada", // pendiente de revisión por Liz
     reviewExport: "Descargar clips marcados (.tar)", // pendiente de revisión por Liz
-    reviewExportHint: "Los turnos marcados como clips para la prueba del transcriptor.", // pendiente de revisión por Liz
+    reviewExportHint: "Los turnos marcados, listos como clips para la prueba del transcriptor.", // pendiente de revisión por Liz
     reviewNothing: "Aún no hay turnos aquí.", // pendiente de revisión por Liz
     reviewLoading: "Cargando…", // pendiente de revisión por Liz
     reviewFailed: "No se pudo cargar. Intenta de nuevo.", // pendiente de revisión por Liz
     reviewModels: "Modelos", // pendiente de revisión por Liz
     reviewTiming: "Tiempos", // pendiente de revisión por Liz
     reviewNotFound: "No encontrado", // pendiente de revisión por Liz
-    reviewRefresh: "↻ Actualizar" // pendiente de revisión por Liz
+    reviewRefresh: "↻ Actualizar", // pendiente de revisión por Liz
+    reviewCount: "{count} turnos · {flagged} con marca", // pendiente de revisión por Liz
+    reviewTimingTotal: "total", // pendiente de revisión por Liz
+    reviewSignIn: "Inicia sesión", // pendiente de revisión por Liz
+    reviewSignInHint: "Inicia sesión con una cuenta de fundador para revisar los turnos.", // pendiente de revisión por Liz
+    reviewBackHome: "← Volver a TAOS" // pendiente de revisión por Liz
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

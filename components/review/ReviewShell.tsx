@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import { ExitHome } from "@/components/ExitHome";
 import { copyFor, fill } from "@/lib/chrome/copy";
-import { getLanguageLabel, isSupportedLanguageCode } from "@/lib/realtime/languages";
+import { languageLabel, languageLabelEs } from "@/lib/languages/catalog";
 import { FLAG_NOTE_MAX, FLAG_REASONS, type FlagReason } from "@/lib/review/flag";
 import type { ReviewSpeaker, ReviewTurnRow } from "@/lib/review/store";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
@@ -46,8 +46,13 @@ export function todayValue(now: Date = new Date()): string {
   return `${y}-${mo}-${d}`;
 }
 
-function langLabel(code: string): string {
-  return isSupportedLanguageCode(code) ? getLanguageLabel(code) : code;
+/**
+ * A language's name in the CHROME's language — "Inglés" on Liz's phone,
+ * "English" on Tom's. The catalog carries both (label / labelEs); an unknown
+ * code comes back upper-cased from either, never blank.
+ */
+function langLabel(code: string, chrome: string): string {
+  return chrome === "es" ? languageLabelEs(code) : languageLabel(code);
 }
 
 function ms(n: unknown): string {
@@ -272,9 +277,7 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
           <input type="checkbox" checked={flaggedOnly} onChange={(e) => setFlaggedOnly(e.target.checked)} className="h-5 w-5 accent-amber-400" />
           <span>{s.reviewFlaggedOnly}</span>
         </label>
-        <span className="ml-auto text-xs text-amber-100/50">
-          {turns.length} · {s.reviewFlagged.toLowerCase()} {flaggedCount}
-        </span>
+        <span className="ml-auto text-xs text-amber-100/50">{fill(s.reviewCount, { count: turns.length, flagged: flaggedCount })}</span>
       </section>
 
       {error ? <p className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
@@ -319,17 +322,17 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
                       {typeof turn.rec_ms === "number" ? `rec ${ms(turn.rec_ms)} · ` : ""}
                       stt {ms(turn.timings?.transcribe_ms)} · tr {ms(turn.timings?.translate_ms)}
                       {typeof turn.timings?.tts_ms === "number" ? ` · tts ${ms(turn.timings.tts_ms)}` : ""}
-                      {typeof turn.timings?.total_ms === "number" ? ` · all ${ms(turn.timings.total_ms)}` : ""}
+                      {typeof turn.timings?.total_ms === "number" ? ` · ${s.reviewTimingTotal} ${ms(turn.timings.total_ms)}` : ""}
                     </div>
                   </div>
                   {/* Column 2: what the transcriber heard. */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-xs text-amber-100/50">{s.reviewHeard} · {langLabel(turn.source_lang)}</span>
+                    <span className="text-xs text-amber-100/50">{s.reviewHeard} · {langLabel(turn.source_lang, mine)}</span>
                     <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.original_text}</p>
                   </div>
                   {/* Column 3: what the translator made of it. */}
                   <div className="flex flex-col gap-1">
-                    <span className="text-xs text-amber-100/50">{s.reviewTranslated} · {langLabel(turn.target_lang)}</span>
+                    <span className="text-xs text-amber-100/50">{s.reviewTranslated} · {langLabel(turn.target_lang, mine)}</span>
                     <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.translation_text}</p>
                   </div>
                 </div>

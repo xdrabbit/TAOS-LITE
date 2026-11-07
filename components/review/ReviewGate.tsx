@@ -5,12 +5,19 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { reviewGateState } from "@/lib/review/flag";
 import { SignIn } from "@/components/SignIn";
+import { copyFor } from "@/lib/chrome/copy";
+import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 
 // /review's gate — WalkieGate (components/walkie/WalkieGate.tsx) without the
 // flag. Runs in the browser off the client-held session, so it HIDES the
 // screen; the fence is lib/review/guard.ts on every route, which answers a
 // non-founder with 404. A signed-in non-founder sees the same answer here —
 // a plain "Not found" card, no advert — and is not bounced anywhere.
+//
+// The cards read in the phone owner's language, from the same `mine` the
+// shell behind them uses (lib/chrome/copy.ts), rather than the doubled
+// "Inicia sesión · Sign in" the other gates still carry. Liz is the reader
+// this page was built for, and the gate is the first thing she sees.
 
 function Card({ children }: { children: ReactNode }): JSX.Element {
   return (
@@ -23,6 +30,8 @@ function Card({ children }: { children: ReactNode }): JSX.Element {
 }
 
 export function ReviewGate({ children }: { children: ReactNode }): JSX.Element {
+  const { mine } = useLanguagePair();
+  const s = copyFor(mine);
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [showSignIn, setShowSignIn] = useState(false);
@@ -51,40 +60,33 @@ export function ReviewGate({ children }: { children: ReactNode }): JSX.Element {
   if (state === "denied") {
     return (
       <Card>
-        <h1 className="text-xl font-semibold text-amber-200">404 · Not found · No encontrado</h1>
+        <h1 className="text-xl font-semibold text-amber-200">404 · {s.reviewNotFound}</h1>
         <a
           href="/"
           className="rounded-2xl bg-amber-400 px-5 py-2.5 text-sm font-semibold text-stone-950 transition active:scale-[0.99]"
         >
-          ← Back to TAOS · Volver
+          {s.reviewBackHome}
         </a>
       </Card>
     );
   }
 
   if (state === "sign-in") {
-    if (showSignIn) return <SignIn redirectPath="/review" title="Review" />;
+    if (showSignIn) return <SignIn redirectPath="/review" title={s.reviewTitle} />;
     return (
       <Card>
-        <h1 className="text-xl font-semibold text-amber-200">Inicia sesión · Sign in</h1>
-        <p className="text-sm text-amber-100/70">
-          Sign in with a founder account to review turns.
-          <br />
-          {/* pendiente de revisión por Liz */}
-          Inicia sesión con una cuenta de fundador para revisar los turnos.
-        </p>
+        <h1 className="text-xl font-semibold text-amber-200">{s.reviewSignIn}</h1>
+        <p className="text-sm text-amber-100/70">{s.reviewSignInHint}</p>
         <button
           type="button"
           onClick={() => setShowSignIn(true)}
           className="rounded-2xl bg-amber-400 px-5 py-2.5 text-sm font-semibold text-stone-950 transition active:scale-[0.99]"
         >
-          Inicia sesión · Sign in
+          {s.reviewSignIn}
         </button>
       </Card>
     );
   }
 
-  return (
-    <main className="flex min-h-screen items-center justify-center text-amber-100/60">Loading…</main>
-  );
+  return <main className="flex min-h-screen items-center justify-center text-amber-100/60">{s.reviewLoading}</main>;
 }
