@@ -21,6 +21,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import type { ReviewOpinion } from "@/lib/review/opinion";
+import type { ReviewRedo } from "@/lib/review/store";
 
 const TOM = "aaaaaaaa-0000-4000-8000-00000000000a";
 const LIZ = "bbbbbbbb-0000-4000-8000-00000000000b";
@@ -136,6 +137,8 @@ function baseRow() {
     opinion: null as ReviewOpinion | null,
     opinion_score: null as number | null,
     opinion_at: null as string | null,
+    redo: null as ReviewRedo | null,
+    redo_at: null as string | null,
     created_at: "2026-11-04T18:00:00.000Z",
     expires_at: "2099-01-01T00:00:00.000Z"
   };

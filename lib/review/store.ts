@@ -332,19 +332,6 @@ export async function flagReviewTurn(
   return (data as ReviewTurnRow | null) ?? null;
 }
 
-/** One unexpired turn by id, or null. */
-export async function readReviewTurn(id: string, nowMs: number = Date.now()): Promise<ReviewTurnRow | null> {
-  requireAdmin();
-  const { data, error } = await supabaseAdmin
-    .from(REVIEW_TABLE)
-    .select("*")
-    .eq("id", id)
-    .gt("expires_at", new Date(nowMs).toISOString())
-    .maybeSingle();
-  if (error) throw new ReviewStoreError(`Could not read the turn: ${error.message}`, "read_failed");
-  return (data as ReviewTurnRow | null) ?? null;
-}
-
 const MAX_REDO_TEXT_CHARS = 4000;
 
 /**

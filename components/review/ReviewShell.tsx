@@ -471,7 +471,7 @@ export function ReviewShell({ retentionDays = 14, batchMax = 50 }: Props): JSX.E
                     {turn.redo ? (
                       <span className="text-xs text-amber-100/50">
                         {s.redoFirst}: {turn.transcribe_model ?? "?"} · {s.redoSecond}: {turn.redo.model}
-                        {turn.redo.language_hint ? ` (${langLabel(turn.redo.language_hint)})` : ""}
+                        {turn.redo.language_hint ? ` (${langLabel(turn.redo.language_hint, mine)})` : ""}
                         {typeof turn.redo.norm_gain_db === "number" ? ` · +${turn.redo.norm_gain_db} dB` : ""}
                         {" · "}stt {ms(turn.redo.timings?.transcribe_ms)} · tr {ms(turn.redo.timings?.translate_ms)}
                       </span>
@@ -481,13 +481,13 @@ export function ReviewShell({ retentionDays = 14, batchMax = 50 }: Props): JSX.E
                     <div className="grid gap-3 rounded-xl border border-sky-300/20 bg-sky-400/5 p-3 md:grid-cols-2">
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-sky-100/60">
-                          {s.redoSecond} · {s.reviewHeard} · {langLabel(turn.redo.source_lang)}
+                          {s.redoSecond} · {s.reviewHeard} · {langLabel(turn.redo.source_lang, mine)}
                         </span>
                         <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.redo.original_text || "–"}</p>
                       </div>
                       <div className="flex flex-col gap-1">
                         <span className="text-xs text-sky-100/60">
-                          {s.redoSecond} · {s.reviewTranslated} · {langLabel(turn.redo.target_lang)}
+                          {s.redoSecond} · {s.reviewTranslated} · {langLabel(turn.redo.target_lang, mine)}
                         </span>
                         <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.redo.translation_text || "–"}</p>
                       </div>
