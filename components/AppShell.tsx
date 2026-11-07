@@ -7,7 +7,13 @@ import { SignIn } from "./SignIn";
 import { Landing } from "./Landing";
 import { TranslatorShell } from "./TranslatorShell";
 
-export function AppShell({ googleTtsEnabled = false }: { googleTtsEnabled?: boolean }): JSX.Element {
+export function AppShell({
+  googleTtsEnabled = false,
+  practicaEnabled = false
+}: {
+  googleTtsEnabled?: boolean;
+  practicaEnabled?: boolean;
+}): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
@@ -87,6 +93,7 @@ export function AppShell({ googleTtsEnabled = false }: { googleTtsEnabled?: bool
       profile={profile}
       onSignOut={signOut}
       googleTtsEnabled={googleTtsEnabled}
+      practicaEnabled={practicaEnabled}
     />
   );
 }
