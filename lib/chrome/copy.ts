@@ -433,7 +433,34 @@ const EN = {
   // The gate's two cards: signed out, and signed in but not a founder.
   reviewSignIn: "Sign in",
   reviewSignInHint: "Sign in with a founder account to review turns.",
-  reviewBackHome: "← Back to TAOS"
+  reviewBackHome: "← Back to TAOS",
+  // Second opinion (2026-11-04 20:27 MT): a model checks the transcript and
+  // the translation; it only highlights, a founder flags.
+  reviewOpinion: "Second opinion",
+  reviewOpinionAgain: "Check again",
+  reviewOpinionWorking: "Checking…",
+  reviewOpinionAll: "Check all unreviewed on this day",
+  reviewOpinionAllHint: "Up to {max} turns per click, one day at a time. The text goes to the model provider, as translating already does.",
+  reviewOpinionAllDone: "Checked {checked} · failed {failed}",
+  reviewOpinionAllMore: "More left — click again.",
+  reviewOpinionPickDay: "Pick a day to check all.",
+  reviewSuspectsFirst: "Suspects first",
+  reviewOpinionHeardAlt: "{model} heard",
+  reviewOpinionAgreement: "{percent}% of the words agree",
+  reviewOpinionMeaning: "Meaning",
+  reviewOpinionTone: "Tone",
+  reviewOpinionIssues: "Issues",
+  reviewOpinionNoIssues: "No issues found.",
+  reviewOpinionSuggested: "Suggested",
+  reviewOpinionFailed: "The second opinion did not come back. Try again.",
+  reviewOpinionSttFailed: "The second transcription failed.",
+  reviewOpinionGradeFailed: "The grade failed.",
+  reviewOpinionOnlyHighlights: "A model's opinion. It highlights; you flag.",
+  reviewIssueDropped: "dropped",
+  reviewIssueInvented: "invented",
+  reviewIssueWrongWord: "wrong word",
+  reviewIssueWrongRegister: "wrong register",
+  reviewIssueOther: "other"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -781,7 +808,32 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     reviewTimingTotal: "total", // pendiente de revisión por Liz
     reviewSignIn: "Inicia sesión", // pendiente de revisión por Liz
     reviewSignInHint: "Inicia sesión con una cuenta de fundador para revisar los turnos.", // pendiente de revisión por Liz
-    reviewBackHome: "← Volver a TAOS" // pendiente de revisión por Liz
+    reviewBackHome: "← Volver a TAOS", // pendiente de revisión por Liz
+    reviewOpinion: "Segunda opinión", // pendiente de revisión por Liz
+    reviewOpinionAgain: "Revisar otra vez", // pendiente de revisión por Liz
+    reviewOpinionWorking: "Revisando…", // pendiente de revisión por Liz
+    reviewOpinionAll: "Revisar todas las pendientes de este día", // pendiente de revisión por Liz
+    reviewOpinionAllHint: "Hasta {max} turnos por clic, un día a la vez. El texto va al proveedor del modelo, igual que al traducir.", // pendiente de revisión por Liz
+    reviewOpinionAllDone: "Revisadas {checked} · fallaron {failed}", // pendiente de revisión por Liz
+    reviewOpinionAllMore: "Quedan más — haz clic otra vez.", // pendiente de revisión por Liz
+    reviewOpinionPickDay: "Elige un día para revisar todas.", // pendiente de revisión por Liz
+    reviewSuspectsFirst: "Sospechosas primero", // pendiente de revisión por Liz
+    reviewOpinionHeardAlt: "{model} escuchó", // pendiente de revisión por Liz
+    reviewOpinionAgreement: "{percent}% de las palabras coinciden", // pendiente de revisión por Liz
+    reviewOpinionMeaning: "Sentido", // pendiente de revisión por Liz
+    reviewOpinionTone: "Tono", // pendiente de revisión por Liz
+    reviewOpinionIssues: "Problemas", // pendiente de revisión por Liz
+    reviewOpinionNoIssues: "Sin problemas.", // pendiente de revisión por Liz
+    reviewOpinionSuggested: "Sugerencia", // pendiente de revisión por Liz
+    reviewOpinionFailed: "La segunda opinión no llegó. Intenta de nuevo.", // pendiente de revisión por Liz
+    reviewOpinionSttFailed: "Falló la segunda transcripción.", // pendiente de revisión por Liz
+    reviewOpinionGradeFailed: "Falló la calificación.", // pendiente de revisión por Liz
+    reviewOpinionOnlyHighlights: "Opinión de un modelo. Solo resalta; tú marcas.", // pendiente de revisión por Liz
+    reviewIssueDropped: "omitido", // pendiente de revisión por Liz
+    reviewIssueInvented: "inventado", // pendiente de revisión por Liz
+    reviewIssueWrongWord: "palabra equivocada", // pendiente de revisión por Liz
+    reviewIssueWrongRegister: "registro equivocado", // pendiente de revisión por Liz
+    reviewIssueOther: "otro" // pendiente de revisión por Liz
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

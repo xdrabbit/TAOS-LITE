@@ -8,6 +8,7 @@ import { languageLabel, languageLabelEs } from "@/lib/languages/catalog";
 import { FLAG_NOTE_MAX, FLAG_REASONS, type FlagReason } from "@/lib/review/flag";
 import type { ReviewSpeaker, ReviewTurnRow } from "@/lib/review/store";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
+import { OpinionPanel, TranscriptWithDiff } from "./SecondOpinion";
 
 // /review — the founder translation review screen (Tom, 2026-11-04).
 //
@@ -20,11 +21,17 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 // Data: GET /api/review/turns (newest first, filtered by day and speaker),
 // POST /api/review/flag (one tap = one reason, saved at once), GET/POST
 // /api/review/settings (the opt-in), GET /api/review/export (the tar).
+// Second opinion (2026-11-04 20:27 MT): POST /api/review/opinion (one turn)
+// and POST /api/review/opinion/batch (a day's unreviewed turns, capped);
+// `?sort=suspects` puts the lowest grade / lowest agreement first. The
+// grader only highlights — the flag buttons stay the founder's.
 
 type Turn = ReviewTurnRow & { audio_url: string | null };
 
 interface Props {
   retentionDays?: number;
+  /** TAOS_REVIEW_BATCH_MAX — how many turns "check all" sends per click. */
+  batchMax?: number;
 }
 
 /** Local midnight to local midnight, as instants, for the chosen day. */
@@ -59,7 +66,7 @@ function ms(n: unknown): string {
   return typeof n === "number" ? `${(n / 1000).toFixed(1)}s` : "–";
 }
 
-export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
+export function ReviewShell({ retentionDays = 14, batchMax = 50 }: Props): JSX.Element {
   const { mine } = useLanguagePair();
   const s = copyFor(mine);
 
@@ -74,6 +81,10 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [suspectsFirst, setSuspectsFirst] = useState(false);
+  const [opinionBusy, setOpinionBusy] = useState<string | null>(null);
+  const [checkingAll, setCheckingAll] = useState(false);
+  const [batchResult, setBatchResult] = useState<{ checked: number; failed: number; more: boolean } | null>(null);
 
   const reasonLabel: Record<FlagReason, string> = useMemo(
     () => ({ words: s.reviewFlagWords, meaning: s.reviewFlagMeaning, tone: s.reviewFlagTone, other: s.reviewFlagOther }),
@@ -92,6 +103,7 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
       }
       if (speaker) params.set("speaker", speaker);
       if (flaggedOnly) params.set("flagged", "1");
+      if (suspectsFirst) params.set("sort", "suspects");
       const res = await fetch(`/api/review/turns?${params.toString()}`, { headers: await authHeaders(), cache: "no-store" });
       const payload = (await res.json().catch(() => ({}))) as { turns?: Turn[]; speakers?: ReviewSpeaker[] };
       if (!res.ok) throw new Error("load");
@@ -102,7 +114,7 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [day, speaker, flaggedOnly, s.reviewFailed]);
+  }, [day, speaker, flaggedOnly, suspectsFirst, s.reviewFailed]);
 
   useEffect(() => {
     void load();
@@ -161,6 +173,52 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
       setError(s.reviewFailed);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function secondOpinion(turn: Turn): Promise<void> {
+    setOpinionBusy(turn.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/review/opinion", {
+        method: "POST",
+        headers: await jsonAuthHeaders(),
+        body: JSON.stringify({ id: turn.id, explain: mine })
+      });
+      const payload = (await res.json().catch(() => ({}))) as { turn?: ReviewTurnRow };
+      if (res.ok && payload.turn) {
+        const saved = payload.turn;
+        setTurns((list) => list.map((t) => (t.id === saved.id ? { ...t, ...saved } : t)));
+      } else {
+        setError(s.reviewOpinionFailed);
+      }
+    } catch {
+      setError(s.reviewOpinionFailed);
+    } finally {
+      setOpinionBusy(null);
+    }
+  }
+
+  async function checkAll(): Promise<void> {
+    const bounds = day ? dayBounds(day) : null;
+    if (!bounds) return;
+    setCheckingAll(true);
+    setBatchResult(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/review/opinion/batch", {
+        method: "POST",
+        headers: await jsonAuthHeaders(),
+        body: JSON.stringify({ from: bounds.from, to: bounds.to, speaker: speaker || undefined, explain: mine })
+      });
+      const payload = (await res.json().catch(() => ({}))) as { checked?: number; failed?: number; more?: boolean };
+      if (!res.ok) throw new Error("batch");
+      setBatchResult({ checked: payload.checked ?? 0, failed: payload.failed ?? 0, more: Boolean(payload.more) });
+      await load();
+    } catch {
+      setError(s.reviewOpinionFailed);
+    } finally {
+      setCheckingAll(false);
     }
   }
 
@@ -277,7 +335,40 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
           <input type="checkbox" checked={flaggedOnly} onChange={(e) => setFlaggedOnly(e.target.checked)} className="h-5 w-5 accent-amber-400" />
           <span>{s.reviewFlaggedOnly}</span>
         </label>
+        <label className="flex min-h-[44px] items-center gap-2">
+          <input
+            type="checkbox"
+            data-review-suspects-first=""
+            checked={suspectsFirst}
+            onChange={(e) => setSuspectsFirst(e.target.checked)}
+            className="h-5 w-5 accent-amber-400"
+          />
+          <span>{s.reviewSuspectsFirst}</span>
+        </label>
         <span className="ml-auto text-xs text-amber-100/50">{fill(s.reviewCount, { count: turns.length, flagged: flaggedCount })}</span>
+      </section>
+
+      {/* ── Second opinion, the whole day ───────────────────────────────── */}
+      <section className="flex flex-wrap items-center gap-3 text-sm">
+        <button
+          type="button"
+          data-review-opinion-all=""
+          disabled={checkingAll || !day || turns.length === 0}
+          onClick={() => void checkAll()}
+          className="min-h-[44px] rounded-2xl border border-amber-300/40 bg-amber-400/15 px-4 text-sm text-amber-100 transition hover:bg-amber-400/25 disabled:opacity-50"
+        >
+          {checkingAll ? s.reviewOpinionWorking : s.reviewOpinionAll}
+        </button>
+        <span className="text-xs text-amber-100/50">
+          {!day ? s.reviewOpinionPickDay : fill(s.reviewOpinionAllHint, { max: batchMax })}
+          {batchResult ? (
+            <>
+              {" · "}
+              <span className="text-amber-100/80">{fill(s.reviewOpinionAllDone, { checked: batchResult.checked, failed: batchResult.failed })}</span>
+              {batchResult.more ? ` ${s.reviewOpinionAllMore}` : ""}
+            </>
+          ) : null}
+        </span>
       </section>
 
       {error ? <p className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{error}</p> : null}
@@ -328,17 +419,29 @@ export function ReviewShell({ retentionDays = 14 }: Props): JSX.Element {
                   {/* Column 2: what the transcriber heard. */}
                   <div className="flex flex-col gap-1">
                     <span className="text-xs text-amber-100/50">{s.reviewHeard} · {langLabel(turn.source_lang, mine)}</span>
-                    <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.original_text}</p>
+                    <TranscriptWithDiff text={turn.original_text} opinion={turn.opinion} />
                   </div>
                   {/* Column 3: what the translator made of it. */}
                   <div className="flex flex-col gap-1">
                     <span className="text-xs text-amber-100/50">{s.reviewTranslated} · {langLabel(turn.target_lang, mine)}</span>
                     <p className="whitespace-pre-wrap text-base leading-snug text-amber-50">{turn.translation_text}</p>
+                    <OpinionPanel opinion={turn.opinion} score={turn.opinion_score} s={s} />
                   </div>
                 </div>
 
                 {/* The flag: one tap saves it; the note is optional. */}
                 <div className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      data-review-opinion-one={turn.id}
+                      disabled={opinionBusy === turn.id || checkingAll}
+                      onClick={() => void secondOpinion(turn)}
+                      className="min-h-[44px] rounded-xl border border-amber-300/30 bg-amber-400/10 px-3 text-sm text-amber-100 transition hover:bg-amber-400/20 disabled:opacity-50"
+                    >
+                      {opinionBusy === turn.id ? s.reviewOpinionWorking : turn.opinion_at ? s.reviewOpinionAgain : s.reviewOpinion}
+                    </button>
+                  </div>
                   <div className="flex flex-wrap gap-2" role="group" aria-label={s.reviewFlag}>
                     {FLAG_REASONS.map((reason) => {
                       const on = turn.flag_reason === reason;

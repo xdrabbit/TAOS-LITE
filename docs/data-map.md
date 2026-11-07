@@ -332,7 +332,7 @@ The only table in the schema that holds no user-attributable data at all.
 
 | | |
 |---|---|
-| **Content** | One row per KEPT turn: `user_id` (the speaker), `surface` (`home` / `taokie`), `mode`, both languages, `original_text`, `translation_text`, `segments`, `audio_path` (one object in `review-audio`), `transcribe_model`, `translate_model`, `timings`, and the flag (`flag_reason` ∈ words / meaning / tone / other, `flag_note`, `flagged_at`, `flagged_by`). |
+| **Content** | One row per KEPT turn: `user_id` (the speaker), `surface` (`home` / `taokie`), `mode`, both languages, `original_text`, `translation_text`, `segments`, `audio_path` (one object in `review-audio`), `transcribe_model`, `translate_model`, `timings`, and the flag (`flag_reason` ∈ words / meaning / tone / other, `flag_note`, `flagged_at`, `flagged_by`). Since 2026-11-05 also the second opinion: `opinion` (jsonb — a second transcriber's reading of the clip word-diffed against the transcript, and a grader's meaning/tone/issues/suggested translation; `lib/review/opinion.ts`), `opinion_score` (min of agreement, meaning/5, tone/5), `opinion_at`. On demand only, founders only; it never sets the flag. |
 | **Who** | Founders only, and only when the SPEAKER's own `profiles.review_keep_audio` is on (default off). A non-founder's profile is never read. |
 | **Retention** | `expires_at` = insert + `TAOS_REVIEW_RETENTION_DAYS` (14). Swept objects-first by the daily walkie cron, `/api/review/sweep`, and on opening `/review`. CASCADE from `auth.users`. |
 | **RLS** | Enabled, **no policies** — service role only through `lib/review/store.ts`, behind `lib/review/guard.ts` (404 to anyone but a founder). |

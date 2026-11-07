@@ -19,6 +19,7 @@
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 import { founderEmails } from "@/lib/release";
 import { reviewExpiresAt, reviewRetentionDays, type FlagReason, type ReviewSurface } from "./flag";
+import type { ReviewOpinion } from "./opinion";
 
 export const REVIEW_TABLE = "taos_lite_review_turns";
 export const REVIEW_BUCKET = "review-audio";
@@ -70,6 +71,10 @@ export interface ReviewTurnRow {
   flag_note: string;
   flagged_at: string | null;
   flagged_by: string | null;
+  /** The second opinion (lib/review/opinion.ts). All three null = unreviewed. */
+  opinion: ReviewOpinion | null;
+  opinion_score: number | null;
+  opinion_at: string | null;
   created_at: string;
   expires_at: string;
 }
@@ -214,9 +219,17 @@ export interface ReviewListFilter {
   speakerId?: string | null;
   /** Only flagged turns. */
   flaggedOnly?: boolean;
+  /** Only turns with no second opinion yet (opinion_at null). */
+  unreviewedOnly?: boolean;
+  /**
+   * "suspects": lowest opinion_score first, unreviewed last, newest first
+   * within a tie — lib/review/opinion.ts sortSuspectsFirst, in SQL.
+   * Anything else: newest first.
+   */
+  sort?: "newest" | "suspects";
 }
 
-/** Unexpired turns, newest first, at most `limit`. */
+/** Unexpired turns, newest first (or suspects first), at most `limit`. */
 export async function listReviewTurns(
   filter: ReviewListFilter = {},
   nowMs: number = Date.now(),
@@ -231,9 +244,46 @@ export async function listReviewTurns(
   if (filter.toIso) query = query.lt("created_at", filter.toIso);
   if (filter.speakerId) query = query.eq("user_id", filter.speakerId);
   if (filter.flaggedOnly) query = query.not("flag_reason", "is", null);
+  if (filter.unreviewedOnly) query = query.is("opinion_at", null);
+  if (filter.sort === "suspects") query = query.order("opinion_score", { ascending: true, nullsFirst: false });
   const { data, error } = await query.order("created_at", { ascending: false }).limit(limit);
   if (error) throw new ReviewStoreError(`Could not list turns: ${error.message}`, "list_failed");
   return (data ?? []) as ReviewTurnRow[];
+}
+
+/** One unexpired turn by id, or null. */
+export async function readReviewTurn(id: string, nowMs: number = Date.now()): Promise<ReviewTurnRow | null> {
+  requireAdmin();
+  const { data, error } = await supabaseAdmin
+    .from(REVIEW_TABLE)
+    .select("*")
+    .eq("id", id)
+    .gt("expires_at", new Date(nowMs).toISOString())
+    .maybeSingle();
+  if (error) throw new ReviewStoreError(`Could not read the turn: ${error.message}`, "read_failed");
+  return (data as ReviewTurnRow | null) ?? null;
+}
+
+/**
+ * Write the second opinion on a turn. Only the three opinion columns: this
+ * path cannot touch flag_reason, flag_note or anything a person wrote.
+ */
+export async function saveReviewOpinion(
+  id: string,
+  opinion: ReviewOpinion,
+  score: number | null,
+  nowMs: number = Date.now()
+): Promise<ReviewTurnRow | null> {
+  requireAdmin();
+  const { data, error } = await supabaseAdmin
+    .from(REVIEW_TABLE)
+    .update({ opinion, opinion_score: score, opinion_at: new Date(nowMs).toISOString() })
+    .eq("id", id)
+    .gt("expires_at", new Date(nowMs).toISOString())
+    .select("*")
+    .maybeSingle();
+  if (error) throw new ReviewStoreError(`Could not save the opinion: ${error.message}`, "opinion_failed");
+  return (data as ReviewTurnRow | null) ?? null;
 }
 
 /** Set (or clear, with `reason` null) the one flag a turn carries. */
