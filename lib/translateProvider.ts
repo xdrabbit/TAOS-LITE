@@ -52,6 +52,16 @@ export function getChatModel(): string {
 }
 
 /**
+ * GPT-5/6 and o-series reasoning models use their default sampler and reject
+ * an explicit temperature. This is the same family rule used by Study and
+ * Review; keeping it here protects every caller that selects a Luna model by
+ * environment variable as well as /fast's Luna default.
+ */
+export function acceptsTemperature(model: string): boolean {
+  return !/^(?:gpt-(?:5|6)(?:[.-]|$)|o\d)/i.test(model.trim());
+}
+
+/**
  * Call OpenAI's chat completions endpoint and return the trimmed message text.
  *
  * @throws {ProviderError} on a non-2xx response or an empty completion.
@@ -62,11 +72,15 @@ export async function chatCompletion(
 ): Promise<string> {
   const { messages, temperature = 0.3, maxTokens, jsonMode = false, model } = options;
 
+  const resolvedModel = model ?? getChatModel();
+
   const body: Record<string, unknown> = {
-    model: model ?? getChatModel(),
-    temperature,
+    model: resolvedModel,
     messages
   };
+  if (acceptsTemperature(resolvedModel)) {
+    body.temperature = temperature;
+  }
   if (typeof maxTokens === "number") {
     body.max_tokens = maxTokens;
   }

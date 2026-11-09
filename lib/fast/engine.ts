@@ -1,7 +1,8 @@
 // Which engine translates one /fast quickie, and what it costs.
 //
 // ── What is actually running ───────────────────────────────────────────────
-// gpt-4.1-nano, on every /fast translation in production. The Azure Translator
+// gpt-5.6-luna is the OpenAI fallback default. It replaced gpt-4.1-nano after
+// that model's 2026-10-23 shutdown. The Azure Translator
 // resource does not exist yet (AZURE_SPEECH_KEY is a different resource kind
 // and cannot open that API), so the Azure branch below has never executed
 // outside a test.
@@ -20,7 +21,8 @@
 // from Microsoft's documentation. Promoting Azure is pending the resource and
 // a re-run of the rigs.
 //
-// gpt-4.1-nano is the fallback, and a real one rather than a courtesy: with
+// The retired gpt-4.1-nano was the measured fallback, and a real one rather
+// than a courtesy: with
 // the corrected fence it was the most literal of the three LLMs measured
 // ("cuesta un brazo y una pierna" where gpt-5.4-nano drifted to "cuesta un
 // majątek"), and it is ~12x CHEAPER per quickie than Azure — the one number
@@ -50,10 +52,11 @@ export type FastEngine = "azure" | "openai";
  * and drifted idiomatic on exactly the inputs this screen exists for
  * ("I am looking forward to it" → "Nie mogę się tego doczekać"). A screen
  * whose whole brand is the literal register should not follow a var somebody
- * may retune for a different one.
+ * may retune for a different one. OPENAI_FAST_MODEL remains the dedicated
+ * override; unset now means gpt-5.6-luna.
  */
 export function getFastModel(): string {
-  return process.env.OPENAI_FAST_MODEL?.trim() || "gpt-4.1-nano";
+  return process.env.OPENAI_FAST_MODEL?.trim() || "gpt-5.6-luna";
 }
 
 /** Why the LLM is answering instead of Azure. Null when Azure answered. */
@@ -156,8 +159,9 @@ export async function fastTranslate(
       const target = source === mine ? theirs : mine;
       const translation = await chatCompletion(apiKey, {
         model: getFastModel(),
-        // Zero, not the 0.3 the conversational routes use: two people typing
-        // the same phrase into a dictionary should get the same word back.
+        // The shared provider omits this for Luna/reasoning models, which
+        // reject temperature. Older override models still receive zero: two
+        // people typing the same phrase should get the same word back.
         temperature: 0,
         messages: [
           {
@@ -172,6 +176,7 @@ export async function fastTranslate(
 
     const content = await chatCompletion(apiKey, {
       model: getFastModel(),
+      // Omitted by the shared provider for Luna/reasoning models.
       temperature: 0,
       jsonMode: true,
       messages: [

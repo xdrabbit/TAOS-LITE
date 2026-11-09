@@ -14,7 +14,12 @@ import {
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 import { buildCaptionTranslationInstructions, STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
 import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
-import { batchSegments, whisperLanguageToCode, type CaptionSegment } from "@/lib/video/captions";
+import {
+  batchSegments,
+  captionSttModel,
+  whisperLanguageToCode,
+  type CaptionSegment
+} from "@/lib/video/captions";
 import { MAX_VIDEO_BYTES, VIDEO_BUCKET } from "@/lib/video/storage";
 
 export const runtime = "nodejs";
@@ -103,7 +108,7 @@ interface WhisperResult {
 // returns plain text only. Separate env var so tuning the spoken-turn model
 // never silently strips the timestamps out of this route.
 async function transcribeWithTimestamps(apiKey: string, audioBytes: Buffer): Promise<WhisperResult> {
-  const model = process.env.OPENAI_CAPTION_STT_MODEL?.trim() || "whisper-1";
+  const model = captionSttModel();
   const form = new FormData();
   form.append(
     "file",

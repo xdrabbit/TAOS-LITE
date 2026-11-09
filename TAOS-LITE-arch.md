@@ -127,7 +127,7 @@ Lessons from your own conversations: pick a line from your
 ### Quick translate (`/fast`)
 
 A typing box that translates as you type, and the one literal (word-for-word)
-surface. `POST /api/fast` runs `gpt-4.1-nano` today; the Azure Translator
+surface. `POST /api/fast` defaults to `gpt-5.6-luna`; the Azure Translator
 branch in `lib/fast/engine.ts` has no resource behind it yet
 (`docs/fast-engine.md`). Metered server-side (`lib/fast/meter.ts`).
 

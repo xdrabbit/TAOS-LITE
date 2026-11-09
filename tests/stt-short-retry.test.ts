@@ -8,8 +8,8 @@
 //   2. the retry runs once and only once — never a third transcription,
 //      even when the retry is short too
 //   3. the hint: auto mode → the pair's OTHER language from what the first
-//      transcript was in, in the API's `language` field; manual → the known
-//      source language; whisper gets no prompt
+//      transcript was in, in the API's model-appropriate language field;
+//      manual → the known source language; whisper gets no prompt
 //   4. the 2× rule: a retry that is not clearly longer is dropped
 //   5. the timing line carries retry_stt / retry_reason / both word counts,
 //      honest latency, and never a word of text
@@ -196,6 +196,8 @@ describe("the pick and the hint", () => {
     expect(fallbackTranscribeModel()).toBe("whisper-1");
     process.env.TAOS_TRANSCRIBE_FALLBACK_MODEL = " gpt-transcribe ";
     expect(fallbackTranscribeModel()).toBe("gpt-transcribe");
+    process.env.TAOS_TRANSCRIBE_FALLBACK_MODEL = " gpt-live-transcribe ";
+    expect(fallbackTranscribeModel()).toBe("gpt-live-transcribe");
   });
 });
 

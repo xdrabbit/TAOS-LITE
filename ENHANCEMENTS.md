@@ -88,7 +88,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   model check each kept turn — transcription quality and A→B translation
   quality — so he and Liz can verify the SUSPECTS by ear instead of reading
   every row. Per turn, on demand: a DIFFERENT transcriber re-reads the stored
-  clip (`TAOS_REVIEW_STT_MODEL`, default `whisper-1` — it retires 2026-02-26,
+  clip (`TAOS_REVIEW_STT_MODEL`, default `whisper-1` — it retires 2027-02-26,
   hence a knob) and is word-diffed against the transcript (agreement ratio +
   differing spans, highlighted in the transcript column); a strong text model
   (`TAOS_REVIEW_GRADER_MODEL`, default the study lessons' `gpt-5.5`, no
@@ -2046,9 +2046,10 @@ blank.
   thing it was protecting. **(2)** an LLM is roughly **10–20× CHEAPER** per
   quickie than Azure Translator ($0.000027 vs ~$0.00026), which is backwards
   from the assumption — Azure is bought for its *register* and its latency,
-  not its price. Azure is primary; `gpt-4.1-nano` is a real fallback, for the
+  not its price. Azure is primary; the OpenAI model is a real fallback for the
   ten catalog languages Azure cannot translate at all and for right now,
-  because **the Translator resource does not exist yet**. `AZURE_SPEECH_KEY`
+  because **the Translator resource does not exist yet**. Its code default is
+  now `gpt-5.6-luna`; `AZURE_SPEECH_KEY`
   is a different resource kind and does not open that API. Setup steps for
   Tom are in `docs/fast-engine.md`; until then /fast works and says on screen
   which engine answered.

@@ -142,8 +142,9 @@ export function pickLongerTranscript(
 
 /**
  * How the retry calls the transcriber. The hint goes in the API's own
- * `language` field (and, for the gpt-4o family, the usual "Spoken X" prompt
- * too). The whisper family gets NO prompt: it reads `prompt` as text to
+ * language-hint field (singular for legacy models, plural for successors) and,
+ * for non-Whisper models, the usual "Spoken X" prompt too. The whisper family
+ * gets NO prompt: it reads `prompt` as text to
  * continue, and the English instruction pulled it toward English on a
  * Spanish clip (lib/translate/transcribe.ts, omitPrompt).
  */
