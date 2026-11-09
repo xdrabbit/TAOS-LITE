@@ -1117,6 +1117,17 @@ blank.
 
 ## Shipped
 
+- Transcriber quits early — short-transcript auto-retry on `/api/translate`
+  (under 0.4 words/s on a clip of 8 s or more → one pass through
+  `TAOS_TRANSCRIBE_FALLBACK_MODEL`, kept only at 2× the words), Redo ·
+  Rehacer on `/review` and home's result card (`POST /api/review/redo`,
+  founders, stored beside the first result), and quiet normalize
+  (`lib/translate/normalize.ts`). Production went out with
+  `TAOS_STT_NORMALIZE=0`, so normalize is off for everyone and the timing
+  line reads `norm_gain_db=?`. With the flag 0 at build, ffmpeg is out of the
+  `/api/review/redo` function; `/api/translate` still sits in the same Vercel
+  function as `/api/video/process` (as it did before this PR), so that one
+  carries ffmpeg either way — 2026-11-09, PR #122
 - /review in Spanish for Liz — the review page's chrome (gate, filters,
   counts, language names, flag buttons) follows the phone owner's language
   via `lib/chrome/copy.ts`, keyed on `mine` — 2026-11-06, PR #120
