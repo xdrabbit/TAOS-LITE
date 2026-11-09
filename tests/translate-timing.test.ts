@@ -2,6 +2,8 @@
 // success or error, saying where the seconds went. Diagnostic for the 10/27
 // "10-15s from stop-recording to voice" report. The line must never carry the
 // transcript or the translation — only lengths, codes and milliseconds.
+// 2026-11-05 added the short-transcript retry and quiet-normalize fields
+// after err= (tests/stt-short-retry.test.ts pins what they say).
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -93,7 +95,7 @@ describe("[taos-translate-timing]", () => {
     expect(lines).toHaveLength(1);
     const line = lines[0];
     expect(line).toMatch(
-      /^\[taos-translate-timing\] status=ok http=200 mode=manual src=en tgt=es audio_bytes=1234 audio_mime=audio\/webm transcribe_ms=\d+ transcribe_model=gpt-4o-transcribe translate_ms=\d+ translate_model=\S+ guard_ms=\d+ form_ms=\d+ total_ms=\d+ src_chars=\d+ out_chars=\d+ cold=1 retry=0 err=\?$/
+      /^\[taos-translate-timing\] status=ok http=200 mode=manual src=en tgt=es audio_bytes=1234 audio_mime=audio\/webm transcribe_ms=\d+ transcribe_model=gpt-4o-transcribe translate_ms=\d+ translate_model=\S+ guard_ms=\d+ form_ms=\d+ total_ms=\d+ src_chars=\d+ out_chars=\d+ cold=1 retry=0 err=\? rec_ms=\? wps=[\d.]+ retry_stt=0 retry_reason=\? retry_model=\? retry_hint=\? stt1_words=\d+ stt2_words=\? stt_picked=\? retry_ms=\? norm_gain_db=\? norm_ms=\?$/
     );
     expect(field(line, "src_chars")).toBe(String(TRANSCRIPT.length));
     expect(field(line, "out_chars")).toBe(String(TRANSLATION.length));

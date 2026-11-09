@@ -460,7 +460,16 @@ const EN = {
   reviewIssueInvented: "invented",
   reviewIssueWrongWord: "wrong word",
   reviewIssueWrongRegister: "wrong register",
-  reviewIssueOther: "other"
+  reviewIssueOther: "other",
+  // Redo · Rehacer (2026-11-05): the kept clip through the fallback
+  // transcriber + the same translation, shown beside the first result. On
+  // /review and on home's result card (only a turn with a kept clip).
+  redo: "Redo",
+  redoBusy: "Redoing…",
+  redoFirst: "First",
+  redoSecond: "Redo",
+  redoFailed: "Could not redo. Try again.",
+  redoGone: "That turn's clip is not kept yet — try again in a moment."
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -799,6 +808,12 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     reviewExportHint: "Los turnos marcados, listos como clips para la prueba del transcriptor.", // pendiente de revisión por Liz
     reviewNothing: "Aún no hay turnos aquí.", // pendiente de revisión por Liz
     reviewLoading: "Cargando…", // pendiente de revisión por Liz
+    redo: "Rehacer", // pendiente de revisión por Liz
+    redoBusy: "Rehaciendo…", // pendiente de revisión por Liz
+    redoFirst: "Primera", // pendiente de revisión por Liz
+    redoSecond: "Rehecha", // pendiente de revisión por Liz
+    redoFailed: "No se pudo rehacer. Inténtalo de nuevo.", // pendiente de revisión por Liz
+    redoGone: "El clip de este turno aún no está guardado — inténtalo en un momento.", // pendiente de revisión por Liz
     reviewFailed: "No se pudo cargar. Intenta de nuevo.", // pendiente de revisión por Liz
     reviewModels: "Modelos", // pendiente de revisión por Liz
     reviewTiming: "Tiempos", // pendiente de revisión por Liz
