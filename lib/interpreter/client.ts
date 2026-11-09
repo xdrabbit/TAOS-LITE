@@ -18,10 +18,18 @@
 //
 // ── The speaker is next to the microphone ──────────────────────────────────
 // One phone, lying on the table, playing the interpretation out of the same
-// device that is listening. What stops it interpreting itself is the
-// browser's echo canceller (`echoCancellation: true` below), which works on
-// audio the PAGE plays — so every leg plays through an <audio> element, the
-// same way /tutor's voice does.
+// device that is listening. The first line of defence is the browser's echo
+// canceller (`echoCancellation: true` below), which works on audio the PAGE
+// plays — so every leg plays through an <audio> element, the same way
+// /tutor's voice does.
+//
+// It is not enough on a real phone. Tom and Liz's table (2026-11-09,
+// ElevenLabs) heard itself: phantom `speech_started` on both legs at once,
+// each one cutting the translation off. So the socket engine that showed it
+// runs HALF-DUPLEX (lib/interpreter/halfDuplex.ts): while any leg's voice is
+// playing, every leg's microphone is sent silence; a `speech_started` never
+// stops the speaker — only the provider cancelling a reply for a new turn
+// does; and a reply the gate has let through is played to its end.
 //
 // ── What ends a session ────────────────────────────────────────────────────
 // Stop, the cap, the idle stop (the shell's clock, lib/interpreter/limits.ts)
@@ -40,6 +48,13 @@ import {
   type InterpreterTally
 } from "./cost";
 import { engineBillsByTheMinute, type InterpreterEngine } from "./engine";
+import {
+  createHalfDuplex,
+  engineIsHalfDuplex,
+  gateFollows,
+  speakerActionFor,
+  type HalfDuplex
+} from "./halfDuplex";
 import {
   createGeminiReader,
   createPeerHeard,
@@ -286,6 +301,22 @@ export async function startInterpreter(opts: {
     });
     const micTrack = mic.getAudioTracks()[0];
     if (!micTrack) throw new Error("No microphone track.");
+    // What the device actually GAVE, not what was asked for — a phone may
+    // decline echo cancellation and say so only here. Booleans and a number.
+    const micSettings = (() => {
+      try {
+        const got = micTrack.getSettings();
+        return {
+          ec: got.echoCancellation,
+          ns: got.noiseSuppression,
+          agc: got.autoGainControl,
+          rate: got.sampleRate,
+          ch: got.channelCount
+        };
+      } catch {
+        return null;
+      }
+    })();
 
     const mint = await mintSession(opts.engine, mine, theirs, style);
     const tickets = mint.legs ?? [];
@@ -295,8 +326,18 @@ export async function startInterpreter(opts: {
     const appliedStyle = parseStyle(mint.style) ?? DEFAULT_INTERPRETER_STYLE;
     tally = { ...emptyInterpreterTally(engine, mint.model ?? "", Date.now(), tickets.length), style: appliedStyle };
     timeline = opts.diagnostics ? createSessionTimeline({ engine, model: mint.model ?? "" }) : null;
-    const timelineFor = (ticket: LegTicket, index: number): LegTimeline | null =>
-      timeline?.leg(index, { source: ticket.source, target: ticket.target, transport: ticket.transport }) ?? null;
+    const timelineFor = (ticket: LegTicket, index: number): LegTimeline | null => {
+      const leg =
+        timeline?.leg(index, { source: ticket.source, target: ticket.target, transport: ticket.transport }) ?? null;
+      if (micSettings) leg?.note("mic-settings", { cfg: micSettings });
+      return leg;
+    };
+    // One per session: every socket leg reports its playback here, so a leg
+    // knows when ANOTHER leg's voice is in the room. Enforced (mic silenced,
+    // speech_started no longer a barge-in) only where the engine asks for it;
+    // everywhere else it only feeds the timeline's `spk` tag.
+    const duplex = createHalfDuplex();
+    const halfDuplex = engineIsHalfDuplex(engine);
 
     const shared = createSharedHeard();
     const peers = createPeerHeard();
@@ -409,6 +450,8 @@ export async function startInterpreter(opts: {
             }),
           sinkFor: (setAudible, flush, dropHeld) => sinkFor(index, setAudible, flush, dropHeld),
           startHeld: gated,
+          duplex,
+          halfDuplex,
           remint: async () => {
             const again = await mintSession(engine, mine, theirs, style);
             const next = again.legs?.[index];
@@ -664,7 +707,9 @@ function base64ToBytes(b64: string): Uint8Array {
  * WebRTC legs' — which is what the echo canceller is listening for.
  */
 function createPcmPlayer(
-  rate: number = GEMINI_OUT_RATE
+  rate: number = GEMINI_OUT_RATE,
+  /** Told when audio is scheduled (until when, wall clock) and when it is cut. */
+  watch?: { playing: (untilMs: number) => void; cut: () => void }
 ): { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void } | null {
   const ctx = ensureTabletopAudioContext();
   if (!ctx || typeof ctx.createMediaStreamDestination !== "function") return null;
@@ -688,6 +733,11 @@ function createPcmPlayer(
       const at = Math.max(ctx.currentTime + 0.02, nextAt);
       source.start(at);
       nextAt = at + buffer.duration;
+      if (watch) {
+        // Until the last sample has left the DEVICE, where the context can say.
+        const latency = typeof ctx.outputLatency === "number" && Number.isFinite(ctx.outputLatency) ? ctx.outputLatency : 0;
+        watch.playing(Date.now() + (nextAt - ctx.currentTime + latency) * 1000);
+      }
       sources.push(source);
       source.onended = () => {
         sources = sources.filter((s) => s !== source);
@@ -703,6 +753,7 @@ function createPcmPlayer(
       }
       sources = [];
       nextAt = 0;
+      watch?.cut();
     },
     close: () => {
       el.srcObject = null;
@@ -752,18 +803,38 @@ async function connectRealtimeWsLeg(opts: {
   makeReader: (sink: LegSink) => LegReader;
   sinkFor: (setAudible: (open: boolean) => void, flush: () => void, dropHeld: () => void) => LegSink;
   startHeld: boolean;
+  /** The session's playback clock (lib/interpreter/halfDuplex.ts). */
+  duplex: HalfDuplex;
+  /** Enforce it: silence the mic while any leg plays, and never cut on speech_started. */
+  halfDuplex: boolean;
   /** A fresh ticket for this leg (a client secret opens ONE session). */
   remint: () => Promise<RealtimeWsTicket>;
   onLost: () => void;
   isStopped: () => boolean;
 }): Promise<Leg> {
-  const raw = createPcmPlayer(opts.ticket.outputRate);
+  const { duplex, halfDuplex } = opts;
+  const legIndex = opts.identity.index;
+  const raw = createPcmPlayer(opts.ticket.outputRate, {
+    playing: (untilMs) => duplex.playing(legIndex, untilMs),
+    cut: () => duplex.cut(legIndex, Date.now())
+  });
   if (!raw) throw new Error("This browser cannot play the interpreter's audio.");
   const tl = opts.timeline;
   const player = createGatedPlayer(raw, opts.startHeld, tl);
   const track = opts.micTrack.clone();
   const connectedAt = Date.now();
-  const reader = opts.makeReader(opts.sinkFor(player.setAudible, player.flush, player.dropHeld));
+  const reader = opts.makeReader(
+    opts.sinkFor(
+      (open) => {
+        // Half-duplex never shuts the gate mid-reply (see gateFollows).
+        if (gateFollows(open, halfDuplex)) player.setAudible(open);
+      },
+      player.flush,
+      player.dropHeld
+    )
+  );
+  /** One 100 ms chunk of silence, as the frame the mic would have sent. */
+  let silentFrame: { samples: number; frame: string; bytes: number } | null = null;
   let ws: WebSocket | null = null;
   let closed = false;
   let tap: MicPcmTap | null = null;
@@ -803,8 +874,12 @@ async function connectRealtimeWsLeg(opts: {
         } catch {
           return;
         }
-        tl?.recv(msg, raw.length);
         const type = typeof msg.type === "string" ? msg.type : "";
+        tl?.recv(
+          msg,
+          raw.length,
+          type === "input_audio_buffer.speech_started" ? { speaker: duplex.micMuted(Date.now()) } : undefined
+        );
         if (type === "session.created" && !ready) {
           // Grok: instructions, voice and turn detection can only be set
           // here. ElevenLabs: null — its session was locked in at the mint.
@@ -839,10 +914,16 @@ async function connectRealtimeWsLeg(opts: {
           sendUpdate(rest);
           return;
         }
-        if (type === "response.created") player.rearm();
-        // BARGE-IN: the provider cancels its response when someone speaks
-        // over it; what is already queued here has to stop too.
-        if (type === "input_audio_buffer.speech_started") player.flush();
+        // A new reply shuts the gate; a BARGE-IN stops what is playing and
+        // drops what is held. What counts as a barge-in differs by duplex —
+        // speech_started (full) or the provider's own cancellation (half):
+        // lib/interpreter/halfDuplex.ts, speakerActionFor.
+        const action = speakerActionFor(msg, halfDuplex);
+        if (action === "rearm") player.rearm();
+        else if (action === "cut") {
+          if (halfDuplex) tl?.note("speaker-cut");
+          player.flush();
+        }
         if (type === "response.output_audio.delta" || type === "response.audio.delta") {
           const data = msg.delta;
           if (typeof data === "string" && data) player.play(base64ToBytes(data));
@@ -882,6 +963,22 @@ async function connectRealtimeWsLeg(opts: {
         // Drop, never queue: a backed-up socket must not turn into latency.
         if (ws.bufferedAmount > 96 * 1024) {
           tl?.note("mic-dropped", { bytes: pcm.length * 2 });
+          return;
+        }
+        if (halfDuplex && duplex.micMuted(Date.now())) {
+          // Our own voice is in the room: send the same 100 ms as SILENCE, so
+          // the provider's clock keeps running and its turn detection sees a
+          // pause — and nothing of what the speaker is saying.
+          if (!silentFrame || silentFrame.samples !== pcm.length) {
+            const quiet = bytesToBase64(s16ToLeBytes(new Int16Array(pcm.length)));
+            silentFrame = {
+              samples: pcm.length,
+              frame: JSON.stringify({ type: "input_audio_buffer.append", audio: quiet }),
+              bytes: pcm.length * 2
+            };
+          }
+          ws.send(silentFrame.frame);
+          tl?.note("mic-muted", { bytes: silentFrame.bytes, ms: Math.round((pcm.length / ticket.inputRate) * 1000) });
           return;
         }
         const audio = bytesToBase64(s16ToLeBytes(pcm));

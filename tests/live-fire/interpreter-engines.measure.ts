@@ -49,6 +49,7 @@
 
 import { describe, it } from "vitest";
 import { createAudioGate } from "@/lib/interpreter/audioGate";
+import { engineIsHalfDuplex, gateFollows, speakerActionFor } from "@/lib/interpreter/halfDuplex";
 import type { CaptionUpdate } from "@/lib/interpreter/captions";
 import { engineApiKey, grokReasoning, type InterpreterEngine } from "@/lib/interpreter/engine";
 import { createPeerHeard, createRealtimeReader, type LegSink } from "@/lib/interpreter/legEvents";
@@ -220,6 +221,7 @@ async function runEngine(engine: InterpreterEngine): Promise<void> {
   const env = { ...process.env, TAOS_INTERPRETER_LEGS: process.env.INTERPRETER_WS_LEGS ?? "2" };
   const plan = buildInterpreterPlan({ engine, pair: { a: "en", b: "es" }, context: PROBE_CONTEXT, env });
   const gated = plan.legs.length > 1;
+  const HALF_DUPLEX = engineIsHalfDuplex(engine);
   console.log(`\n══ ${engine} · ${plan.model} · legs=${plan.legs.length} · echo=${ECHO ? ECHO_GAIN : "off"} ══`);
 
   const clips = await Promise.all(SCRIPT.map((line) => synthesize(line.text, line.lang === "en" ? "ash" : "coral")));
@@ -286,7 +288,7 @@ async function runEngine(engine: InterpreterEngine): Promise<void> {
         billed: (seconds) => console.log(`${at()} leg${index} billable_audio_seconds=${seconds}`),
         bargeIn: () => console.log(`${at()} leg${index} BARGE-IN`),
         gate: (open) => {
-          if (gated) gate.setAudible(open);
+          if (gated && gateFollows(open, HALF_DUPLEX)) gate.setAudible(open);
         },
         flushAudio: gate.flush,
         responseSilent: () => {
@@ -354,9 +356,12 @@ async function runEngine(engine: InterpreterEngine): Promise<void> {
             resolve();
             return;
           }
-          // Exactly what connectRealtimeWsLeg does with these three.
-          if (type === "response.created") gate.rearm();
-          if (type === "input_audio_buffer.speech_started") gate.flush();
+          // Exactly what connectRealtimeWsLeg does with these. (The rig has no
+          // loudspeaker, so the half-duplex MIC rule has nothing to silence
+          // here — the browser check with the scripted provider covers that.)
+          const action = speakerActionFor(msg, HALF_DUPLEX);
+          if (action === "rearm") gate.rearm();
+          else if (action === "cut") gate.flush();
           if (type === "response.output_audio.delta" || type === "response.audio.delta") {
             if (typeof msg.delta === "string" && msg.delta) gate.play(Buffer.from(msg.delta, "base64"));
             const rid = String(msg.response_id ?? "");

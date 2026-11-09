@@ -117,6 +117,25 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     One session both ways (`TAOS_INTERPRETER_LEGS=1`, one voice, half the
     price) did better in two runs. → Tom's call whether the clone-per-speaker
     arm is worth keeping in this shape.
+  - *Third table test, same day ~12:50 MT (Tom and Liz, a real phone, commit
+    ef73ba5).* Grok behaved. **ElevenLabs** translated well and its replies
+    died after two or three sentences; the two exported timelines said why —
+    the phone was hearing its own loudspeaker (`speech_started` on both legs
+    within ~60 ms, no commit after it), every one of those was treated as a
+    barge-in, and three finished translations were thrown away unplayed
+    (`held-dropped`). ElevenLabs now runs **half-duplex**
+    (`lib/interpreter/halfDuplex.ts`): while any leg's voice is playing, plus
+    a 300 ms tail, every leg's microphone is sent silence; `speech_started`
+    no longer stops the speaker — only the provider cancelling a reply for a
+    new turn does; a reply the gate has let through plays to its end. The
+    echo guard between the two legs is unchanged. The timeline now tags each
+    `speech_started` committed / peer / phantom (and `spk` when it came during
+    our own playback) and records the muted stretches and what the mic was
+    actually granted. Checked on the real screen against a scripted provider
+    (`tests/live-fire/interpreter-half-duplex-browser-check.mjs`, spends
+    nothing; the same script fails on ef73ba5). Cost of the trade, Tom's
+    choice: someone who talks WHILE the interpretation is playing is not
+    heard. Grok is left full-duplex. → Phone re-test decides it.
 
 - **Founder translation review — keep audio (opt-in, 14 days) + /review with
   flagging; built 2026-11-04, draft PR open, founders only.** Tom: translations

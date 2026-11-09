@@ -60,12 +60,40 @@ export interface TimelineRow {
   /** error.code / error.type. Never error.message. */
   code?: string;
   /**
+   * speech_started only — what became of it (see "Phantom speech" below):
+   * committed | peer | phantom | open.
+   */
+  speech?: SpeechOutcome;
+  /** speech_started only: 1 = it arrived while OUR speaker was playing (or its tail). */
+  spk?: 1;
+  /**
    * session.created / session.updated: what the provider says the session IS
    * — protocol tokens and numbers only (see sessionConfigTokens). Never the
    * instructions, never a voice id.
    */
   cfg?: Record<string, string>;
 }
+
+// ── Phantom speech ─────────────────────────────────────────────────────────
+// A provider's `speech_started` is a guess that somebody began to talk. At
+// Tom and Liz's table (2026-11-09) a good half of them were the interpreter's
+// own voice coming back in through the microphone. Every speech_started row
+// is therefore tagged with what became of it:
+//
+//   committed  this leg went on to commit a turn — a person, heard.
+//   peer       this leg committed nothing, but ANOTHER leg that started
+//              hearing at the same moment did: the other person's language,
+//              which this leg is briefed to leave alone. Normal.
+//   phantom    nobody committed anything. Noise — or, with `spk: 1` beside
+//              it, our own playback. After the half-duplex fix a healthy
+//              table shows few of these and none with `spk`.
+//   open       the session ended (or it is under PHANTOM_AFTER_MS old) before
+//              it could be told.
+export type SpeechOutcome = "committed" | "peer" | "phantom" | "open";
+/** Two legs hear one voice within ~60 ms; this is "the same moment". */
+export const PEER_SPEECH_WINDOW_MS = 2000;
+/** An unanswered speech_started this old at export is called a phantom. */
+export const PHANTOM_AFTER_MS = 15_000;
 
 export interface LegTimelineMeta {
   source: string | null;
@@ -80,6 +108,11 @@ export interface LegDigest {
   /** Inbound events by type. */
   counts: Record<string, number>;
   speechStarted: number;
+  /** speech_started by outcome (see "Phantom speech"), and how many came during our own playback. */
+  speechCommitted: number;
+  speechPeer: number;
+  speechPhantom: number;
+  speechInPlayback: number;
   committed: number;
   responsesCreated: number;
   /** response.done by status. */
@@ -96,6 +129,10 @@ export interface LegDigest {
   /** Speaker gate: opened / audio thrown away unplayed (bytes). */
   gateOpens: number;
   heldDroppedBytes: number;
+  /** Half-duplex: how long the mic was sent as silence because we were speaking. */
+  micMutedMs: number;
+  /** The speaker was cut off because the PROVIDER cancelled a reply for a new turn. */
+  speakerCuts: number;
   errors: number;
   /** ms from each response.created to its first audio frame. */
   firstAudioMs: number[];
@@ -129,12 +166,22 @@ export interface TimelineExport {
 }
 
 export interface LegTimeline {
-  /** A parsed provider event and the length of the frame it came in. */
-  recv: (msg: Record<string, unknown>, wireBytes: number) => void;
+  /**
+   * A parsed provider event and the length of the frame it came in.
+   * `speaker`: our own voice was playing (or in its tail) when it arrived.
+   */
+  recv: (msg: Record<string, unknown>, wireBytes: number, ctx?: { speaker?: boolean }) => void;
   /** Something we sent. `audioBytes` for a mic append. */
   sent: (type: string, wireBytes: number, audioBytes?: number) => void;
-  /** A local fact: socket-open, socket-close, gate-open, held-dropped, mic-dropped … */
-  note: (type: string, detail?: { bytes?: number; reason?: string | number }) => void;
+  /**
+   * A local fact: socket-open, socket-close, gate-open, held-dropped,
+   * mic-dropped, mic-muted, speaker-cut, mic-settings … `cfg` values must be
+   * protocol tokens (safeToken) like everything else.
+   */
+  note: (
+    type: string,
+    detail?: { bytes?: number; reason?: string | number; ms?: number; cfg?: Record<string, unknown> }
+  ) => void;
 }
 
 export interface SessionTimeline {
@@ -166,6 +213,8 @@ export function timelineFileName(exported: TimelineExport): string {
 export const TIMELINE_MAX_ROWS = 8000;
 /** A folded run never spans more than this. */
 export const FOLD_WINDOW_MS = 5000;
+/** Mic chunks are 100 ms apart; a longer gap ends a `mic-muted` run. */
+const MUTED_RUN_GAP_MS = 500;
 const MAX_ORDINALS = 4000;
 const MAX_SAMPLES = 400;
 
@@ -183,7 +232,12 @@ export function base64Bytes(b64: string): number {
 
 /** Event types that arrive in bursts and are folded into one row per run. */
 function folds(type: string): boolean {
-  return type.endsWith(".delta") || type === "input_audio_buffer.append" || type === "mic-dropped";
+  return (
+    type.endsWith(".delta") ||
+    type === "input_audio_buffer.append" ||
+    type === "mic-dropped" ||
+    type === "mic-muted"
+  );
 }
 
 const AUDIO_DELTAS = new Set(["response.output_audio.delta", "response.audio.delta"]);
@@ -201,6 +255,10 @@ function emptyDigest(leg: number, transport: string): LegDigest {
     transport,
     counts: {},
     speechStarted: 0,
+    speechCommitted: 0,
+    speechPeer: 0,
+    speechPhantom: 0,
+    speechInPlayback: 0,
     committed: 0,
     responsesCreated: 0,
     responsesDone: {},
@@ -213,6 +271,8 @@ function emptyDigest(leg: number, transport: string): LegDigest {
     micDropped: 0,
     gateOpens: 0,
     heldDroppedBytes: 0,
+    micMutedMs: 0,
+    speakerCuts: 0,
     errors: 0,
     firstAudioMs: [],
     turnToAudioMs: [],
@@ -273,6 +333,16 @@ export function createSessionTimeline(opts: {
   /** The open run of each (leg, direction, type) — what the next delta folds into. */
   const lastRow = new Map<string, TimelineRow>();
   const lastInAt = new Map<number, number>();
+  /** Each leg's most recent speech_started that has not been told yet. */
+  const openSpeech = new Map<number, TimelineRow>();
+  const settle = (row: TimelineRow, outcome: Exclude<SpeechOutcome, "open">) => {
+    row.speech = outcome;
+    const digest = digests.get(row.leg);
+    if (!digest) return;
+    if (outcome === "committed") digest.speechCommitted += 1;
+    else if (outcome === "peer") digest.speechPeer += 1;
+    else digest.speechPhantom += 1;
+  };
 
   const push = (row: TimelineRow) => {
     // Audio and transcript deltas of one response arrive interleaved, so a run
@@ -281,7 +351,9 @@ export function createSessionTimeline(opts: {
     // still shows WHEN audio was flowing, five seconds at a time.
     const key = `${row.leg}:${row.dir}:${row.type}`;
     const prev = lastRow.get(key);
-    if (prev && folds(row.type) && prev.r === row.r && row.t - prev.t < FOLD_WINDOW_MS) {
+    // A muted run is one stretch of our own playback: a new stretch is a new row.
+    const sameStretch = row.type !== "mic-muted" || row.t - (prev?.t2 ?? prev?.t ?? 0) < MUTED_RUN_GAP_MS;
+    if (prev && folds(row.type) && prev.r === row.r && row.t - prev.t < FOLD_WINDOW_MS && sameStretch) {
       prev.n += row.n;
       prev.bytes += row.bytes;
       if (row.audioBytes !== undefined) prev.audioBytes = (prev.audioBytes ?? 0) + row.audioBytes;
@@ -333,7 +405,7 @@ export function createSessionTimeline(opts: {
       let pendingCommitAt: number | null = null;
 
       return {
-        recv: (msg, wireBytes) => {
+        recv: (msg, wireBytes, ctx) => {
           const t = now() - t0;
           const type = safeToken(msg.type);
           const response = obj(msg.response);
@@ -391,9 +463,29 @@ export function createSessionTimeline(opts: {
             if (type.endsWith(".completed")) digest.heardTranscripts += 1;
           } else if (type === "input_audio_buffer.speech_started") {
             digest.speechStarted += 1;
+            // The one before it never led anywhere.
+            const before = openSpeech.get(index);
+            if (before) settle(before, "phantom");
+            row.speech = "open";
+            if (ctx?.speaker) {
+              row.spk = 1;
+              digest.speechInPlayback += 1;
+            }
+            openSpeech.set(index, row);
           } else if (type === "input_audio_buffer.committed") {
             digest.committed += 1;
             pendingCommitAt = t;
+            const mine = openSpeech.get(index);
+            if (mine) {
+              settle(mine, "committed");
+              openSpeech.delete(index);
+              // The other legs heard the same voice start and left it to this one.
+              for (const [other, theirs] of openSpeech) {
+                if (Math.abs(theirs.t - mine.t) > PEER_SPEECH_WINDOW_MS) continue;
+                settle(theirs, "peer");
+                openSpeech.delete(other);
+              }
+            }
           } else if (type === "response.created") {
             digest.responsesCreated += 1;
             if (r !== undefined) createdAt.set(r, t);
@@ -442,7 +534,17 @@ export function createSessionTimeline(opts: {
             bytes: Math.max(0, detail?.bytes ?? 0)
           };
           if (detail?.reason !== undefined) row.reason = safeToken(detail.reason, 32);
+          if (detail?.cfg) {
+            const cfg: Record<string, string> = {};
+            for (const [key, value] of Object.entries(detail.cfg).slice(0, 12)) {
+              const token = safeToken(typeof value === "boolean" ? String(value) : value, 24);
+              if (token !== "?" && safeToken(key, 24) !== "?") cfg[key] = token;
+            }
+            if (Object.keys(cfg).length) row.cfg = cfg;
+          }
           if (row.type === "mic-dropped") digest.micDropped += 1;
+          else if (row.type === "mic-muted") digest.micMutedMs += Math.max(0, Math.round(detail?.ms ?? 0));
+          else if (row.type === "speaker-cut") digest.speakerCuts += 1;
           else if (row.type === "gate-open") digest.gateOpens += 1;
           else if (row.type === "held-dropped") digest.heldDroppedBytes += row.bytes;
           else if (row.type === "socket-close") digest.closeCode = row.reason ?? "?";
@@ -452,6 +554,15 @@ export function createSessionTimeline(opts: {
     },
     export: (nowMs) => {
       const end = (nowMs ?? now()) - t0;
+      // A speech_started nobody answered and old enough to say so: a phantom —
+      // in the COPY, so a later export can still be told otherwise.
+      const stale = new Set<TimelineRow>();
+      const stalePerLeg = new Map<number, number>();
+      for (const row of openSpeech.values()) {
+        if (end - row.t < PHANTOM_AFTER_MS) continue;
+        stale.add(row);
+        stalePerLeg.set(row.leg, (stalePerLeg.get(row.leg) ?? 0) + 1);
+      }
       return {
         v: 1,
         engine: safeToken(opts.engine, 32),
@@ -462,13 +573,14 @@ export function createSessionTimeline(opts: {
         dropped,
         digest: [...digests.values()].map((d) => ({
           ...d,
+          speechPhantom: d.speechPhantom + (stalePerLeg.get(d.leg) ?? 0),
           counts: { ...d.counts },
           responsesDone: { ...d.responsesDone },
           firstAudioMs: d.firstAudioMs.slice(),
           turnToAudioMs: d.turnToAudioMs.slice(),
           lastInAgoMs: Math.max(0, Math.round(end - (lastInAt.get(d.leg) ?? end)))
         })),
-        rows: rows.map((row) => ({ ...row }))
+        rows: rows.map((row) => (stale.has(row) ? { ...row, speech: "phantom" as const } : { ...row }))
       };
     }
   };
@@ -513,6 +625,13 @@ export interface LegDigestSummary {
   close: string;
   reasoning: string;
   vad: string;
+  /** Added 2026-11-09 (half-duplex). A phone on an older build posts none of them: read as 0. */
+  speech_committed: number;
+  speech_peer: number;
+  speech_phantom: number;
+  speech_in_playback: number;
+  mic_muted_ms: number;
+  speaker_cuts: number;
 }
 
 export function summarizeLegDigest(d: LegDigest): LegDigestSummary {
@@ -549,7 +668,13 @@ export function summarizeLegDigest(d: LegDigest): LegDigestSummary {
     longest_gap_at_ms: d.longestInGapAtMs,
     close: d.closeCode || "none",
     reasoning: d.reasoning || "unset",
-    vad: d.vad || "unset"
+    vad: d.vad || "unset",
+    speech_committed: d.speechCommitted,
+    speech_peer: d.speechPeer,
+    speech_phantom: d.speechPhantom,
+    speech_in_playback: d.speechInPlayback,
+    mic_muted_ms: d.micMutedMs,
+    speaker_cuts: d.speakerCuts
   };
 }
 
@@ -579,6 +704,15 @@ const DIGEST_NUMBERS = [
   "longest_gap_ms",
   "longest_gap_at_ms"
 ] as const;
+/** Numbers a phone on an older build does not send; absent reads as 0. */
+const DIGEST_LATER_NUMBERS = [
+  "speech_committed",
+  "speech_peer",
+  "speech_phantom",
+  "speech_in_playback",
+  "mic_muted_ms",
+  "speaker_cuts"
+] as const;
 const DIGEST_TOKENS = ["transport", "last_in", "close", "reasoning", "vad"] as const;
 
 /**
@@ -599,6 +733,11 @@ export function parseTimelineDigest(raw: unknown): LegDigestSummary[] | null {
       if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
       parsed[key] = Math.min(1e12, Math.round(v));
     }
+    for (const key of DIGEST_LATER_NUMBERS) {
+      const v = r[key] === undefined ? 0 : r[key];
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
+      parsed[key] = Math.min(1e12, Math.round(v));
+    }
     for (const key of DIGEST_TOKENS) {
       const token = safeToken(r[key]);
       if (token === "?") return null;
@@ -614,6 +753,7 @@ export function timelineLogLine(engine: string, summary: LegDigestSummary): stri
   const parts = [`[taos-interpreter-diag]`, `engine=${safeToken(engine, 32)}`];
   for (const key of ["leg", "transport"] as const) parts.push(`${key}=${summary[key]}`);
   for (const key of DIGEST_NUMBERS) if (key !== "leg") parts.push(`${key}=${summary[key]}`);
+  for (const key of DIGEST_LATER_NUMBERS) parts.push(`${key}=${summary[key]}`);
   parts.push(
     `last_in=${summary.last_in}`,
     `close=${summary.close}`,
