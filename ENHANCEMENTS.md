@@ -58,6 +58,35 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   whether `rec_ms` should also feed the review row for Taokie-style timing.
   → Phone test pending: a car turn with Liz, then Redo on /review.
 
+- **Tabletop "Interpreter mode" — continuous, hands-free, briefed; built
+  2026-11-09, draft PR open, founders only.** Tom (2026-11-09): at dinner he
+  and Liz used ChatGPT voice to talk back and forth and want that in TAOS — an
+  AI sitting between them that interprets continuously, "no record button, no
+  timer, no awkward wait", and that knows their context. "Use the absolute
+  latest cutting-edge technology, see how good we can make it." So `/tabletop`
+  gets an **◉ Interpreter** chip (flag `TAOS_INTERPRETER_ENABLED` + founders):
+  one tap starts a session, both people just talk, the model decides when a
+  thought is finished and speaks it in the other language, and speaking over
+  it cuts it off. Captions of both sides, oldest first, each end of the table
+  in its reader's language; a big Stop in the middle strip. Four engines on a
+  founder-visible picker (per device, no redeploy): `gpt-realtime-2.1`
+  (default — the flagship, and the first step off `gpt-realtime`, which
+  retires 2027-01-20), `gpt-live-1` (found while verifying; OpenAI's newest
+  conversational voice model), `gpt-realtime-translate` (flat per minute, takes
+  NO briefing) and `gemini-3.8-live`. One provider session per DIRECTION, so
+  each direction has its own stock voice. **The briefing**: a role written in
+  the repo about languages only, plus a founder-editable context block (names,
+  nicknames, family, everyday words) stored in the database
+  (`taos_lite_interpreter_context`, service role only, never seeded from the
+  repo) and edited from a plain box on the screen. Cost guards: `guardSpend`,
+  a 30-minute cap (`TAOS_INTERPRETER_MAX_MIN`), a ~60 s idle stop, the PR #42
+  context cap, and one `[taos-interpreter]` line of numbers per session.
+  → Table test pending: Tom and Liz A/B the engines by ear.
+  → Migration `20261109_interpreter_context.sql` NOT applied — Tom applies it;
+  until then the mode runs on the role alone and the edit box says so.
+  → Gemini leg is unverified end to end (no key on the build machine).
+  → Spanish strings are an agent's, pendiente de revisión por Liz.
+
 - **Founder translation review — keep audio (opt-in, 14 days) + /review with
   flagging; built 2026-11-04, draft PR open, founders only.** Tom: translations
   between him and Liz have "pretty horrible mistakes" and the text alone cannot
@@ -491,6 +520,16 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   the product. (added 2026-08-25)
 
 ## Ideas
+
+- **Interpreter mode in the founders' own cloned voices** — the realtime models
+  speak in stock voices. Getting Tom's and Liz's clones means the model writes
+  TEXT and ElevenLabs streams the speech (`output_modalities: ["text"]` +
+  the streaming TTS endpoint, sentence by sentence): roughly +0.4–0.8 s before
+  the first word of every turn, no natural barge-in mid-word, and ElevenLabs
+  characters on top of the model. Or an OpenAI custom voice made from a consent
+  recording, which the realtime models can speak in directly with no added
+  latency — a different clone from the ElevenLabs one, so only ears can say
+  whether it is "her". Tom's call. (added 2026-11-09)
 
 - **Taokie invite should open in the installed app, not Safari (iOS).** On
   2026-11-02 Liz's first turns came from the Home Screen app (`standalone=1`,
