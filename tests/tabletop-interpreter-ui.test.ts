@@ -18,7 +18,8 @@ import { createElement, type ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PAIR_STORAGE_KEY } from "@/lib/translate/pair";
 import { emptyInterpreterTally } from "@/lib/interpreter/cost";
-import { ENGINE_STORAGE_KEY, type InterpreterEngine } from "@/lib/interpreter/engine";
+import { ENGINE_STORAGE_KEY, engineTakesBriefing, type InterpreterEngine } from "@/lib/interpreter/engine";
+import { STYLE_STORAGE_KEY, type InterpreterStyle } from "@/lib/interpreter/mediator";
 import type { InterpreterHandlers } from "@/lib/interpreter/client";
 import type { InterpreterModeProps } from "@/components/tabletop/InterpreterMode";
 
@@ -56,6 +57,7 @@ interface FakeSession {
   engine: InterpreterEngine;
   mine: string;
   theirs: string;
+  style?: InterpreterStyle;
   handlers: InterpreterHandlers;
 }
 const fake = {
@@ -74,6 +76,8 @@ const fakeStart: NonNullable<InterpreterModeProps["start"]> = async (opts) => {
   return {
     engine: opts.engine,
     model: "gpt-realtime-2.1",
+    // What the server would answer: an unbriefable engine is never a mediator.
+    style: engineTakesBriefing(opts.engine) ? (opts.style ?? "interpreter") : "interpreter",
     legs: 2,
     maxSeconds: fake.maxSeconds,
     idleSeconds: fake.idleSeconds,
@@ -331,7 +335,7 @@ describe("Interpreter mode", () => {
     const body = posts[0].body!;
     expect(body).toMatchObject({ engine: "openai-realtime", stop: "user", legs: 2, barge_ins: 1, audio_out_tokens: 900 });
     for (const [key, value] of Object.entries(body)) {
-      if (key === "engine" || key === "stop") continue;
+      if (key === "engine" || key === "stop" || key === "style") continue;
       expect(typeof value, key).toBe("number");
     }
     expect(JSON.stringify(posted)).not.toContain("SECRET");
@@ -413,14 +417,16 @@ describe("Interpreter mode", () => {
 });
 
 describe("the founder engine picker", () => {
-  it("offers all four engines and remembers the choice on this device", async () => {
+  it("offers all six engines and remembers the choice on this device", async () => {
     const { container } = await mountMode();
     const chips = Array.from(container.querySelectorAll("[data-interpreter-engine]"));
     expect(chips.map((c) => c.getAttribute("data-interpreter-engine"))).toEqual([
       "openai-realtime",
       "openai-live",
       "openai-translate",
-      "gemini-live"
+      "gemini-live",
+      "grok-voice",
+      "elevenlabs-realtime"
     ]);
     expect(container.querySelector('[data-interpreter-engine="openai-realtime"]')!.getAttribute("aria-pressed")).toBe("true");
     await act(async () => {
@@ -451,6 +457,40 @@ describe("the founder engine picker", () => {
     fake.briefing = { applied: false, contextChars: 0, contextStatus: "ok" };
     await tapStart(container);
     expect(container.querySelector("[data-interpreter-unbriefed]")).not.toBeNull();
+  });
+});
+
+describe("the experimental Mediator flag", () => {
+  it("is absent by default and always starts the plain interpreter", async () => {
+    window.localStorage.setItem(STYLE_STORAGE_KEY, "mediator");
+    const { container } = await mountMode();
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-interpreter-context-open]")!);
+    });
+    expect(container.querySelector("[data-interpreter-style]")).toBeNull();
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-interpreter-context] button")!);
+    });
+    await tapStart(container);
+    expect(fake.sessions[0].style).toBe("interpreter");
+  });
+
+  it("appears only when enabled, remembers an explicit choice, and starts Mediator", async () => {
+    const { container } = await mountMode({ mediatorEnabled: true });
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-interpreter-context-open]")!);
+    });
+    const option = container.querySelector<HTMLButtonElement>('[data-interpreter-style-option="mediator"]')!;
+    expect(option).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(option);
+    });
+    expect(window.localStorage.getItem(STYLE_STORAGE_KEY)).toBe("mediator");
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-interpreter-context] button")!);
+    });
+    await tapStart(container);
+    expect(fake.sessions[0].style).toBe("mediator");
   });
 });
 

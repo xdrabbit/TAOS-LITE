@@ -28,6 +28,19 @@ export function interpreterEnabled(
   return flag === "1" || flag === "true";
 }
 
+// ── Experimental Mediator style ──────────────────────────────────────────
+// Separate from the mode's own gate. Interpreter mode may be enabled while
+// the experimental style remains completely absent and API requests asking
+// for it are ignored.
+//
+//     TAOS_INTERPRETER_MEDIATOR_ENABLED=1
+export function interpreterMediatorEnabled(
+  raw: string | undefined = process.env.TAOS_INTERPRETER_MEDIATOR_ENABLED
+): boolean {
+  const flag = (raw ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
 /** May this person reach Interpreter mode at all? Both halves, always. */
 export function interpreterVisibleTo(email: string | null | undefined, enabled: boolean): boolean {
   return enabled && isFounder(email);

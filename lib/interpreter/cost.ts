@@ -1,5 +1,5 @@
 // What one Interpreter-mode session cost, from the numbers the providers
-// report — the lib/call/cost.ts idea, for four engines that bill three
+// report — the lib/call/cost.ts idea, for six engines that bill three
 // different ways. Isomorphic and pure: the phone tallies with it, the usage
 // route prices with it, the probe reports with it. One arithmetic.
 //
@@ -14,7 +14,8 @@
 //   gpt-realtime-translate, gpt-live-1) and aistudio.google.com/docs/pricing.
 
 import type { RealtimeUsage } from "@/lib/call/cost";
-import { parseEngine, type InterpreterEngine } from "./engine";
+import { engineBillsByTheMinute, parseEngine, type InterpreterEngine } from "./engine";
+import { DEFAULT_INTERPRETER_STYLE, parseStyle, type InterpreterStyle } from "./mediator";
 
 /** Dollars per 1M tokens. */
 export interface TokenRates {
@@ -57,6 +58,38 @@ export const OPENAI_TRANSLATE_USD_PER_MINUTE = 0.034;
  */
 export const OPENAI_LIVE_USD_PER_MINUTE = 0.05;
 
+/**
+ * grok-voice-3.0: flat $0.08 per minute ($4.80/h), per session (= per leg).
+ * xAI's pricing page does not say what the meter counts; their own
+ * live-interpreter recipe measured it as "the time since the first audio
+ * arrived, silences included", and each `response.done` reports the running
+ * total (`usage.billable_audio_seconds`), which is what the tally reads.
+ * (docs.x.ai/developers/pricing, read 2026-11-09.)
+ */
+export const GROK_VOICE_USD_PER_MINUTE = 0.08;
+
+/**
+ * ElevenLabs Realtime: $0.08 per connected minute, per session (= per leg) —
+ * the ElevenAgents rate for minutes past a plan's included ones — PLUS the
+ * Realtime model's tokens (Mini $0.20 in / $6 out per 1M, Max $1.80 / $9),
+ * which its wire protocol does not report (`response.done` carries no usage).
+ * So this figure is a FLOOR: the per-minute part only, at the overage rate,
+ * with no credit for the 95 % discount ElevenLabs gives silences over ten
+ * seconds. The true number is on the ElevenLabs dashboard.
+ * (elevenlabs.io/pricing/agents, read 2026-11-09.)
+ */
+export const ELEVENLABS_REALTIME_USD_PER_MINUTE = 0.08;
+
+/** The flat rate of an engine that bills the clock; null for a token engine. */
+export function usdPerMinute(engine: InterpreterEngine): number | null {
+  if (!engineBillsByTheMinute(engine)) return null;
+  if (engine === "openai-translate") return OPENAI_TRANSLATE_USD_PER_MINUTE;
+  if (engine === "openai-live") return OPENAI_LIVE_USD_PER_MINUTE;
+  if (engine === "grok-voice") return GROK_VOICE_USD_PER_MINUTE;
+  if (engine === "elevenlabs-realtime") return ELEVENLABS_REALTIME_USD_PER_MINUTE;
+  return null;
+}
+
 /** gpt-transcribe, for the captions of what each person said. By duration. */
 export const CAPTION_TRANSCRIBE_USD_PER_MINUTE = 0.0045;
 
@@ -97,6 +130,8 @@ export interface InterpreterTally {
   billedSeconds: number;
   bargeIns: number;
   errors: number;
+  /** The style the session was briefed in. Absent = the interpreter. */
+  style?: InterpreterStyle;
 }
 
 export function emptyInterpreterTally(
@@ -190,12 +225,8 @@ export function addGeminiUsage(
 /** Dollars this session has spent so far, by its engine's own billing. */
 export function estimateUsd(tally: InterpreterTally): number {
   const captions = (tally.transcribedSeconds / 60) * CAPTION_TRANSCRIBE_USD_PER_MINUTE;
-  if (tally.engine === "openai-translate") {
-    return (tally.billedSeconds / 60) * OPENAI_TRANSLATE_USD_PER_MINUTE;
-  }
-  if (tally.engine === "openai-live") {
-    return (tally.billedSeconds / 60) * OPENAI_LIVE_USD_PER_MINUTE;
-  }
+  const flat = usdPerMinute(tally.engine);
+  if (flat !== null) return (tally.billedSeconds / 60) * flat;
   const R = tokenRatesFor(tally.engine, tally.model);
   if (!R) return 0;
   const uncachedText = Math.max(0, tally.textInTokens - tally.cachedTextInTokens);
@@ -232,6 +263,8 @@ export interface InterpreterSummary {
   barge_ins: number;
   errors: number;
   stop: InterpreterStop;
+  /** A closed set, like `engine` and `stop` — it goes in the log line. */
+  style: InterpreterStyle;
 }
 
 export function summarizeTally(tally: InterpreterTally, nowMs: number, stop: InterpreterStop): InterpreterSummary {
@@ -253,7 +286,8 @@ export function summarizeTally(tally: InterpreterTally, nowMs: number, stop: Int
     billed_secs: Math.round(tally.billedSeconds),
     barge_ins: tally.bargeIns,
     errors: tally.errors,
-    stop
+    stop,
+    style: tally.style ?? DEFAULT_INTERPRETER_STYLE
   };
 }
 
@@ -300,6 +334,9 @@ export function parseInterpreterSummary(raw: unknown): InterpreterSummary | null
   return {
     engine,
     stop,
+    // Matched against the closed set; anything else — absent (a phone on the
+    // build before styles existed), a typo, a sentence — is the default.
+    style: parseStyle(r.style) ?? DEFAULT_INTERPRETER_STYLE,
     ...n,
     legs: Math.max(1, Math.min(4, n.legs)),
     // Derived here, never trusted from the client.
@@ -326,7 +363,8 @@ export function summaryUsd(summary: InterpreterSummary, model: string): number {
     transcribedSeconds: summary.transcribed_secs,
     billedSeconds: summary.billed_secs,
     bargeIns: summary.barge_ins,
-    errors: summary.errors
+    errors: summary.errors,
+    style: summary.style
   });
 }
 
@@ -352,7 +390,8 @@ export function interpreterLogLine(summary: InterpreterSummary, model: string): 
     `audio_out_tokens=${summary.audio_out_tokens}`,
     `billed_secs=${summary.billed_secs}`,
     `errors=${summary.errors}`,
-    `stop=${summary.stop}`
+    `stop=${summary.stop}`,
+    `style=${summary.style}`
   ].join(" ");
 }
 

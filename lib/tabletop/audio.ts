@@ -1,6 +1,6 @@
 "use client";
 
-import { createPcmDownsampler, peakOfS16 } from "./pcm";
+import { createPcmDownsampler, PCM_IN_RATE, peakOfS16 } from "./pcm";
 
 // The Gemini brain's microphone tap: the speaker's mic as 16 kHz mono s16
 // chunks of 100 ms, which is what Live Translate takes on its WebSocket.
@@ -73,7 +73,13 @@ const PCM_TAP_FRAMES = 2048;
  */
 export function tapMicPcm(
   track: MediaStreamTrack,
-  onChunk: (pcm: Int16Array) => void
+  onChunk: (pcm: Int16Array) => void,
+  /**
+   * Output rate. 16 kHz is Gemini's and the default; Interpreter mode's
+   * socket engines (Grok, ElevenLabs Realtime) are sent 24 kHz, the only rate
+   * ElevenLabs accepts. Chunks stay 100 ms long at any rate.
+   */
+  rate: number = PCM_IN_RATE
 ): MicPcmTap | null {
   const ctx = ensureTabletopAudioContext();
   if (
@@ -91,10 +97,15 @@ export function tapMicPcm(
     const sink = ctx.createGain();
     sink.gain.value = 0;
     let lastPeak = 0;
-    const downsampler = createPcmDownsampler(ctx.sampleRate, (chunk) => {
-      lastPeak = peakOfS16(chunk);
-      onChunk(chunk);
-    });
+    const downsampler = createPcmDownsampler(
+      ctx.sampleRate,
+      (chunk) => {
+        lastPeak = peakOfS16(chunk);
+        onChunk(chunk);
+      },
+      rate,
+      Math.round(rate / 10)
+    );
     tap.onaudioprocess = (ev) => downsampler.push(ev.inputBuffer.getChannelData(0));
     source.connect(tap);
     tap.connect(sink);

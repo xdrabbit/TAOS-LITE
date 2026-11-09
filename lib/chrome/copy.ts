@@ -495,7 +495,21 @@ const EN = {
   interpreterContextNotUsed: "This engine cannot be briefed — it interprets without your notes.",
   interpreterEndedCap: "Session limit reached ({minutes} min). Start again to keep going.",
   interpreterEndedIdle: "Stopped after a quiet minute. Start again to keep going.",
-  interpreterEndedError: "The interpreter lost its connection. Start again."
+  interpreterEndedError: "The interpreter lost its connection. Start again.",
+  // Follow-up, same day (Tom, after the first table test): an engine whose
+  // key is not on the server says WHICH variable is missing, and the
+  // experimental Mediator style. `interpreterMediatorNote` is also the phrase
+  // the mediator SAYS before a note (lib/interpreter/mediator.ts) — the
+  // captions split on it, so it must stay a short, distinctive phrase.
+  interpreterEngineNoKey: "This engine is not set up yet: {name} is missing on the server.",
+  interpreterStyle: "Style",
+  interpreterStyleInterpreter: "Interpreter",
+  interpreterStyleMediator: "Mediator (experimental)",
+  interpreterStyleInterpreterHint: "Faithful to what was said, and silent otherwise.",
+  interpreterStyleMediatorHint:
+    "Still interprets everything. May briefly speak up, in both languages, only when the meaning is at risk — and answers if you ask it directly. Never takes sides, never gives advice.",
+  interpreterStyleNotOnEngine: "This engine cannot be briefed, so it is always a plain interpreter.",
+  interpreterMediatorNote: "Mediator note"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -895,7 +909,16 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     interpreterContextNotUsed: "Este motor no admite instrucciones — interpreta sin sus notas.", // pendiente de revisión por Liz
     interpreterEndedCap: "Se llegó al límite de la sesión ({minutes} min). Inicia de nuevo para seguir.", // pendiente de revisión por Liz
     interpreterEndedIdle: "Se detuvo tras un minuto de silencio. Inicia de nuevo para seguir.", // pendiente de revisión por Liz
-    interpreterEndedError: "El intérprete perdió la conexión. Inicia de nuevo." // pendiente de revisión por Liz
+    interpreterEndedError: "El intérprete perdió la conexión. Inicia de nuevo.", // pendiente de revisión por Liz
+    interpreterEngineNoKey: "Este motor aún no está configurado: falta {name} en el servidor.", // pendiente de revisión por Liz
+    interpreterStyle: "Estilo", // pendiente de revisión por Liz
+    interpreterStyleInterpreter: "Intérprete", // pendiente de revisión por Liz
+    interpreterStyleMediator: "Mediador (experimental)", // pendiente de revisión por Liz
+    interpreterStyleInterpreterHint: "Fiel a lo que se dijo, y en silencio lo demás.", // pendiente de revisión por Liz
+    interpreterStyleMediatorHint:
+      "Sigue interpretando todo. Puede intervenir brevemente, en los dos idiomas, solo cuando el significado está en riesgo — y responde si le preguntan directamente. Nunca toma partido, nunca da consejos.", // pendiente de revisión por Liz
+    interpreterStyleNotOnEngine: "Este motor no admite instrucciones, así que siempre es un intérprete simple.", // pendiente de revisión por Liz
+    interpreterMediatorNote: "Nota del mediador" // pendiente de revisión por Liz
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

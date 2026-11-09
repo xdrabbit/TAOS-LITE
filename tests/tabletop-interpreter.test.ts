@@ -9,9 +9,16 @@
 //   the gate        every interpreter route is 404 with the flag off, 401
 //                   signed out, 404 for a signed-in non-founder — and none of
 //                   those reaches a provider.
-//   the engines     TAOS_INTERPRETER_ENGINE + the picker choose among four;
+//   the engines     TAOS_INTERPRETER_ENGINE + the picker choose among six
+//                   (four on 2026-11-09 morning; Grok and ElevenLabs Realtime
+//                   added the same day on Tom's go after the table test);
 //                   each mints the right thing at the right URL; model IDs
-//                   and voices are env knobs.
+//                   and voices are env knobs; a missing key names itself.
+//   the captions    control / silence markers a model leaks (`<no speech>
+//                   {pause}`) never reach a caption, the speaker or the idle
+//                   clock.
+//   the mediator    an experimental STYLE that is off unless asked for and
+//                   assembles a different briefing.
 //   the briefing    the role + the founders' DATABASE context block are what
 //                   the provider session is given, and the context never
 //                   appears in a log line, in the response to the browser, or
@@ -27,23 +34,46 @@ import {
   buildInterpreterBriefing,
   buildLegBriefing,
   clampContext,
-  INTERPRETER_CONTEXT_MAX_CHARS
+  INTERPRETER_CONTEXT_MAX_CHARS,
+  SILENCE_TOKEN
 } from "@/lib/interpreter/briefing";
 import {
+  echoOverlap,
+  hasWords,
+  looksLikeEcho,
+  spokenWords,
+  stripControlMarkers,
+  withoutLeadingRepeat
+} from "@/lib/interpreter/captionFilter";
+import {
+  ENGINE_KEY_ENV,
   ENGINE_LABEL,
+  engineApiKey,
+  engineBillsByTheMinute,
   engineEnvDefault,
   engineTakesBriefing,
+  grokReasoning,
   INTERPRETER_ENGINES,
   interpreterLegCount,
   interpreterModel,
   interpreterVoice,
   parseEngine,
   resolveEngine,
-  voiceSlot
+  voiceSlot,
+  xaiApiKey
 } from "@/lib/interpreter/engine";
+import {
+  DEFAULT_INTERPRETER_STYLE,
+  mediatorMarker,
+  parseStyle,
+  resolveStyle,
+  splitMediatorNotes
+} from "@/lib/interpreter/mediator";
+import { ELEVENLABS_TOM_VOICE } from "@/lib/tts/voice";
 import {
   interpreterEnabled,
   interpreterIdleSeconds,
+  interpreterMediatorEnabled,
   interpreterMaxMinutes,
   interpreterVisibleTo
 } from "@/lib/interpreter/flag";
@@ -66,6 +96,8 @@ import {
 } from "@/lib/interpreter/cost";
 import { buildInterpreterPlan } from "@/lib/interpreter/plan";
 import {
+  buildElevenLabsRealtimeSession,
+  buildGrokSessionUpdate,
   buildOpenAIRealtimeSession,
   INTERPRETER_CONTEXT_TOKEN_LIMIT,
   interpreterEagerness,
@@ -74,6 +106,7 @@ import {
 import { applyCaption, paneLines, settleCaptions, type CaptionEntry, type CaptionUpdate } from "@/lib/interpreter/captions";
 import {
   createGeminiReader,
+  createPeerHeard,
   createRealtimeReader,
   createSharedHeard,
   createStreamReader,
@@ -145,6 +178,7 @@ const fetchSpy = vi.fn(async (input: unknown, init?: RequestInit) => {
 
 const ENV_KEYS = [
   "TAOS_INTERPRETER_ENABLED",
+  "TAOS_INTERPRETER_MEDIATOR_ENABLED",
   "TAOS_INTERPRETER_ENGINE",
   "TAOS_INTERPRETER_MAX_MIN",
   "TAOS_INTERPRETER_IDLE_SEC",
@@ -158,8 +192,19 @@ const ENV_KEYS = [
   "TAOS_INTERPRETER_GEMINI_VOICE_1",
   "TAOS_INTERPRETER_GEMINI_VOICE_2",
   "TAOS_INTERPRETER_TRANSCRIBE_MODEL",
+  "TAOS_INTERPRETER_GROK_MODEL",
+  "TAOS_INTERPRETER_GROK_VOICE_1",
+  "TAOS_INTERPRETER_GROK_VOICE_2",
+  "TAOS_INTERPRETER_GROK_REASONING",
+  "TAOS_INTERPRETER_ELEVENLABS_MODEL",
+  "TAOS_INTERPRETER_EAGERNESS",
   "OPENAI_API_KEY",
-  "GEMINI_API_KEY"
+  "GEMINI_API_KEY",
+  "XAI_API_KEY",
+  "GROK_API_KEY",
+  "ELEVENLABS_API_KEY",
+  "ELEVENLABS_LIZ_VOICE_ID",
+  "ELEVENLABS_VOICE_ID"
 ] as const;
 const savedEnv: Record<string, string | undefined> = {};
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -173,6 +218,10 @@ beforeEach(() => {
   process.env.TAOS_INTERPRETER_ENABLED = "1";
   process.env.OPENAI_API_KEY = "sk-test-openai";
   process.env.GEMINI_API_KEY = "test-gemini-key";
+  process.env.XAI_API_KEY = "xai-test-key";
+  process.env.ELEVENLABS_API_KEY = "el-test-key";
+  // A made-up ID: Liz's real one is configuration and is not in this repo.
+  process.env.ELEVENLABS_LIZ_VOICE_ID = "LIZ-CLONE-TEST-ID";
   caller = FOUNDER;
   store.context = "";
   store.status = "ok";
@@ -336,12 +385,17 @@ describe("the gate: flag + session + founder, on every route", () => {
 // ── the engine switch ──────────────────────────────────────────────────────
 
 describe("the engine switch", () => {
-  it("has four engines, defaults to the flagship, and refuses a typo", () => {
+  // Four until 2026-11-09 07:58 MT, when Tom — having table-tested all four —
+  // asked for Grok and ElevenLabs Realtime on the picker. The flagship is
+  // still first and still the default.
+  it("has six engines, defaults to the flagship, and refuses a typo", () => {
     expect([...INTERPRETER_ENGINES]).toEqual([
       "openai-realtime",
       "openai-live",
       "openai-translate",
-      "gemini-live"
+      "gemini-live",
+      "grok-voice",
+      "elevenlabs-realtime"
     ]);
     expect(engineEnvDefault(undefined)).toBe("openai-realtime");
     expect(engineEnvDefault("gemini-live")).toBe("gemini-live");
@@ -1007,9 +1061,9 @@ describe("the [taos-interpreter] cost line", () => {
   it("has nowhere to put a word", () => {
     const src = readFileSync("lib/interpreter/cost.ts", "utf8");
     const iface = src.slice(src.indexOf("export interface InterpreterSummary"), src.indexOf("export function summarizeTally"));
-    // Every field of the summary is a number or one of two closed enums.
+    // Every field of the summary is a number or one of three closed enums.
     for (const line of iface.split("\n").filter((l) => /^\s+\w+:/.test(l))) {
-      expect(line).toMatch(/: (number|InterpreterEngine|InterpreterStop);/);
+      expect(line).toMatch(/: (number|InterpreterEngine|InterpreterStop|InterpreterStyle);/);
     }
   });
 });
@@ -1039,6 +1093,7 @@ function recorder(): {
       bargeIn: () => calls.push("barge-in"),
       gate: (open) => calls.push(open ? "gate:open" : "gate:closed"),
       flushAudio: () => calls.push("flush"),
+      responseSilent: () => calls.push("silent"),
       error: (m) => calls.push(`error:${m}`),
       closed: () => calls.push("closed")
     }
@@ -1226,7 +1281,8 @@ describe("a streaming leg's events (translate, GPT-Live, Gemini)", () => {
     reader.handle({ type: "session.usage.updated", usage: { seconds: 12 } });
     reader.handle({ type: "session.usage.updated", usage: { seconds: 15 } });
     reader.handle({ type: "session.closed", usage: { seconds: 45.8 }, reason: "close_requested" });
-    expect(r.calls).toEqual(["billed:12", "billed:15", "billed:45.8", "closed"]);
+    // "silent": the session ended with nothing said — any held audio is dropped.
+    expect(r.calls).toEqual(["billed:12", "billed:15", "billed:45.8", "silent", "closed"]);
   });
 
   it("Gemini: an interruption is a barge-in that drops queued audio", () => {
@@ -1282,5 +1338,694 @@ describe("the captions", () => {
     const unsided: CaptionEntry[] = [{ id: "3", source: null, target: null, heard: "Hola", said: "Hi", live: false, at }];
     expect(paneLines(unsided, "en")).toEqual(paneLines(unsided, "es"));
     expect(paneLines(unsided, "en")[0]).toMatchObject({ kind: "both", heard: "Hola", said: "Hi" });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Follow-up, 2026-11-09 (Tom's go at 07:58 MT after the first table test)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── the caption filter ─────────────────────────────────────────────────────
+
+/**
+ * What Tom's screenshots showed in the Spanish captions on Gemini, cut the
+ * way a transcript stream cuts things — mid-token.
+ */
+const GEMINI_LEAK = ["<no", " speech>", "{pa", "use}"];
+
+describe("the caption filter", () => {
+  it("removes the markers Gemini leaked, and every marker of the same family", () => {
+    expect(stripControlMarkers("<no speech>{pause}")).toBe("");
+    expect(spokenWords("<no speech>{pause}")).toBe("");
+    expect(stripControlMarkers("Hola, <no speech>{pause} ¿cómo estás?")).toBe("Hola, ¿cómo estás?");
+    expect(stripControlMarkers("{pause} Okay.")).toBe("Okay.");
+    for (const marker of [
+      "<noise>",
+      "<silence>",
+      "<|endoftext|>",
+      "<ctrl46>",
+      "{silence}",
+      "[silence]",
+      "[BLANK_AUDIO]",
+      "[ no speech ]",
+      "(pause)",
+      "[inaudible]",
+      "[música]",
+      "[friendly]",
+      "[neutral]",
+      SILENCE_TOKEN
+    ]) {
+      expect(stripControlMarkers(marker).trim(), marker).toBe("");
+      expect(stripControlMarkers(`Sí ${marker} claro.`), marker).toBe("Sí claro.");
+    }
+  });
+
+  it("holds back a marker that has only half arrived, and never eats real words", () => {
+    // The tail of a stream: the closer is in the next fragment.
+    expect(stripControlMarkers("Hola <no")).toBe("Hola");
+    expect(stripControlMarkers("Hola {pau")).toBe("Hola");
+    // Plain speech is returned untouched — same string, not a copy.
+    const plain = "Me dio flojera salir, así que me quedé en casa (toda la tarde).";
+    expect(stripControlMarkers(plain)).toBe(plain);
+    // A bracketed NAME or number is not a delivery tag.
+    expect(stripControlMarkers("Llamó [María] a las [8]")).toBe("Llamó [María] a las [8]");
+    expect(hasWords("…")).toBe(false);
+    expect(hasWords("8")).toBe(true);
+  });
+
+  it("Gemini fixture: the quiet leg's `<no speech>{pause}` makes no caption, no sound and no activity", () => {
+    const r = recorder();
+    let clock = 0;
+    const shared = createSharedHeard();
+    // The Spanish-speaking leg (en→es) hearing SPANISH: told to keep quiet.
+    const quiet = createGeminiReader({ index: 1, source: "en", target: "es" }, r.sink, shared, {
+      ownsHeard: false,
+      now: () => clock
+    });
+    for (const text of GEMINI_LEAK) {
+      quiet.handle({ serverContent: { outputTranscription: { text } } });
+      clock += 80;
+    }
+    quiet.handle({ serverContent: { turnComplete: true } });
+    expect(r.captions).toEqual([]);
+    // Not "the interpreter spoke": a phone left on the table still goes idle.
+    expect(r.calls).not.toContain("activity");
+    // The speaker never opened, and audio held for that turn was thrown away.
+    expect(r.calls).not.toContain("gate:open");
+    expect(r.calls).toContain("silent");
+
+    // The same thing with no turn boundary at all: quiet time drops it.
+    r.calls.length = 0;
+    for (const text of GEMINI_LEAK) quiet.handle({ serverContent: { outputTranscription: { text } } });
+    quiet.tick(clock + STREAM_QUIET_MS + 1);
+    expect(r.captions).toEqual([]);
+    expect(r.calls).toEqual(["silent"]);
+  });
+
+  it("Gemini fixture: a marker beside real words is stripped from both sides of the caption", () => {
+    const r = recorder();
+    let clock = 0;
+    const shared = createSharedHeard();
+    const leg = createGeminiReader({ index: 0, source: "en", target: "es" }, r.sink, shared, {
+      ownsHeard: true,
+      now: () => clock
+    });
+    leg.handle({ serverContent: { inputTranscription: { text: "<noise> So how was your day?" } } });
+    for (const text of ["<no", " speech>", "{pause}", "¿Cómo estuvo", " tu día?", " {pause}"]) {
+      leg.handle({ serverContent: { outputTranscription: { text } } });
+      clock += 50;
+    }
+    leg.handle({ serverContent: { turnComplete: true } });
+    const last = r.captions.at(-1)!;
+    expect(last.said).toBe("¿Cómo estuvo tu día?");
+    expect(last.heard).toBe("So how was your day?");
+    expect(last.live).toBe(false);
+    for (const c of r.captions) {
+      expect(c.said).not.toMatch(/[<>{}]/);
+      expect(c.heard ?? "").not.toMatch(/[<>{}]/);
+    }
+    // The speaker opened exactly when there were words, and closed after.
+    expect(r.calls.filter((c) => c.startsWith("gate:"))).toEqual(["gate:open", "gate:closed"]);
+    // A trailing marker did not keep the finished caption "streaming".
+    expect(r.captions.filter((c) => c.said === "¿Cómo estuvo tu día?" && c.live).length).toBeGreaterThan(0);
+  });
+
+  it("a realtime leg that answers with only a marker stays shut — the silence token included", () => {
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 1, source: "es", target: "en" }, r.sink);
+    reader.handle({ type: "input_audio_buffer.committed", item_id: "i1" });
+    reader.handle({ type: "response.created", response: { id: "r1" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "<sil" });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "ent>" });
+    reader.handle({ type: "response.done", response: { id: "r1", status: "completed" } });
+    expect(r.captions).toEqual([]);
+    expect(r.calls).not.toContain("gate:open");
+    expect(r.calls).not.toContain("activity");
+    expect(r.calls).toContain("silent");
+  });
+});
+
+// ── an echo is not an interpretation (ElevenLabs Realtime) ─────────────────
+
+describe("the echo guard", () => {
+  it("tells a repetition from an interpretation without knowing either language", () => {
+    // Measured 2026-11-09: the leg that should have kept quiet said it back.
+    expect(looksLikeEcho("De acuerdo, pero me da miedo dejar a", "Sale, pero me da cosa dejar a")).toBe(true);
+    expect(
+      looksLikeEcho(
+        "[silent] Sane, pero me da cosa dejar a mi hija sola otra vez. <silent>",
+        "Sane, pero me da cosa dejar a mi hija sola otra vez."
+      )
+    ).toBe(true);
+    // A real interpretation shares almost no words with its source.
+    expect(
+      looksLikeEcho("Okay, but I feel bad about leaving my daughter alone again.", "Sale, pero me da cosa dejar a mi hija sola otra vez.")
+    ).toBe(false);
+    expect(echoOverlap("¿Quieres salir a cenar mañana?", "Do you want to go out for dinner tomorrow?")).toBe(0);
+    // Nothing heard, or nothing said, is never "an echo".
+    expect(looksLikeEcho("Hola", "")).toBe(false);
+    expect(looksLikeEcho("<silent>", "Hola")).toBe(false);
+  });
+
+  it("a leg with the guard never plays or captions a repetition, and plays a real interpretation", () => {
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink, { echoGuard: true });
+    // Spanish in — this leg's OUTPUT language. It should have kept quiet.
+    reader.handle({ type: "input_audio_buffer.committed", item_id: "i1" });
+    reader.handle({ type: "conversation.item.input_audio_transcription.completed", item_id: "i1", transcript: "Sale, pero me da cosa dejar a mi hija." });
+    reader.handle({ type: "response.created", response: { id: "r1" } });
+    // ElevenLabs sends the words first, then the audio.
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "Sale, pero me da cosa dejar a mi hija." });
+    expect(r.calls).not.toContain("gate:open");
+    reader.handle({ type: "response.output_audio.delta", response_id: "r1", delta: "AAAA" });
+    reader.handle({ type: "response.done", response: { id: "r1", status: "completed" } });
+    expect(r.captions).toEqual([]);
+    expect(r.calls).not.toContain("gate:open");
+    expect(r.calls).toContain("silent");
+
+    // English in: interpreted. Decided when the audio starts, not before.
+    reader.handle({ type: "input_audio_buffer.committed", item_id: "i2" });
+    reader.handle({ type: "conversation.item.input_audio_transcription.completed", item_id: "i2", transcript: "Do you want to go out for dinner tomorrow?" });
+    reader.handle({ type: "response.created", response: { id: "r2" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r2", delta: "<silent> ¿Quieres salir a cenar mañana?" });
+    expect(r.calls).not.toContain("gate:open");
+    reader.handle({ type: "response.output_audio.delta", response_id: "r2", delta: "AAAA" });
+    expect(r.calls).toContain("gate:open");
+    reader.handle({ type: "response.done", response: { id: "r2", status: "completed" } });
+    expect(r.captions.at(-1)).toMatchObject({
+      said: "¿Quieres salir a cenar mañana?",
+      heard: "Do you want to go out for dinner tomorrow?",
+      live: false
+    });
+  });
+
+  it("takes the other person's previous sentence off the front of what a leg heard", () => {
+    expect(
+      withoutLeadingRepeat(
+        "Más o menos. Me dio flojera salir. That sounds nice, honestly.",
+        "Más o menos, me dio flojera salir."
+      )
+    ).toBe("That sounds nice, honestly.");
+    // Not a prefix → untouched. One word is not evidence of anything.
+    expect(withoutLeadingRepeat("That sounds nice.", "Más o menos.")).toBe("That sounds nice.");
+    expect(withoutLeadingRepeat("No. I said no.", "No")).toBe("No. I said no.");
+
+    // Through the reader: the cascade glued the skipped Spanish turn onto the
+    // English one; the other leg had already captioned the Spanish.
+    const peers = createPeerHeard();
+    const other = recorder();
+    const esEn = createRealtimeReader({ index: 1, source: "es", target: "en" }, other.sink, { echoGuard: true, peers });
+    esEn.handle({ type: "conversation.item.input_audio_transcription.completed", item_id: "a1", transcript: "Más o menos. Me dio flojera salir." });
+    const r = recorder();
+    const enEs = createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink, { echoGuard: true, peers });
+    enEs.handle({ type: "input_audio_buffer.committed", item_id: "b1" });
+    enEs.handle({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "b1",
+      transcript: "Más o menos. Me dio flojera salir. That sounds nice, honestly."
+    });
+    enEs.handle({ type: "response.created", response: { id: "r1" } });
+    enEs.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "<silent> Suena bien, honestamente." });
+    enEs.handle({ type: "response.output_audio.delta", response_id: "r1", delta: "AAAA" });
+    expect(r.captions.at(-1)).toMatchObject({ said: "Suena bien, honestamente.", heard: "That sounds nice, honestly." });
+  });
+});
+
+// ── the two engines added after the table test ─────────────────────────────
+
+describe("grok-voice", () => {
+  it("is grok-voice-3.0 behind a knob, with two stock voices and reasoning off", () => {
+    expect(interpreterModel("grok-voice", {})).toBe("grok-voice-3.0");
+    expect(interpreterModel("grok-voice", { TAOS_INTERPRETER_GROK_MODEL: "grok-voice-latest" })).toBe("grok-voice-latest");
+    expect(interpreterVoice("grok-voice", { source: "en", target: "es" }, {})).toBe("rex");
+    expect(interpreterVoice("grok-voice", { source: "es", target: "en" }, {})).toBe("ara");
+    expect(interpreterVoice("grok-voice", { source: "en", target: "es" }, { TAOS_INTERPRETER_GROK_VOICE_1: "leo" })).toBe("leo");
+    expect(grokReasoning(undefined)).toBe("none");
+    expect(grokReasoning("HIGH")).toBe("high");
+    expect(engineTakesBriefing("grok-voice")).toBe(true);
+    expect(engineBillsByTheMinute("grok-voice")).toBe(true);
+    expect(interpreterLegCount("grok-voice", undefined)).toBe(2);
+  });
+
+  it("mints one client secret per leg at xAI; the secret binds only the model", async () => {
+    store.context = CONTEXT_MARKER;
+    const { res, json } = await startSession({ engine: "grok-voice" });
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(2);
+    for (const call of sent) {
+      expect(call.url).toBe("https://api.x.ai/v1/realtime/client_secrets");
+      expect(call.headers.Authorization).toBe("Bearer xai-test-key");
+      // All a Grok secret can carry: the briefing is NOT in the mint.
+      expect(call.body.session).toEqual({ model: "grok-voice-3.0", reasoning: { effort: "none" } });
+      expect(JSON.stringify(call.body)).not.toContain(CONTEXT_MARKER);
+      expect((call.body.expires_after as { seconds: number }).seconds).toBeLessThanOrEqual(120);
+    }
+    expect(json.engine).toBe("grok-voice");
+    expect(json.model).toBe("grok-voice-3.0");
+    const legs = json.legs as Record<string, unknown>[];
+    expect(legs.map((l) => [l.source, l.target, l.voice])).toEqual([
+      ["en", "es", "rex"],
+      ["es", "en", "ara"]
+    ]);
+    for (const leg of legs) {
+      expect(leg.transport).toBe("realtime-ws");
+      expect(leg.wsUrl).toBe("wss://api.x.ai/v1/realtime?model=grok-voice-3.0");
+      // A browser cannot set a header on a socket: the secret is a subprotocol.
+      expect(leg.protocols).toEqual([expect.stringMatching(/^xai-client-secret\.ek_secret_\d+$/)]);
+      expect(leg.inputRate).toBe(24000);
+      expect(leg.outputRate).toBe(24000);
+    }
+    expect(JSON.stringify(json)).not.toContain("xai-test-key");
+  });
+
+  it("puts the briefing in the browser's session.update — xAI's shape — and still never in a log", async () => {
+    store.context = CONTEXT_MARKER;
+    const { json } = await startSession({ engine: "grok-voice" });
+    const legs = json.legs as { sessionUpdate: Record<string, unknown>; voice: string }[];
+    const [enEs, esEn] = legs.map((l) => l.sessionUpdate);
+    expect(String(enEs.instructions).startsWith("OUTPUT LANGUAGE: Spanish.")).toBe(true);
+    expect(String(esEn.instructions).startsWith("OUTPUT LANGUAGE: English.")).toBe(true);
+    for (const [i, s] of [enEs, esEn].entries()) {
+      expect(String(s.instructions)).toContain(CONTEXT_MARKER);
+      // xAI: voice and turn detection at the TOP of the session.
+      expect(s.voice).toBe(legs[i].voice);
+      expect(s.turn_detection).toEqual({ type: "server_vad" });
+      expect(s).not.toHaveProperty("type");
+      expect(s).not.toHaveProperty("truncation");
+      const audio = s.audio as { input: Record<string, unknown>; output: Record<string, unknown> };
+      expect(audio.input.format).toEqual({ type: "audio/pcm", rate: 24000 });
+      expect(audio.input.transcription).toEqual({ model: "grok-transcribe" });
+      expect(audio.output.format).toEqual({ type: "audio/pcm", rate: 24000 });
+    }
+    expect(buildGrokSessionUpdate({ instructions: "x", voice: "eve" })).toMatchObject({ voice: "eve", instructions: "x" });
+    // The mint line: numbers and closed-set values only.
+    expect(logged.join("\n")).not.toContain(CONTEXT_MARKER);
+    expect(logged.join("\n")).not.toContain("OUTPUT LANGUAGE");
+    expect(logged.find((l) => l.startsWith("[taos-interpreter-mint] "))).toContain("engine=grok-voice model=grok-voice-3.0");
+  });
+
+  it("MISSING KEY: fails closed, names the variable to add, and calls nobody", async () => {
+    delete process.env.XAI_API_KEY;
+    const { res, json } = await startSession({ engine: "grok-voice" });
+    expect(res.status).toBe(503);
+    expect(json.code).toBe("not_configured");
+    expect(json.missingEnv).toBe("XAI_API_KEY");
+    expect(String(json.details)).toContain("XAI_API_KEY is not set");
+    expect(json.engine).toBe("grok-voice");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(logged.filter((l) => l.startsWith("[taos-interpreter-mint] "))).toHaveLength(0);
+    // Another engine is untouched by it — one missing key stops one engine.
+    expect((await startSession({ engine: "openai-realtime" })).res.status).toBe(200);
+  });
+
+  it("reads the key from XAI_API_KEY, or from the GROK_API_KEY already on the project", async () => {
+    expect(xaiApiKey({})).toBeNull();
+    expect(xaiApiKey({ GROK_API_KEY: " legacy " })).toBe("legacy");
+    expect(xaiApiKey({ XAI_API_KEY: "new", GROK_API_KEY: "legacy" })).toBe("new");
+    expect(ENGINE_KEY_ENV["grok-voice"]).toBe("XAI_API_KEY");
+    expect(engineApiKey("grok-voice", { GROK_API_KEY: "legacy" })).toBe("legacy");
+    delete process.env.XAI_API_KEY;
+    process.env.GROK_API_KEY = "grok-legacy-key";
+    const { res, json } = await startSession({ engine: "grok-voice" });
+    expect(res.status).toBe(200);
+    expect(sent[0].headers.Authorization).toBe("Bearer grok-legacy-key");
+    expect(JSON.stringify(json)).not.toContain("grok-legacy-key");
+  });
+
+  it("a refusal from xAI is a 502 the founder can read, with no key in it", async () => {
+    fetchSpy.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ code: "invalid-argument", error: "Incorrect API key provided: xai-test-key" }), { status: 400 })
+    );
+    const { res, json } = await startSession({ engine: "grok-voice" });
+    expect(res.status).toBe(502);
+    expect(String(json.details)).toContain("Incorrect API key");
+    expect(JSON.stringify(json)).not.toContain("xai-test-key");
+  });
+
+  it("reads Grok's running bill from response.done", () => {
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink);
+    reader.handle({ type: "response.created", response: { id: "r1" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "Hola" });
+    reader.handle({
+      type: "response.done",
+      response: { id: "r1", status: "completed", usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3, billable_audio_seconds: 41.5 } }
+    });
+    expect(r.calls).toContain("billed:41.5");
+  });
+});
+
+describe("elevenlabs-realtime", () => {
+  it("is a Realtime model behind a knob, and speaks in the founders' clones by the voice-follows-speaker rule", () => {
+    expect(interpreterModel("elevenlabs-realtime", {})).toBe("eleven_realtime_v1_mini");
+    expect(interpreterModel("elevenlabs-realtime", { TAOS_INTERPRETER_ELEVENLABS_MODEL: "eleven_realtime_v1_max" })).toBe(
+      "eleven_realtime_v1_max"
+    );
+    // Tom speaks English → his words, in Spanish, in TOM's clone. Liz speaks
+    // Spanish → her words, in English, in LIZ's. From lib/tts/voice.ts — the
+    // IDs are not restated in lib/interpreter.
+    expect(interpreterVoice("elevenlabs-realtime", { source: "en", target: "es" })).toBe(ELEVENLABS_TOM_VOICE);
+    expect(interpreterVoice("elevenlabs-realtime", { source: "es", target: "en" })).toBe("LIZ-CLONE-TEST-ID");
+    const engineSrc = readFileSync("lib/interpreter/engine.ts", "utf8");
+    expect(engineSrc).not.toContain(ELEVENLABS_TOM_VOICE);
+    expect(engineSrc).toContain("elevenLabsVoiceId(");
+    expect(engineTakesBriefing("elevenlabs-realtime")).toBe(true);
+    expect(engineBillsByTheMinute("elevenlabs-realtime")).toBe(true);
+  });
+
+  it("locks the briefing and the clone into the client secret, server-side", async () => {
+    store.context = CONTEXT_MARKER;
+    const { res, json } = await startSession({ engine: "elevenlabs-realtime" });
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(2);
+    for (const call of sent) {
+      expect(call.url).toBe("https://api.elevenlabs.io/v1/convai/realtime/client_secrets");
+      expect(call.headers["xi-api-key"]).toBe("el-test-key");
+      expect(call.url).not.toContain("el-test-key");
+    }
+    const sessions = sent.map((c) => c.body.session as Record<string, unknown>);
+    const out = (s: Record<string, unknown>) => (s.audio as { output: Record<string, unknown> }).output;
+    const input = (s: Record<string, unknown>) => (s.audio as { input: Record<string, unknown> }).input;
+    expect(sessions.map((s) => out(s).voice)).toEqual([ELEVENLABS_TOM_VOICE, "LIZ-CLONE-TEST-ID"]);
+    for (const [i, s] of sessions.entries()) {
+      expect(s.type).toBe("realtime");
+      expect(s.model).toBe("eleven_realtime_v1_mini");
+      expect(String(s.instructions)).toContain(CONTEXT_MARKER);
+      // A cascade cannot say nothing: its quiet leg gets a word for silence.
+      expect(String(s.instructions)).toContain(`answer with exactly ${SILENCE_TOKEN}`);
+      expect(String(s.instructions)).not.toContain("stay completely silent");
+      // ElevenLabs takes 24 kHz PCM and nothing else.
+      expect(input(s).format).toEqual({ type: "audio/pcm", rate: 24000 });
+      expect(input(s).transcription).toEqual({ language: i === 0 ? "en" : "es" });
+      expect(input(s).turn_detection).toMatchObject({ type: "semantic_vad", create_response: true, interrupt_response: true });
+      // Their default is 600 s — ten minutes into a dinner. Ours is the cap.
+      expect(s.max_duration_seconds).toBe(30 * 60 + 60);
+    }
+    const legs = json.legs as Record<string, unknown>[];
+    for (const leg of legs) {
+      expect(leg.transport).toBe("realtime-ws");
+      expect(leg.wsUrl).toBe("wss://api.elevenlabs.io/v1/convai/realtime");
+      expect(leg.protocols).toEqual(["realtime", expect.stringMatching(/^openai-insecure-api-key\.ek_secret_\d+$/)]);
+      // Nothing for the browser to send: the session was fixed at the mint.
+      expect(leg.sessionUpdate).toBeNull();
+      // A clone's ID is configuration; the screen is not told it.
+      expect(leg.voice).toBeNull();
+    }
+    const body = JSON.stringify(json);
+    expect(body).not.toContain(CONTEXT_MARKER);
+    expect(body).not.toContain("OUTPUT LANGUAGE");
+    expect(body).not.toContain("el-test-key");
+    expect(body).not.toContain(ELEVENLABS_TOM_VOICE);
+    expect(body).not.toContain("LIZ-CLONE-TEST-ID");
+    expect(logged.join("\n")).not.toContain(CONTEXT_MARKER);
+    expect(logged.join("\n")).not.toContain("LIZ-CLONE-TEST-ID");
+  });
+
+  it("follows our session cap and clamps to ElevenLabs' own bounds", () => {
+    const at = (maxSeconds: number) =>
+      buildElevenLabsRealtimeSession({ model: "m", instructions: "i", voice: "v", language: null, maxSeconds })
+        .max_duration_seconds;
+    expect(at(600)).toBe(660);
+    expect(at(5)).toBe(65);
+    expect(at(99999)).toBe(7200);
+    const s = buildElevenLabsRealtimeSession({ model: "m", instructions: "i", voice: "v", language: null, maxSeconds: 60 });
+    expect((s.audio as { input: Record<string, unknown> }).input).not.toHaveProperty("transcription");
+  });
+
+  it("MISSING KEY: fails closed, names ELEVENLABS_API_KEY, and calls nobody", async () => {
+    delete process.env.ELEVENLABS_API_KEY;
+    const { res, json } = await startSession({ engine: "elevenlabs-realtime" });
+    expect(res.status).toBe(503);
+    expect(json.code).toBe("not_configured");
+    expect(json.missingEnv).toBe("ELEVENLABS_API_KEY");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("every engine names the variable its key is read from", async () => {
+    for (const engine of INTERPRETER_ENGINES) {
+      for (const name of ["OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "GROK_API_KEY", "ELEVENLABS_API_KEY"]) {
+        delete process.env[name];
+      }
+      fetchSpy.mockClear();
+      const { res, json } = await startSession({ engine });
+      // GPT-Live mints nothing at start, but still must not pretend to work.
+      expect(res.status, engine).toBe(503);
+      expect(json.missingEnv, engine).toBe(ENGINE_KEY_ENV[engine]);
+      expect(fetchSpy, engine).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a refusal from ElevenLabs is readable and carries no key", async () => {
+    fetchSpy.mockImplementationOnce(
+      async () =>
+        new Response(
+          JSON.stringify({ type: "validation_error", code: "invalid_audio_format", message: "audio/pcm input must be 24000 Hz; key el-test-key" }),
+          { status: 400 }
+        )
+    );
+    const { res, json } = await startSession({ engine: "elevenlabs-realtime" });
+    expect(res.status).toBe(502);
+    expect(String(json.details)).toContain("must be 24000 Hz");
+    expect(JSON.stringify(json)).not.toContain("el-test-key");
+  });
+});
+
+describe("the default engine (2026-11-09: flagship stays; Gemini is one variable away)", () => {
+  it("TAOS_INTERPRETER_ENGINE=gemini-live is the whole switch", async () => {
+    expect(engineEnvDefault(undefined)).toBe("openai-realtime");
+    process.env.TAOS_INTERPRETER_ENGINE = "gemini-live";
+    expect(engineEnvDefault()).toBe("gemini-live");
+    // A phone that has picked nothing opens on it …
+    expect(resolveEngine({ stored: null, envDefault: engineEnvDefault() })).toBe("gemini-live");
+    // … the mint follows it when the phone sends no engine …
+    const { json } = await startSession();
+    expect(json.engine).toBe("gemini-live");
+    expect(sent[0].url).toContain("/v1beta/auth_tokens");
+    // … and a device that picked for itself keeps its pick.
+    expect(resolveEngine({ stored: "openai-live", envDefault: engineEnvDefault() })).toBe("openai-live");
+    // The page hands the shell exactly this function's answer.
+    const page = readFileSync("app/tabletop/page.tsx", "utf8");
+    expect(page).toContain("interpreterEngine={engineEnvDefault()}");
+  });
+});
+
+// ── the mediator ───────────────────────────────────────────────────────────
+
+describe("the Mediator style (experimental)", () => {
+  it("is OFF by default — everywhere a default is decided", async () => {
+    expect(interpreterMediatorEnabled(undefined)).toBe(false);
+    expect(interpreterMediatorEnabled("0")).toBe(false);
+    expect(interpreterMediatorEnabled("1")).toBe(true);
+    expect(DEFAULT_INTERPRETER_STYLE).toBe("interpreter");
+    expect(resolveStyle(null)).toBe("interpreter");
+    expect(resolveStyle(undefined)).toBe("interpreter");
+    expect(resolveStyle("")).toBe("interpreter");
+    expect(resolveStyle("Mediator ")).toBe("mediator");
+    expect(resolveStyle("mediate")).toBe("interpreter");
+    expect(parseStyle(1)).toBeNull();
+    expect(buildInterpreterPlan({ engine: "openai-realtime", pair: { a: "en", b: "es" }, context: "" }).style).toBe("interpreter");
+    // With the feature flag OFF, even an explicit API request for mediator is
+    // ignored. The default briefing remains byte-for-byte the interpreter's.
+    for (const body of [{}, { style: "nonsense" }, { style: "interpreter" }, { style: "mediator" }]) {
+      sent.length = 0;
+      const { json } = await startSession(body);
+      expect(json.style).toBe("interpreter");
+      const instructions = sent.map((c) => (c.body.session as { instructions: string }).instructions);
+      expect(instructions).toEqual([
+        buildLegBriefing({ direction: { source: "en", target: "es" } }),
+        buildLegBriefing({ direction: { source: "es", target: "en" } })
+      ]);
+      for (const i of instructions) expect(i).not.toMatch(/MEDIATOR/i);
+    }
+  });
+
+  it("assembles a DIFFERENT briefing, with Tom's hard rules in it", () => {
+    const direction = { source: "es", target: "en" };
+    const plain = buildLegBriefing({ direction });
+    const mediator = buildLegBriefing({ direction, style: "mediator" });
+    expect(mediator).not.toBe(plain);
+    expect(buildLegBriefing({ direction, style: "interpreter" })).toBe(plain);
+    const single = buildInterpreterBriefing({ pair: { a: "en", b: "es" }, style: "mediator" });
+    expect(single).not.toBe(buildInterpreterBriefing({ pair: { a: "en", b: "es" } }));
+
+    for (const b of [mediator, single]) {
+      // Still an interpreter first.
+      expect(b).toContain("live interpreter sitting at a table between two people");
+      expect(b).toContain(MEANING_FIRST_RULE());
+      expect(b).toMatch(/You are an interpreter first/);
+      // ONLY when meaning is at risk — Tom's three cases.
+      expect(b).toMatch(/ONLY when MEANING IS AT RISK/);
+      expect(b).toMatch(/likely misunderstanding/);
+      expect(b).toMatch(/regional word or expression that means different things in different places/);
+      expect(b).toMatch(/pronoun or reference you could not resolve/);
+      // The hard rules, each one.
+      expect(b).toMatch(/RARE: at most one note every few minutes, unless someone asks you directly/);
+      expect(b).toMatch(/NEVER take sides/);
+      expect(b).toMatch(/NEVER give advice/);
+      expect(b).toMatch(/NEVER summarise, describe or interpret anyone's FEELINGS, and never judge/);
+      expect(b).toMatch(/NEVER invent context/);
+      expect(b).toMatch(/ALWAYS neutral/);
+      // It answers a question put to it directly.
+      expect(b).toMatch(/addresses you directly — "mediator" or "interpreter"/);
+      // In both languages, each half behind its spoken marker.
+      expect(b).toContain(`"${mediatorMarker("en")}`);
+      expect(b).toContain(`"${mediatorMarker("es")}`);
+      // The interpreter's blanket ban is replaced, not kept beside its opposite.
+      expect(b).not.toMatch(/never answer a question yourself, never add commentary or explanations/);
+    }
+    // Two legs only work because ONE speaks per sentence: the quiet-leg rule stays.
+    expect(mediator).toMatch(/already in English: stay completely silent/);
+    expect(mediator.startsWith("OUTPUT LANGUAGE: English.")).toBe(true);
+    // The interpreter's own briefing has none of it.
+    expect(plain).not.toMatch(/MEDIATOR|mediator note/i);
+  });
+
+  it("reaches the provider only when the device asks, on every engine that takes a briefing", async () => {
+    process.env.TAOS_INTERPRETER_MEDIATOR_ENABLED = "1";
+    store.context = CONTEXT_MARKER;
+    const briefingOf: Record<string, (json: Record<string, unknown>) => string[]> = {
+      "openai-realtime": () => sent.map((c) => (c.body.session as { instructions: string }).instructions),
+      "gemini-live": () =>
+        sent.map((c) => JSON.stringify((c.body.bidiGenerateContentSetup as Record<string, unknown>).systemInstruction)),
+      "grok-voice": (json) => (json.legs as { sessionUpdate: { instructions: string } }[]).map((l) => l.sessionUpdate.instructions),
+      "elevenlabs-realtime": () => sent.map((c) => (c.body.session as { instructions: string }).instructions)
+    };
+    for (const engine of Object.keys(briefingOf)) {
+      sent.length = 0;
+      const { json } = await startSession({ engine, style: "mediator" });
+      expect(json.style, engine).toBe("mediator");
+      const briefings = briefingOf[engine](json);
+      expect(briefings, engine).toHaveLength(2);
+      for (const b of briefings) {
+        expect(b, engine).toMatch(/MEDIATOR \(experimental\)/);
+        expect(b, engine).toContain("NEVER take sides");
+        expect(b, engine).toContain(CONTEXT_MARKER);
+      }
+    }
+    expect(logged.filter((l) => l.startsWith("[taos-interpreter-mint] ")).every((l) => l.includes(" style=mediator "))).toBe(true);
+
+    // GPT-Live: the relay rebuilds the plan, so the style rides to it too.
+    sent.length = 0;
+    const { POST } = await import("@/app/api/tabletop/interpreter/live/route");
+    await POST(request(LIVE, "POST", { sdp: "v=0\r\noffer", leg: 0, mine: "en", theirs: "es", style: "mediator" }));
+    expect((sent[0].body.session as { instructions: string }).instructions).toMatch(/MEDIATOR \(experimental\)/);
+    sent.length = 0;
+    await POST(request(LIVE, "POST", { sdp: "v=0\r\noffer", leg: 0, mine: "en", theirs: "es" }));
+    expect((sent[0].body.session as { instructions: string }).instructions).not.toMatch(/MEDIATOR/);
+  });
+
+  it("an engine that takes no briefing is never a mediator, and says so", async () => {
+    process.env.TAOS_INTERPRETER_MEDIATOR_ENABLED = "1";
+    const { json } = await startSession({ engine: "openai-translate", style: "mediator" });
+    expect(json.style).toBe("interpreter");
+    expect((json.briefing as { applied: boolean }).applied).toBe(false);
+    expect(JSON.stringify(sent.map((c) => c.body))).not.toMatch(/MEDIATOR/i);
+  });
+
+  it("splits what a mediator said into the interpretation and its notes", () => {
+    const langs = ["en", "es"];
+    const said =
+      "I'm furious. Mediator note: 'arrecha' means angry in her Spanish. Nota del mediador: «arrecha» aquí significa enojada.";
+    const split = splitMediatorNotes(said, langs);
+    expect(split.interpretation).toBe("I'm furious.");
+    expect(split.notes).toEqual([
+      { lang: "en", text: "'arrecha' means angry in her Spanish." },
+      { lang: "es", text: "«arrecha» aquí significa enojada." }
+    ]);
+    // A transcriber's spelling of the same mark.
+    expect(splitMediatorNotes("Estoy furiosa. NOTA DEL MEDIADOR, es una palabra regional.", langs).notes).toEqual([
+      { lang: "es", text: "es una palabra regional." }
+    ]);
+    expect(splitMediatorNotes("Okay. Mediator's note: I could not tell who 'she' was.", langs).notes[0].lang).toBe("en");
+    // No marker → all interpretation. A marker still being spoken → no note yet.
+    expect(splitMediatorNotes("We need a mediator for this.", langs)).toEqual({
+      interpretation: "We need a mediator for this.",
+      notes: []
+    });
+    expect(splitMediatorNotes("I'm furious. Mediator note:", langs)).toEqual({ interpretation: "I'm furious.", notes: [] });
+    // A language with no marker of its own uses the English one.
+    expect(mediatorMarker("sm")).toBe(mediatorMarker("en"));
+    expect(splitMediatorNotes("Mediator note: unclear who.", ["en", "sm"]).notes).toHaveLength(1);
+  });
+
+  it("shows a note as its own kind of caption, on BOTH panes, in each reader's language — and only for a mediator", () => {
+    const entry: CaptionEntry = {
+      id: "1:r1",
+      source: "es",
+      target: "en",
+      heard: "Estoy arrecha.",
+      said: "I'm furious. Mediator note: 'arrecha' means angry here. Nota del mediador: «arrecha» significa enojada.",
+      live: false,
+      at: 1
+    };
+    const mediatorLangs = ["en", "es"];
+    const en = paneLines([entry], "en", { mediatorLangs });
+    expect(en).toEqual([
+      { id: "1:r1", kind: "incoming", text: "I'm furious.", live: false },
+      { id: "1:r1:note:0", kind: "note", text: "'arrecha' means angry here.", live: false }
+    ]);
+    const es = paneLines([entry], "es", { mediatorLangs });
+    expect(es).toEqual([
+      { id: "1:r1", kind: "outgoing", text: "Estoy arrecha.", live: false },
+      { id: "1:r1:note:0", kind: "note", text: "«arrecha» significa enojada.", live: false }
+    ]);
+    // An INTERPRETER's line is never split, whatever words are in it.
+    expect(paneLines([entry], "en")).toEqual([{ id: "1:r1", kind: "incoming", text: entry.said, live: false }]);
+    // Given in one language only: still shown to both, rather than hidden.
+    const oneSided = { ...entry, said: "I'm furious. Mediator note: regional word." };
+    expect(paneLines([oneSided], "es", { mediatorLangs }).at(-1)).toMatchObject({ kind: "note", text: "regional word." });
+  });
+});
+
+// ── the cost line, with the new engines and the style ──────────────────────
+
+describe("the [taos-interpreter] cost line — follow-up", () => {
+  it("prices the two new engines by the minute, per leg", () => {
+    const grok = { ...emptyInterpreterTally("grok-voice", "grok-voice-3.0", 0, 2), billedSeconds: 2 * 600 };
+    expect(estimateUsd(grok)).toBeCloseTo(1.6, 6); // 2 legs × 10 min × $0.08
+    const eleven = { ...emptyInterpreterTally("elevenlabs-realtime", "eleven_realtime_v1_mini", 0, 2), billedSeconds: 2 * 600 };
+    expect(estimateUsd(eleven)).toBeCloseTo(1.6, 6);
+    // Tokens a flat-rate engine happens to report change nothing.
+    expect(estimateUsd({ ...grok, audioOutTokens: 1e6 })).toBeCloseTo(1.6, 6);
+  });
+
+  it("writes the same line for them — engine first, est_usd, and no text", async () => {
+    const { POST } = await import("@/app/api/tabletop/interpreter/usage/route");
+    for (const [engine, model] of [
+      ["grok-voice", "grok-voice-3.0"],
+      ["elevenlabs-realtime", "eleven_realtime_v1_mini"]
+    ] as const) {
+      logged = [];
+      const res = await POST(
+        request(USAGE, "POST", {
+          ...VALID_SUMMARY,
+          engine,
+          billed_secs: 1200,
+          style: "mediator",
+          model: "SMUGGLED-MODEL",
+          transcript: "SMUGGLED hola mi amor",
+          note: "SMUGGLED mediator note text",
+          voice: "SMUGGLED-VOICE-ID"
+        })
+      );
+      expect(res.status).toBe(200);
+      const line = logged.find((l) => l.startsWith("[taos-interpreter] "))!;
+      expect(line).toMatch(new RegExp(`^\\[taos-interpreter\\] engine=${engine} model=${model.replace(/\./g, "\\.")} secs=600 `));
+      expect(line).toContain(" est_usd=1.6000 ");
+      expect(line).toContain(" billed_secs=1200 ");
+      expect(line.endsWith(" style=mediator")).toBe(true);
+      expect(line).not.toContain("SMUGGLED");
+      for (const part of line.split(" ").slice(1)) expect(part).toMatch(/^[a-z_]+=[A-Za-z0-9.\-_]+$/);
+    }
+  });
+
+  it("the style on the line is a closed set: a sentence in its place becomes the default", async () => {
+    expect(parseInterpreterSummary({ ...VALID_SUMMARY, style: "mediator" })?.style).toBe("mediator");
+    expect(parseInterpreterSummary(VALID_SUMMARY)?.style).toBe("interpreter");
+    const smuggled = parseInterpreterSummary({ ...VALID_SUMMARY, style: "she said SMUGGLED" });
+    expect(smuggled?.style).toBe("interpreter");
+    expect(interpreterLogLine(smuggled!, "m")).not.toContain("SMUGGLED");
+    expect(summarizeTally({ ...emptyInterpreterTally("gemini-live", "m", 0), style: "mediator" }, 1000, "user").style).toBe("mediator");
+    expect(summarizeTally(emptyInterpreterTally("gemini-live", "m", 0), 1000, "user").style).toBe("interpreter");
   });
 });

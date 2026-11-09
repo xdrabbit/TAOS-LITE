@@ -8,6 +8,8 @@
 // top. Entries live in component state only — nothing here is stored or sent
 // anywhere.
 
+import { splitMediatorNotes } from "./mediator";
+
 export interface CaptionEntry {
   id: string;
   /** Language spoken / language interpreted into. Null = a one-session table, which cannot say. */
@@ -84,19 +86,56 @@ export function settleCaptions(entries: readonly CaptionEntry[]): CaptionEntry[]
 export type PaneLine =
   | { id: string; kind: "incoming"; text: string; live: boolean }
   | { id: string; kind: "outgoing"; text: string; live: boolean }
-  | { id: string; kind: "both"; heard: string; said: string; live: boolean };
+  | { id: string; kind: "both"; heard: string; said: string; live: boolean }
+  /**
+   * The MEDIATOR speaking for itself (lib/interpreter/mediator.ts) — never
+   * something either person said, so it is its own kind of line and the
+   * screen draws it differently. Shown on BOTH panes, each in its reader's
+   * language where the mediator gave the note in it.
+   */
+  | { id: string; kind: "note"; text: string; live: boolean };
 
-export function paneLines(entries: readonly CaptionEntry[], lang: string): PaneLine[] {
+export interface PaneOptions {
+  /**
+   * The table's languages, when the session is a MEDIATOR. Only then is what
+   * the interpreter said searched for notes; an interpreter's line is never
+   * split, whatever words are in it.
+   */
+  mediatorLangs?: readonly string[] | null;
+}
+
+export function paneLines(
+  entries: readonly CaptionEntry[],
+  lang: string,
+  options: PaneOptions = {}
+): PaneLine[] {
   const out: PaneLine[] = [];
+  const langs = options.mediatorLangs ?? null;
   for (const e of entries) {
+    const split = langs ? splitMediatorNotes(e.said, langs) : { interpretation: e.said, notes: [] };
+    const said = split.interpretation;
     if (e.source === null || e.target === null) {
-      if (e.heard.trim() || e.said.trim()) {
-        out.push({ id: e.id, kind: "both", heard: e.heard, said: e.said, live: e.live });
+      if (e.heard.trim() || said.trim()) {
+        out.push({ id: e.id, kind: "both", heard: e.heard, said, live: e.live && !split.notes.length });
       }
     } else if (e.target === lang) {
-      if (e.said.trim()) out.push({ id: e.id, kind: "incoming", text: e.said, live: e.live });
+      if (said.trim()) out.push({ id: e.id, kind: "incoming", text: said, live: e.live && !split.notes.length });
     } else if (e.source === lang) {
       if (e.heard.trim()) out.push({ id: e.id, kind: "outgoing", text: e.heard, live: e.live });
+    }
+    if (split.notes.length) {
+      // This reader's half of the note; if the mediator gave it in only the
+      // other language, that is still better shown than hidden.
+      const mine = split.notes.filter((n) => n.lang === lang);
+      const shown = mine.length ? mine : split.notes;
+      shown.forEach((note, i) => {
+        out.push({
+          id: `${e.id}:note:${i}`,
+          kind: "note",
+          text: note.text,
+          live: e.live && note === split.notes[split.notes.length - 1]
+        });
+      });
     }
   }
   return out;

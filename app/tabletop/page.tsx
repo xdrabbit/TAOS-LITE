@@ -3,7 +3,7 @@ import { SessionGate } from "@/components/SessionGate";
 import { TabletopShell } from "@/components/TabletopShell";
 import { brainEnvDefault } from "@/lib/tabletop/brain";
 import { tabletopAutoEnabled } from "@/lib/release";
-import { interpreterEnabled } from "@/lib/interpreter/flag";
+import { interpreterEnabled, interpreterMediatorEnabled } from "@/lib/interpreter/flag";
 import { engineEnvDefault } from "@/lib/interpreter/engine";
 
 // TAOS_INTERPRETER_ENABLED and TAOS_INTERPRETER_ENGINE are SERVER flags read
@@ -33,6 +33,7 @@ export default function TabletopPage(): JSX.Element {
         defaultBrain={brainEnvDefault()}
         autoEnabled={tabletopAutoEnabled()}
         interpreterEnabled={interpreterEnabled()}
+        interpreterMediatorEnabled={interpreterMediatorEnabled()}
         interpreterEngine={engineEnvDefault()}
       />
     </SessionGate>

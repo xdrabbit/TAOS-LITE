@@ -13,7 +13,12 @@ import {
   settleCaptions,
   type CaptionEntry
 } from "@/lib/interpreter/captions";
-import { startInterpreter, type ActiveInterpreter, type BriefingReceipt } from "@/lib/interpreter/client";
+import {
+  InterpreterNotConfiguredError,
+  startInterpreter,
+  type ActiveInterpreter,
+  type BriefingReceipt
+} from "@/lib/interpreter/client";
 import { estimateUsd, formatUsd, summarizeTally, type InterpreterStop } from "@/lib/interpreter/cost";
 import {
   ENGINE_LABEL,
@@ -24,6 +29,13 @@ import {
   type InterpreterEngine
 } from "@/lib/interpreter/engine";
 import { formatClock, sessionVerdict, type SessionClock } from "@/lib/interpreter/limits";
+import {
+  DEFAULT_INTERPRETER_STYLE,
+  INTERPRETER_STYLES,
+  resolveStyle,
+  STYLE_STORAGE_KEY,
+  type InterpreterStyle
+} from "@/lib/interpreter/mediator";
 import { ExitHome } from "../ExitHome";
 import { JumpToTail, useFollowTail } from "../FollowTail";
 
@@ -57,6 +69,8 @@ export interface InterpreterModeProps {
   theirs: string;
   /** TAOS_INTERPRETER_ENGINE, read on the server. */
   defaultEngine: InterpreterEngine;
+  /** TAOS_INTERPRETER_MEDIATOR_ENABLED, read on the server. Default false. */
+  mediatorEnabled?: boolean;
   /** Back to the push-to-talk table. */
   onExit: () => void;
   /** Injected by the tests; the real one opens a microphone. */
@@ -67,15 +81,18 @@ function Feed({
   entries,
   lang,
   rotated,
-  live
+  live,
+  mediatorLangs
 }: {
   entries: readonly CaptionEntry[];
   lang: string;
   rotated: boolean;
   live: boolean;
+  /** The table's languages while the session is a mediator; null otherwise. */
+  mediatorLangs: readonly string[] | null;
 }): JSX.Element {
   const t = copyFor(lang);
-  const lines = useMemo(() => paneLines(entries, lang), [entries, lang]);
+  const lines = useMemo(() => paneLines(entries, lang, { mediatorLangs }), [entries, lang, mediatorLangs]);
   const streaming = paneStreamingText(lines);
   const tail = useFollowTail(streaming.on, streaming.text);
 
@@ -124,6 +141,21 @@ function Feed({
                   <div key={line.id} data-caption="outgoing" className="border-l-2 border-white/10 pl-2 text-sm text-amber-100/50">
                     {line.text}
                   </div>
+                ) : line.kind === "note" ? (
+                  // The mediator speaking for ITSELF — boxed, labelled and in
+                  // another colour, so it can never be read as something the
+                  // other person said.
+                  <div
+                    key={line.id}
+                    data-caption="note"
+                    className="rounded-xl border border-sky-300/40 bg-sky-400/10 px-3 py-2 text-base italic leading-snug text-sky-100"
+                  >
+                    <span className="mb-0.5 block text-[10px] font-semibold uppercase not-italic tracking-widest text-sky-300/80">
+                      {t.interpreterMediatorNote}
+                    </span>
+                    {line.text}
+                    {line.live ? <span className="animate-pulse text-sky-300">▍</span> : null}
+                  </div>
                 ) : (
                   <div key={line.id} data-caption="both">
                     {line.heard ? <div className="text-sm text-amber-100/50">{line.heard}</div> : null}
@@ -147,11 +179,16 @@ export function InterpreterMode({
   mine,
   theirs,
   defaultEngine,
+  mediatorEnabled = false,
   onExit,
   start = startInterpreter
 }: InterpreterModeProps): JSX.Element {
   const t = copyFor(mine);
   const [engine, setEngine] = useState<InterpreterEngine>(defaultEngine);
+  // Interpreter unless this device has explicitly chosen the experiment.
+  const [style, setStyle] = useState<InterpreterStyle>(DEFAULT_INTERPRETER_STYLE);
+  /** The style the RUNNING (or last) session was actually briefed in. */
+  const [sessionStyle, setSessionStyle] = useState<InterpreterStyle>(DEFAULT_INTERPRETER_STYLE);
   const [phase, setPhase] = useState<Phase>("idle");
   const [entries, setEntries] = useState<CaptionEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -181,7 +218,27 @@ export function InterpreterMode({
       /* private mode */
     }
     setEngine(resolveEngine({ stored, envDefault: defaultEngine }));
-  }, [defaultEngine]);
+    if (mediatorEnabled) {
+      let storedStyle: string | null = null;
+      try {
+        storedStyle = window.localStorage.getItem(STYLE_STORAGE_KEY);
+      } catch {
+        /* private mode */
+      }
+      setStyle(resolveStyle(storedStyle));
+    } else {
+      setStyle(DEFAULT_INTERPRETER_STYLE);
+    }
+  }, [defaultEngine, mediatorEnabled]);
+
+  const chooseStyle = useCallback((next: InterpreterStyle) => {
+    setStyle(next);
+    try {
+      window.localStorage.setItem(STYLE_STORAGE_KEY, next);
+    } catch {
+      /* the choice still holds for this visit */
+    }
+  }, []);
 
   const chooseEngine = useCallback((next: InterpreterEngine) => {
     setEngine(next);
@@ -257,6 +314,7 @@ export function InterpreterMode({
         engine,
         mine,
         theirs,
+        style: mediatorEnabled ? style : DEFAULT_INTERPRETER_STYLE,
         handlers: {
           onCaption: (update) => setEntries((prev) => applyCaption(prev, update)),
           onActivity: () => {
@@ -277,14 +335,23 @@ export function InterpreterMode({
       };
       setMaxSeconds(active.maxSeconds);
       setReceipt(active.briefing);
+      setSessionStyle(active.style);
       setPhase("live");
     } catch (e) {
       activeRef.current = null;
       clockRef.current = null;
-      setError(e instanceof Error ? e.message : t.interpreterEndedError);
+      setError(
+        // A key that is not on the server: say WHICH variable, in the
+        // reader's language — it is the one thing Tom has to go and add.
+        e instanceof InterpreterNotConfiguredError
+          ? fill(t.interpreterEngineNoKey, { name: e.missingEnv })
+          : e instanceof Error
+            ? e.message
+            : t.interpreterEndedError
+      );
       setPhase("idle");
     }
-  }, [engine, mine, theirs, phase, start, end, t.interpreterEndedError]);
+  }, [engine, mine, theirs, style, mediatorEnabled, phase, start, end, t.interpreterEndedError, t.interpreterEngineNoKey]);
 
   // The session clock: the cap and the idle stop, once a second.
   useEffect(() => {
@@ -379,6 +446,12 @@ export function InterpreterMode({
   const live = phase === "live";
   const busy = phase === "connecting" || phase === "stopping";
   const briefable = receipt ? receipt.applied : engineTakesBriefing(engine);
+  // Notes are looked for only while the session on screen IS a mediator's.
+  const mediatorLangs = useMemo(
+    () => (sessionStyle === "mediator" ? [mine, theirs] : null),
+    [sessionStyle, mine, theirs]
+  );
+  const mediatorChosen = mediatorEnabled && style === "mediator" && engineTakesBriefing(engine);
   const notice =
     ended?.kind === "cap"
       ? fill(t.interpreterEndedCap, { minutes: ended.minutes })
@@ -390,7 +463,7 @@ export function InterpreterMode({
 
   return (
     <main data-interpreter="" className="flex h-[100dvh] flex-col overflow-hidden">
-      <Feed entries={entries} lang={theirs} rotated live={live} />
+      <Feed entries={entries} lang={theirs} rotated live={live} mediatorLangs={mediatorLangs} />
 
       {/* The middle strip: never scrolls, so Stop is always under a thumb.
           Readable from the bottom end, like the table's own. */}
@@ -411,6 +484,7 @@ export function InterpreterMode({
           </button>
           <span data-interpreter-status="" className="font-mono text-xs text-amber-100/60">
             {ENGINE_LABEL[engine]}
+            {(live ? sessionStyle === "mediator" : mediatorChosen) ? ` · ${t.interpreterStyleMediator}` : ""}
             {live || elapsed > 0 ? ` · ${formatClock(elapsed)}${maxSeconds ? ` / ${formatClock(maxSeconds)}` : ""}` : ""}
             {usd > 0 ? ` · ${formatUsd(usd)}` : ""}
           </span>
@@ -478,7 +552,7 @@ export function InterpreterMode({
         ) : null}
       </div>
 
-      <Feed entries={entries} lang={mine} rotated={false} live={live} />
+      <Feed entries={entries} lang={mine} rotated={false} live={live} mediatorLangs={mediatorLangs} />
 
       {contextOpen ? (
         <div
@@ -495,6 +569,42 @@ export function InterpreterMode({
               {t.close}
             </button>
           </div>
+          {/* The STYLE of the session, on the briefing screen (Tom, 2026-11-09).
+              Interpreter is the default and what every device starts on; the
+              mediator is an experiment a founder turns on for their phone. */}
+          {mediatorEnabled ? (
+          <div data-interpreter-style="" className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] uppercase tracking-widest text-amber-100/40">{t.interpreterStyle}</span>
+              {INTERPRETER_STYLES.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  data-interpreter-style-option={s}
+                  onClick={() => chooseStyle(s)}
+                  aria-pressed={style === s}
+                  className={`min-h-[36px] rounded-full px-3 text-xs ${
+                    style === s
+                      ? s === "mediator"
+                        ? "bg-sky-300 text-stone-950"
+                        : "bg-emerald-400 text-stone-950"
+                      : "border border-white/10 bg-white/5 text-amber-100/70"
+                  }`}
+                >
+                  {s === "mediator" ? t.interpreterStyleMediator : t.interpreterStyleInterpreter}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] leading-snug text-amber-100/60">
+              {style === "mediator" ? t.interpreterStyleMediatorHint : t.interpreterStyleInterpreterHint}
+            </p>
+            {style === "mediator" && !engineTakesBriefing(engine) ? (
+              <p data-interpreter-style-unavailable="" className="text-[11px] leading-snug text-amber-200/80">
+                {t.interpreterStyleNotOnEngine}
+              </p>
+            ) : null}
+          </div>
+          ) : null}
           <p className="text-xs leading-snug text-amber-100/60">{t.interpreterContextHint}</p>
           {contextStatus === "missing_table" ? (
             <p data-interpreter-context-missing="" className="text-xs text-amber-200/80">

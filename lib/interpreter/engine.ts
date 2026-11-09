@@ -24,23 +24,49 @@
 //   gemini-live       gemini-3.8-live — Google's current Live model. Takes a
 //                     briefing (systemInstruction).
 //
+//
+// Added 2026-11-09, after the first table test (Tom's go, same day) — both
+// verified against the providers' docs and probed live the same morning
+// (tests/live-fire/interpreter-engines.measure.ts):
+//
+//   grok-voice           grok-voice-3.0 — xAI's flagship speech-to-speech
+//                        model (grok-voice-2.0 is deprecated; -latest is an
+//                        alias). Speaks the OpenAI Realtime wire protocol,
+//                        but over a WebSocket only — there is no WebRTC
+//                        endpoint — and its client secret can lock only the
+//                        model, so the briefing rides in the browser's first
+//                        `session.update`. Flat $0.08 per minute, per leg.
+//   elevenlabs-realtime  eleven_realtime_v1_max — ElevenLabs' Realtime tier
+//                        (a cascaded ASR → LLM → TTS pipeline they manage; the
+//                        LLM is theirs and cannot be chosen — Mini or Max is
+//                        the whole choice). The point of this arm is the
+//                        VOICE: it speaks in the founders' own ElevenLabs
+//                        clones, by the same voice-follows-speaker rule as
+//                        every other screen (lib/tts/voice.ts). Also the
+//                        OpenAI Realtime wire protocol over a WebSocket, with
+//                        the whole session locked into the client secret.
+//
 // Every model ID below is a DEFAULT behind an env knob. Nothing else in the
 // app names one.
 
-import { speakerClone } from "@/lib/tts/voice";
+import { elevenLabsVoiceId, speakerClone } from "@/lib/tts/voice";
 import type { InterpreterDirection, InterpreterPair } from "./briefing";
 
 export type InterpreterEngine =
   | "openai-realtime"
   | "openai-live"
   | "openai-translate"
-  | "gemini-live";
+  | "gemini-live"
+  | "grok-voice"
+  | "elevenlabs-realtime";
 
 export const INTERPRETER_ENGINES: readonly InterpreterEngine[] = [
   "openai-realtime",
   "openai-live",
   "openai-translate",
-  "gemini-live"
+  "gemini-live",
+  "grok-voice",
+  "elevenlabs-realtime"
 ];
 
 /** Short labels for the founder picker. Brand names; not translated. */
@@ -48,7 +74,9 @@ export const ENGINE_LABEL: Record<InterpreterEngine, string> = {
   "openai-realtime": "Realtime 2.1",
   "openai-live": "GPT-Live",
   "openai-translate": "Translate",
-  "gemini-live": "Gemini"
+  "gemini-live": "Gemini",
+  "grok-voice": "Grok",
+  "elevenlabs-realtime": "ElevenLabs"
 };
 
 /** Per-device founder choice — so Tom and Liz can A/B at the table. */
@@ -63,6 +91,15 @@ export function parseEngine(raw: unknown): InterpreterEngine | null {
 /**
  * The deployment's default: TAOS_INTERPRETER_ENGINE. Anything else — unset, a
  * typo — is the flagship. Tom asked for cutting-edge; that is the default.
+ *
+ * This is also THE one-variable switch Tom asked for on 2026-11-09 ("keep the
+ * flagship as default for now; add gemini-live as a one-env-var switch"):
+ *
+ *     TAOS_INTERPRETER_ENGINE=gemini-live
+ *
+ * and every phone that has not picked an engine for itself opens on Gemini at
+ * the next deploy. Nothing else has to change with it. A device that HAS
+ * picked keeps its pick (resolveEngine, below) — that is the table A/B.
  */
 export function engineEnvDefault(
   raw: string | undefined = process.env.TAOS_INTERPRETER_ENGINE
@@ -94,7 +131,9 @@ export const INTERPRETER_MODEL_DEFAULTS: Record<InterpreterEngine, string> = {
   "openai-realtime": "gpt-realtime-2.1",
   "openai-live": "gpt-live-1",
   "openai-translate": "gpt-realtime-translate",
-  "gemini-live": "gemini-3.8-live"
+  "gemini-live": "gemini-3.8-live",
+  "grok-voice": "grok-voice-3.0",
+  "elevenlabs-realtime": "eleven_realtime_v1_mini"
 };
 
 /**
@@ -102,6 +141,8 @@ export const INTERPRETER_MODEL_DEFAULTS: Record<InterpreterEngine, string> = {
  *     TAOS_INTERPRETER_LIVE_MODEL
  *     TAOS_INTERPRETER_TRANSLATE_MODEL
  *     TAOS_INTERPRETER_GEMINI_MODEL      (e.g. gemini-3.8-live-extended-thinking)
+ *     TAOS_INTERPRETER_GROK_MODEL        (e.g. grok-voice-latest)
+ *     TAOS_INTERPRETER_ELEVENLABS_MODEL  (eleven_realtime_v1_mini = cheaper, faster)
  */
 export function interpreterModel(
   engine: InterpreterEngine,
@@ -116,7 +157,67 @@ export function interpreterModel(
   if (engine === "openai-live") {
     return knob(env.TAOS_INTERPRETER_LIVE_MODEL, INTERPRETER_MODEL_DEFAULTS[engine]);
   }
+  if (engine === "grok-voice") {
+    return knob(env.TAOS_INTERPRETER_GROK_MODEL, INTERPRETER_MODEL_DEFAULTS[engine]);
+  }
+  if (engine === "elevenlabs-realtime") {
+    return knob(env.TAOS_INTERPRETER_ELEVENLABS_MODEL, INTERPRETER_MODEL_DEFAULTS[engine]);
+  }
   return knob(env.TAOS_INTERPRETER_OPENAI_MODEL, INTERPRETER_MODEL_DEFAULTS[engine]);
+}
+
+// ── Keys ───────────────────────────────────────────────────────────────────
+// Which environment variable each provider's key is read from. NAMES only —
+// the missing-key answer of the mint route quotes the name so that whoever
+// reads it knows exactly what to add in Vercel, and nothing here (or there)
+// ever holds a value.
+
+/**
+ * xAI's key. `XAI_API_KEY` is the name xAI's own docs and SDK use and is what
+ * a new key should be saved as; `GROK_API_KEY` is the name already on this
+ * Vercel project (added 2026-06, before anything read it) and is honoured so
+ * that key works without a second copy of it.
+ */
+export const XAI_KEY_ENVS = ["XAI_API_KEY", "GROK_API_KEY"] as const;
+
+export function xaiApiKey(env: Record<string, string | undefined> = process.env): string | null {
+  for (const name of XAI_KEY_ENVS) {
+    const v = env[name]?.trim();
+    if (v) return v;
+  }
+  return null;
+}
+
+/** The variable a founder is told to add when an engine's key is missing. */
+export const ENGINE_KEY_ENV: Record<InterpreterEngine, string> = {
+  "openai-realtime": "OPENAI_API_KEY",
+  "openai-live": "OPENAI_API_KEY",
+  "openai-translate": "OPENAI_API_KEY",
+  "gemini-live": "GEMINI_API_KEY",
+  "grok-voice": XAI_KEY_ENVS[0],
+  "elevenlabs-realtime": "ELEVENLABS_API_KEY"
+};
+
+export function engineApiKey(
+  engine: InterpreterEngine,
+  env: Record<string, string | undefined> = process.env
+): string | null {
+  if (engine === "grok-voice") return xaiApiKey(env);
+  return env[ENGINE_KEY_ENV[engine]]?.trim() || null;
+}
+
+/**
+ * Grok Voice is a reasoning model whose default effort is `high`. xAI's own
+ * live-interpreter recipe turns it OFF ("repeating a sentence in another
+ * language does not need it"), and so does this — an interpreter mostly has
+ * to be quick.
+ *
+ *     TAOS_INTERPRETER_GROK_REASONING=none|high
+ */
+export function grokReasoning(
+  raw: string | undefined = process.env.TAOS_INTERPRETER_GROK_REASONING
+): "none" | "high" {
+  return (raw ?? "").trim().toLowerCase() === "high" ? "high" : "none";
 }
 
 /**
@@ -171,12 +272,24 @@ export function interpreterTranslateTranscribeModel(
 //     TAOS_INTERPRETER_VOICE_2          OpenAI, default marin
 //     TAOS_INTERPRETER_GEMINI_VOICE_1   Gemini, default Charon
 //     TAOS_INTERPRETER_GEMINI_VOICE_2   Gemini, default Aoede
+//     TAOS_INTERPRETER_GROK_VOICE_1     Grok, default rex
+//     TAOS_INTERPRETER_GROK_VOICE_2     Grok, default ara
 //
 // cedar and marin are the two voices OpenAI's own reference recommends for
-// realtime models, and they are the pair furthest apart by ear.
+// realtime models, and they are the pair furthest apart by ear. rex and ara
+// are two of xAI's original five ("confident and clear" / "warm and
+// friendly"); xAI's docs do not state a voice's gender, so that pair is a
+// first guess for Tom's ears, not a finding.
+//
+// ElevenLabs Realtime is the exception to "stock voices", and the reason the
+// arm exists: its two voices are the founders' CLONES, resolved by
+// lib/tts/voice.ts (the source of truth for the IDs and for whose voice a
+// direction is read in) and never restated here. There is no knob — a retrain
+// is already an env edit there (ELEVENLABS_LIZ_VOICE_ID).
 export const INTERPRETER_VOICE_DEFAULTS = {
   openai: ["cedar", "marin"],
-  gemini: ["Charon", "Aoede"]
+  gemini: ["Charon", "Aoede"],
+  grok: ["rex", "ara"]
 } as const;
 
 export type VoiceSlot = 1 | 2;
@@ -209,7 +322,21 @@ export function interpreterVoice(
   direction: InterpreterDirection,
   env: Record<string, string | undefined> = process.env
 ): string {
+  if (engine === "elevenlabs-realtime") {
+    // Tom's words in Tom's clone, Liz's in Liz's — elevenLabsVoiceId() is the
+    // rule every other screen plays by. A pair neither of them speaks gets
+    // the account's stock multilingual voice, exactly as /api/tts would.
+    return elevenLabsVoiceId(
+      direction.source as Parameters<typeof elevenLabsVoiceId>[0],
+      direction.target as Parameters<typeof elevenLabsVoiceId>[1]
+    );
+  }
   const slot = voiceSlot(direction);
+  if (engine === "grok-voice") {
+    return slot === 1
+      ? knob(env.TAOS_INTERPRETER_GROK_VOICE_1, INTERPRETER_VOICE_DEFAULTS.grok[0])
+      : knob(env.TAOS_INTERPRETER_GROK_VOICE_2, INTERPRETER_VOICE_DEFAULTS.grok[1]);
+  }
   if (engine === "gemini-live") {
     return slot === 1
       ? knob(env.TAOS_INTERPRETER_GEMINI_VOICE_1, INTERPRETER_VOICE_DEFAULTS.gemini[0])
@@ -257,4 +384,19 @@ export function interpreterLegCount(
 ): 1 | 2 {
   if (engine === "openai-translate") return 2;
   return (raw ?? "").trim() === "1" ? 1 : 2;
+}
+
+/**
+ * Does this engine bill the CLOCK — a flat rate per minute a leg is
+ * connected — rather than tokens? (lib/interpreter/cost.ts has the rates;
+ * the client reads a leg's seconds from the provider where it reports them
+ * and from the wall clock where it does not.)
+ */
+export function engineBillsByTheMinute(engine: InterpreterEngine): boolean {
+  return (
+    engine === "openai-translate" ||
+    engine === "openai-live" ||
+    engine === "grok-voice" ||
+    engine === "elevenlabs-realtime"
+  );
 }

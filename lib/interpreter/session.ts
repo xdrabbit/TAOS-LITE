@@ -200,3 +200,119 @@ export function buildGeminiInterpreterSetup(opts: {
     outputAudioTranscription: {}
   };
 }
+
+// ── Grok Voice (xAI) ───────────────────────────────────────────────────────
+// The OpenAI Realtime wire protocol with xAI's differences, each read from
+// docs.x.ai on 2026-11-09 (speech-to-speech guide + voice-realtime.ws.json):
+//
+//   · `voice` and `turn_detection` sit at the TOP of the session, not under
+//     `audio.output` / `audio.input`.
+//   · turn detection is `server_vad` or nothing — no semantic VAD, and it is
+//     OFF until asked for, so it is asked for here. Barge-in comes with it.
+//   · there is no WebRTC, so there is no SDP to negotiate a format in: the
+//     PCM rates are stated.
+//   · the caption transcriber is `grok-transcribe`; its language hint takes
+//     ONE regional code (a bare "es" is silently ignored), and a table has
+//     two languages, so no hint is sent and it detects.
+//   · no `truncation`, no `max_output_tokens`: it bills the clock, flat, so
+//     context growth is not a line item.
+//
+// The whole of this goes in the browser's first `session.update` — xAI's
+// client secret can bind only `model` and `reasoning.effort` (see the mint
+// route for what that means for the briefing).
+
+/**
+ * The rate the socket engines are sent the microphone at: 24 kHz s16le mono.
+ * ElevenLabs Realtime takes nothing else ("audio/pcm input must be 24000 Hz"
+ * — its mint refuses 16000); Grok takes anything from 8 to 48 kHz. One rate
+ * for both, so the client has one tap.
+ */
+export const INTERPRETER_WS_INPUT_RATE = 24_000;
+/** What the socket engines are asked to speak at, and what the player plays. */
+export const INTERPRETER_WS_OUTPUT_RATE = 24_000;
+
+export const GROK_TRANSCRIBE_MODEL = "grok-transcribe";
+
+export function buildGrokSessionUpdate(opts: { instructions: string; voice: string }): Record<string, unknown> {
+  return {
+    instructions: opts.instructions,
+    voice: opts.voice,
+    turn_detection: { type: "server_vad" },
+    audio: {
+      input: {
+        format: { type: "audio/pcm", rate: INTERPRETER_WS_INPUT_RATE },
+        transcription: { model: GROK_TRANSCRIBE_MODEL }
+      },
+      output: { format: { type: "audio/pcm", rate: INTERPRETER_WS_OUTPUT_RATE } }
+    }
+  };
+}
+
+/** What IS bound to a Grok client secret: the model and the reasoning effort. */
+export function buildGrokSecretSession(opts: {
+  model: string;
+  reasoning: "none" | "high";
+}): Record<string, unknown> {
+  return { model: opts.model, reasoning: { effort: opts.reasoning } };
+}
+
+// ── ElevenLabs Realtime ────────────────────────────────────────────────────
+// Their OpenAI-compatible Realtime API (elevenlabs.io/docs/eleven-agents/
+// guides/openai-realtime-compatibility, read 2026-11-09): no agent to create
+// in the dashboard — "a `model` string selects the agent's behavior directly"
+// — and "the session configuration you send when minting the client secret is
+// the authoritative initial session for that credential". So, unlike Grok,
+// the briefing and the VOICE are locked in on the server and the browser is
+// handed a secret and nothing else.
+//
+// `audio.output.voice` is documented only as "string, default: brian". It
+// takes an account voice ID — including a cloned one: probed 2026-11-09 with
+// the founders' two clones (tests/live-fire/interpreter-engines.measure.ts).
+//
+// `max_duration_seconds` DEFAULTS TO 600: left alone, ElevenLabs hangs up a
+// dinner at ten minutes. It is set from our own cap, plus the cap's grace.
+
+/** ElevenLabs' bounds for `max_duration_seconds`. */
+const ELEVENLABS_MIN_DURATION_S = 60;
+const ELEVENLABS_MAX_DURATION_S = 7200;
+
+export function buildElevenLabsRealtimeSession(opts: {
+  model: string;
+  instructions: string;
+  /** An ElevenLabs voice ID (lib/tts/voice.ts). */
+  voice: string;
+  /**
+   * The ONE language code the session is given (`audio.input.transcription.
+   * language`) — ElevenLabs uses it for its transcriber. Null leaves it out.
+   */
+  language: string | null;
+  /** Our session cap, in seconds; the provider's own limit is set past it. */
+  maxSeconds: number;
+  eagerness?: SemanticEagerness;
+}): Record<string, unknown> {
+  const eagerness = opts.eagerness && opts.eagerness !== "auto" ? opts.eagerness : "medium";
+  const duration = Math.min(
+    ELEVENLABS_MAX_DURATION_S,
+    Math.max(ELEVENLABS_MIN_DURATION_S, Math.round(opts.maxSeconds) + 60)
+  );
+  return {
+    type: "realtime",
+    model: opts.model,
+    instructions: opts.instructions,
+    output_modalities: ["audio"],
+    max_duration_seconds: duration,
+    audio: {
+      input: {
+        format: { type: "audio/pcm", rate: INTERPRETER_WS_INPUT_RATE },
+        ...(opts.language ? { transcription: { language: opts.language } } : {}),
+        turn_detection: {
+          type: "semantic_vad",
+          eagerness,
+          create_response: true,
+          interrupt_response: true
+        }
+      },
+      output: { format: { type: "audio/pcm" }, voice: opts.voice }
+    }
+  };
+}

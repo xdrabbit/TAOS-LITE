@@ -19,6 +19,13 @@
 // The last two share one reader behind a small normaliser.
 
 import type { RealtimeUsage } from "@/lib/call/cost";
+import {
+  hasWords,
+  looksLikeEcho,
+  spokenWords,
+  stripControlMarkers,
+  withoutLeadingRepeat
+} from "./captionFilter";
 import type { CaptionUpdate } from "./captions";
 import type { GeminiUsageMetadata } from "./cost";
 
@@ -50,6 +57,11 @@ export interface LegSink {
   gate: (open: boolean) => void;
   /** Playback already queued must be dropped (Gemini's `interrupted`). */
   flushAudio: () => void;
+  /**
+   * A response (or a streamed turn) has ended without a single word. Audio a
+   * transport was holding back for it — see `gate` — is thrown away, unplayed.
+   */
+  responseSilent: () => void;
   error: (message: string) => void;
   /** The provider says the session is over. */
   closed: () => void;
@@ -78,11 +90,41 @@ function errorMessage(ev: Record<string, unknown>): string {
  * A response with no words — the silent leg's — makes no caption at all, so
  * two legs hearing the same sentence still put ONE entry on the screen.
  */
+export interface RealtimeReaderOptions {
+  now?: () => number;
+  /**
+   * ElevenLabs Realtime only (see "An echo is not an interpretation" in
+   * captionFilter.ts). With it on, a response is decided ONCE, when its audio
+   * starts — by then its words are in — and one that repeats what was heard
+   * is never played and never captioned.
+   */
+  echoGuard?: boolean;
+  /**
+   * What the table's OTHER legs have heard, so this one can take a sentence
+   * they already captioned off the front of its own (a cascade that skipped
+   * a turn glues that turn's audio onto the next).
+   */
+  peers?: PeerHeard;
+}
+
+/** Recent "heard" lines per leg index, newest last. Shared by a table's legs. */
+export type PeerHeard = Map<number, string[]>;
+
+export function createPeerHeard(): PeerHeard {
+  return new Map();
+}
+
 export function createRealtimeReader(
   leg: LegIdentity,
   sink: LegSink,
-  now: () => number = Date.now
+  options: RealtimeReaderOptions | (() => number) = {}
 ): LegReader {
+  const opts: RealtimeReaderOptions = typeof options === "function" ? { now: options } : options;
+  const now = opts.now ?? Date.now;
+  const echoGuard = opts.echoGuard === true;
+  /** echoGuard: the verdict on each response, once its audio has started. */
+  const verdict = new Map<string, "play" | "echo">();
+  const audioStarted = new Set<string>();
   /**
    * Utterances committed but not yet interpreted, oldest first. Semantic VAD
    * splits "So how was your day? … Did you get to rest?" into two items; the
@@ -106,13 +148,59 @@ export function createRealtimeReader(
     if (mine.size) pendingItems = pendingItems.filter((item) => !mine.has(item));
   };
 
-  const emit = (responseId: string, live: boolean) => {
-    const said = saidByResponse.get(responseId) ?? "";
-    if (!said.trim()) return;
-    const heard = (itemsOfResponse.get(responseId) ?? [])
+  /**
+   * What a response has SAID, once control markers are out of it — "" until
+   * there is a word. A silence token, a `<no speech>`, a lone "…" are not
+   * speech: they open no caption and no speaker (lib/interpreter/
+   * captionFilter.ts).
+   */
+  const words = (responseId: string) => spokenWords(saidByResponse.get(responseId) ?? "");
+
+  const heardOf = (responseId: string): string => {
+    let heard = (itemsOfResponse.get(responseId) ?? [])
       .map((item) => heardByItem.get(item) ?? "")
       .filter(Boolean)
       .join(" ");
+    for (const [index, lines] of opts.peers ?? []) {
+      if (index === leg.index) continue;
+      for (const line of lines) heard = withoutLeadingRepeat(heard, line);
+    }
+    return heard;
+  };
+
+  /** May this response be heard and shown? (Always, without the echo guard.) */
+  const playing = (responseId: string) => !echoGuard || verdict.get(responseId) === "play";
+
+  /**
+   * Open the speaker for a response that has words — at once, or, with the
+   * echo guard, only when its audio has started and its words are not a
+   * repetition of what it heard.
+   */
+  const decide = (responseId: string) => {
+    if (!words(responseId)) return;
+    if (echoGuard && !verdict.has(responseId)) {
+      if (!audioStarted.has(responseId)) return;
+      // Judged against everything this leg has just heard, not only what is
+      // left after the other leg's sentence is taken off the front.
+      const heardRaw = (itemsOfResponse.get(responseId) ?? [])
+        .map((item) => heardByItem.get(item) ?? "")
+        .join(" ");
+      const echo = looksLikeEcho(words(responseId), heardRaw);
+      verdict.set(responseId, echo ? "echo" : "play");
+      if (echo) return;
+      consume(responseId);
+    }
+    if (!playing(responseId)) return;
+    if (gatedOpenFor !== responseId) {
+      gatedOpenFor = responseId;
+      sink.gate(true);
+    }
+  };
+
+  const emit = (responseId: string, live: boolean) => {
+    const said = words(responseId);
+    if (!said || !playing(responseId)) return;
+    const heard = heardOf(responseId);
     sink.caption({
       id: captionId(responseId),
       source: leg.source,
@@ -145,8 +233,13 @@ export function createRealtimeReader(
         if (usage.type === "duration" && typeof usage.seconds === "number") {
           sink.transcribed(usage.seconds);
         }
-        if (!item || !/[\p{L}\p{N}]/u.test(transcript)) return;
-        heardByItem.set(item, transcript);
+        const heardWords = spokenWords(transcript);
+        if (!item || !heardWords) return;
+        heardByItem.set(item, heardWords);
+        if (opts.peers) {
+          const mine = [...(opts.peers.get(leg.index) ?? []), heardWords].slice(-6);
+          opts.peers.set(leg.index, mine);
+        }
         // The transcript often lands AFTER the interpretation has started.
         for (const [responseId, items] of itemsOfResponse) {
           if (items.includes(item) && saidByResponse.has(responseId)) emit(responseId, liveResponses.has(responseId));
@@ -166,18 +259,30 @@ export function createRealtimeReader(
         const id = str(ev.response_id);
         const delta = str(ev.delta);
         if (!id || !delta) return;
-        const hadWords = !!(saidByResponse.get(id) ?? "").trim();
-        const said = (saidByResponse.get(id) ?? "") + delta;
-        saidByResponse.set(id, said);
-        if (!said.trim()) return;
+        const hadWords = !!words(id);
+        saidByResponse.set(id, (saidByResponse.get(id) ?? "") + delta);
+        if (!words(id)) return;
         // Its utterances are being interpreted now — no later response owns them.
-        if (!hadWords) consume(id);
-        if (gatedOpenFor !== id) {
-          gatedOpenFor = id;
-          sink.gate(true);
-        }
+        if (!hadWords && !echoGuard) consume(id);
+        decide(id);
+        if (!playing(id)) return;
         sink.activity();
         emit(id, true);
+        return;
+      }
+      if (type === "response.output_audio.delta" || type === "response.audio.delta") {
+        // Only the socket engines send audio as events (WebRTC carries it on
+        // a track). The first frame is the moment the echo guard decides.
+        const id = str(ev.response_id);
+        if (!id || audioStarted.has(id)) return;
+        audioStarted.add(id);
+        if (echoGuard && words(id)) {
+          decide(id);
+          if (playing(id)) {
+            sink.activity();
+            emit(id, true);
+          }
+        }
         return;
       }
       if (type === "output_audio_buffer.stopped" || type === "output_audio_buffer.cleared") {
@@ -193,9 +298,26 @@ export function createRealtimeReader(
       if (type === "response.done") {
         const response = obj(ev.response);
         const id = str(response.id);
-        if (response.usage) sink.usage(response.usage as RealtimeUsage);
+        if (response.usage) {
+          sink.usage(response.usage as RealtimeUsage);
+          // Grok Voice bills the clock and says so here: "the seconds billed
+          // so far" for this session, cumulative (xAI's live-interpreter
+          // recipe). No other provider of this dialect sends the field.
+          const billed = obj(response.usage).billable_audio_seconds;
+          if (typeof billed === "number" && Number.isFinite(billed)) sink.billed(billed);
+        }
         liveResponses.delete(id);
-        const spoke = !!(saidByResponse.get(id) ?? "").trim();
+        // Words that never got an audio frame (text-only tail, or a response
+        // cut off first) are judged now, so the caption is not lost.
+        if (echoGuard && words(id) && !verdict.has(id)) {
+          audioStarted.add(id);
+          decide(id);
+        }
+        const spoke = !!words(id) && playing(id);
+        audioStarted.delete(id);
+        // A response that ended without a word — the quiet leg's, or one cut
+        // off before it began — must leave the speaker shut for the next.
+        if (!spoke) sink.responseSilent();
         // Finished on purpose with nothing to say: those utterances are done
         // with. Cut off before its first word: they wait for the next response.
         if (!spoke && str(response.status) !== "cancelled") consume(id);
@@ -212,6 +334,7 @@ export function createRealtimeReader(
           for (const item of itemsOfResponse.get(drop) ?? []) heardByItem.delete(item);
           itemsOfResponse.delete(drop);
           startedAt.delete(drop);
+          verdict.delete(drop);
         }
         return;
       }
@@ -262,6 +385,16 @@ function createStreamCore(
 ): { push: (ev: StreamEvent) => void; tick: (nowMs: number) => void } {
   let seq = 0;
   let open: { id: string; said: string; at: number; lastOutMs: number } | null = null;
+  /**
+   * Output the leg has sent that is not words YET. The transcript arrives in
+   * fragments and a control marker can be cut anywhere ("<no" + " speech>" +
+   * "{pause}"), so fragments wait here until what they add up to, with the
+   * markers taken out, has a word in it. Gemini's quiet leg sends nothing
+   * else all evening (Tom's table, 2026-11-09) — it must never open a caption,
+   * never open the speaker, and never count as "the interpreter spoke".
+   */
+  let pending = "";
+  let pendingAtMs = 0;
 
   const emit = (live: boolean) => {
     if (!open) return;
@@ -271,8 +404,8 @@ function createStreamCore(
       target: leg.target,
       // A caption that opens mid-sentence inherits the tail of the last
       // one's punctuation ("." then the next clause); drop it.
-      heard: shared.text.replace(/^[\s.,;:!?…]+/u, "").trim(),
-      said: open.said,
+      heard: stripControlMarkers(shared.text).replace(/^[\s.,;:!?…]+/u, "").trim(),
+      said: stripControlMarkers(open.said),
       live,
       at: open.at
     });
@@ -280,9 +413,16 @@ function createStreamCore(
   const onHeard = () => emit(true);
 
   const close = () => {
-    if (!open) return;
+    pending = "";
+    if (!open) {
+      // A turn that ended with nothing but markers: drop any audio that was
+      // being held for it.
+      sink.responseSilent();
+      return;
+    }
     emit(false);
     open = null;
+    sink.gate(false);
     shared.listeners.delete(onHeard);
     shared.open = Math.max(0, shared.open - 1);
     // Those words have their interpretation now.
@@ -293,7 +433,10 @@ function createStreamCore(
     push: (ev) => {
       if (ev.kind === "heard") {
         if (!ownsHeard || !ev.delta) return;
+        const before = stripControlMarkers(shared.text);
         shared.text += ev.delta;
+        // `<noise>` from the transcriber is not somebody speaking.
+        if (stripControlMarkers(shared.text) === before) return;
         shared.lastAtMs = now();
         sink.activity();
         for (const listener of shared.listeners) listener();
@@ -302,12 +445,22 @@ function createStreamCore(
       if (ev.kind === "said") {
         if (!ev.delta) return;
         if (!open) {
-          if (!ev.delta.trim()) return;
-          open = { id: `${leg.index}:s${seq++}`, said: "", at: now(), lastOutMs: now() };
+          if (!pending) pendingAtMs = now();
+          pending += ev.delta;
+          if (!hasWords(stripControlMarkers(pending))) return;
+          open = { id: `${leg.index}:s${seq++}`, said: pending, at: now(), lastOutMs: now() };
+          pending = "";
           shared.open += 1;
           shared.listeners.add(onHeard);
+          sink.gate(true);
+          sink.activity();
+          emit(true);
+          return;
         }
+        const before = stripControlMarkers(open.said);
         open.said += ev.delta;
+        // A marker tacked onto a finished sentence must not hold it open.
+        if (stripControlMarkers(open.said) === before) return;
         open.lastOutMs = now();
         sink.activity();
         emit(true);
@@ -323,6 +476,9 @@ function createStreamCore(
     },
     tick: (nowMs) => {
       if (open && nowMs - open.lastOutMs >= STREAM_QUIET_MS) close();
+      // Markers that never became words do not wait for a turn boundary the
+      // streaming engines never send.
+      if (!open && pending && nowMs - pendingAtMs >= STREAM_QUIET_MS) close();
       if (
         ownsHeard &&
         shared.open === 0 &&

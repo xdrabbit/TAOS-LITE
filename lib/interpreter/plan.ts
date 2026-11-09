@@ -6,9 +6,11 @@
 import {
   buildInterpreterBriefing,
   buildLegBriefing,
+  SILENCE_TOKEN,
   type InterpreterDirection,
   type InterpreterPair
 } from "./briefing";
+import { DEFAULT_INTERPRETER_STYLE, type InterpreterStyle } from "./mediator";
 import {
   engineTakesBriefing,
   interpreterLegCount,
@@ -38,6 +40,12 @@ export interface InterpreterPlan {
   legs: LegPlan[];
   /** Did the provider session get the briefing at all? */
   briefed: boolean;
+  /**
+   * The style the briefing was ACTUALLY written in. "mediator" only when it
+   * was asked for and the engine takes a briefing — an engine that cannot be
+   * briefed cannot be a mediator, and the screen is told so.
+   */
+  style: InterpreterStyle;
 }
 
 export function buildInterpreterPlan(opts: {
@@ -45,14 +53,20 @@ export function buildInterpreterPlan(opts: {
   pair: InterpreterPair;
   /** The founders' context block, already loaded. "" = none. */
   context: string;
+  /** What the founder's device asked for. Absent = the interpreter. */
+  style?: InterpreterStyle;
   env?: Record<string, string | undefined>;
 }): InterpreterPlan {
   const env = opts.env ?? process.env;
   const { engine, pair, context } = opts;
   const model = interpreterModel(engine, env);
   const briefed = engineTakesBriefing(engine);
+  const style: InterpreterStyle = briefed ? (opts.style ?? DEFAULT_INTERPRETER_STYLE) : DEFAULT_INTERPRETER_STYLE;
   const liveModel = engine === "openai-live";
   const directions = pairDirections(pair);
+  // A cascade cannot say nothing; its quiet leg is given a word for it
+  // (lib/interpreter/briefing.ts, SILENCE_TOKEN).
+  const silenceToken = engine === "elevenlabs-realtime" ? SILENCE_TOKEN : undefined;
 
   if (interpreterLegCount(engine, env.TAOS_INTERPRETER_LEGS) === 1) {
     return {
@@ -60,12 +74,13 @@ export function buildInterpreterPlan(opts: {
       model,
       pair,
       briefed,
+      style,
       legs: [
         {
           direction: null,
           // One session has one voice: voice 1's.
           voice: interpreterVoice(engine, directions[0], env),
-          instructions: buildInterpreterBriefing({ pair, context, liveModel })
+          instructions: buildInterpreterBriefing({ pair, context, liveModel, style, silenceToken })
         }
       ]
     };
@@ -76,10 +91,11 @@ export function buildInterpreterPlan(opts: {
     model,
     pair,
     briefed,
+    style,
     legs: directions.map((direction) => ({
       direction,
       voice: engine === "openai-translate" ? null : interpreterVoice(engine, direction, env),
-      instructions: briefed ? buildLegBriefing({ direction, context, liveModel }) : null
+      instructions: briefed ? buildLegBriefing({ direction, context, liveModel, style, silenceToken }) : null
     }))
   };
 }

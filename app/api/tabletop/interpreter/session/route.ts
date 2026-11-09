@@ -1,20 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guardInterpreter } from "@/lib/interpreter/guard";
-import { interpreterIdleSeconds, interpreterMaxMinutes } from "@/lib/interpreter/flag";
 import {
+  interpreterIdleSeconds,
+  interpreterMaxMinutes,
+  interpreterMediatorEnabled
+} from "@/lib/interpreter/flag";
+import {
+  ENGINE_KEY_ENV,
+  ENGINE_LABEL,
+  engineApiKey,
   engineEnvDefault,
+  grokReasoning,
   interpreterTranscribeModel,
   interpreterTranslateTranscribeModel,
-  parseEngine
+  parseEngine,
+  XAI_KEY_ENVS,
+  type InterpreterEngine
 } from "@/lib/interpreter/engine";
+import { parseStyle } from "@/lib/interpreter/mediator";
 import { loadInterpreterContext } from "@/lib/interpreter/contextStore";
 import { buildInterpreterPlan, type LegPlan } from "@/lib/interpreter/plan";
 import {
+  buildElevenLabsRealtimeSession,
   buildGeminiInterpreterSetup,
+  buildGrokSecretSession,
+  buildGrokSessionUpdate,
   buildOpenAIRealtimeSession,
   buildOpenAITranslateSession,
   INTERPRETER_CONTEXT_TOKEN_LIMIT,
   INTERPRETER_SECRET_TTL_SECONDS,
+  INTERPRETER_WS_INPUT_RATE,
+  INTERPRETER_WS_OUTPUT_RATE,
   interpreterEagerness,
   interpreterReasoning
 } from "@/lib/interpreter/session";
@@ -37,8 +53,25 @@ export const maxDuration = 30;
 // ── The briefing ───────────────────────────────────────────────────────────
 // Assembled HERE, from the role in lib/interpreter/briefing.ts and the
 // founders' context block in the database, and locked into the provider
-// session. It is never returned to the browser and NEVER LOGGED: the mint line
-// below carries `context_chars`, a number, and nothing else about it.
+// session. It is NEVER LOGGED: the mint line below carries `context_chars`, a
+// number, and nothing else about it. And it is never returned to the browser
+// — with ONE exception, which is xAI's doing and not a choice:
+//
+//   grok-voice   xAI's client secret can bind only `model` and
+//                `reasoning.effort` (docs.x.ai, ephemeral tokens + the
+//                live-interpreter recipe: "the rest goes in session.update").
+//                The instructions and the voice have to be sent by whoever
+//                holds the socket, and that is the browser. So a Grok leg's
+//                ticket carries its `sessionUpdate`, briefing included, to the
+//                founder's own phone — the same founder who can already read
+//                and edit the context block on this screen (GET …/context).
+//                Nobody else can reach this route. It is still not logged.
+//
+// ── A missing key ──────────────────────────────────────────────────────────
+// Each engine fails CLOSED and by NAME: 503, `code: "not_configured"`, and
+// `missingEnv` — the exact variable to add in Vercel. Never a silent fall
+// back to another provider: a table that picked Grok and heard OpenAI would
+// be an A/B that lies.
 //
 // ── Where the money goes ───────────────────────────────────────────────────
 // Unlike the table's push-to-talk turns this session SPEAKS, and the model's
@@ -55,6 +88,10 @@ const GEMINI_BASE = (
 const GEMINI_WS_URL =
   process.env.GEMINI_LIVE_WS_URL ??
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
+const XAI_BASE = (process.env.XAI_API_BASE_URL ?? "https://api.x.ai/v1").replace(/\/$/, "");
+const XAI_WS_URL = process.env.XAI_REALTIME_WS_URL ?? "wss://api.x.ai/v1/realtime";
+const ELEVENLABS_BASE = (process.env.ELEVENLABS_API_BASE_URL ?? "https://api.elevenlabs.io/v1").replace(/\/$/, "");
+const ELEVENLABS_WS_URL = process.env.ELEVENLABS_REALTIME_WS_URL ?? "wss://api.elevenlabs.io/v1/convai/realtime";
 
 /** What the browser is told about one leg. No briefing, no key. */
 type LegTicket = {
@@ -65,16 +102,54 @@ type LegTicket = {
   | { transport: "openai-webrtc"; clientSecret: string; callUrl: string }
   | { transport: "openai-live-relay"; relayUrl: string; leg: number }
   | { transport: "gemini-ws"; wsUrl: string }
+  | {
+      // The OpenAI Realtime wire protocol over a WebSocket (Grok, ElevenLabs).
+      transport: "realtime-ws";
+      wsUrl: string;
+      /** How a browser authenticates a socket: the secret, as a subprotocol. */
+      protocols: string[];
+      /** Sent by the browser once the socket is up. Null = locked in at mint. */
+      sessionUpdate: Record<string, unknown> | null;
+      inputRate: number;
+      outputRate: number;
+    }
 );
 
 class MintError extends Error {
   constructor(
     message: string,
     readonly status = 502,
-    readonly code?: string
+    readonly code?: string,
+    readonly missingEnv?: string
   ) {
     super(message);
   }
+}
+
+/** The engine's key, or the 503 that names the variable to add. */
+function requireKey(engine: InterpreterEngine): string {
+  const key = engineApiKey(engine);
+  if (key) return key;
+  const name = ENGINE_KEY_ENV[engine];
+  throw new MintError(
+    `${ENGINE_LABEL[engine]} is not configured on this deployment: ${name} is not set.`,
+    503,
+    "not_configured",
+    name
+  );
+}
+
+/** A provider's error body, whatever its shape, as one short line. */
+function providerMessage(payload: unknown, status: number): string {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const nested = (p.error ?? p.detail ?? null) as Record<string, unknown> | string | null;
+  const text =
+    (typeof nested === "string" && nested) ||
+    (nested && typeof nested === "object" && typeof nested.message === "string" && nested.message) ||
+    (typeof p.message === "string" && p.message) ||
+    (typeof p.error === "string" && p.error) ||
+    "";
+  return text ? text.slice(0, 200) : `HTTP ${status}`;
 }
 
 function secretFrom(payload: Record<string, unknown> | null): string {
@@ -123,6 +198,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     engine?: unknown;
     mine?: unknown;
     theirs?: unknown;
+    style?: unknown;
   };
   // The picker's choice, or the deployment default. An unknown engine is a
   // default, never an error — the screen must not strand a dinner on a typo.
@@ -135,15 +211,94 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const pair = { a: mine, b: theirs };
 
   const stored = await loadInterpreterContext();
-  const plan = buildInterpreterPlan({ engine, pair, context: stored.context });
+  // "mediator" only when the device asked for exactly that; anything else is
+  // the interpreter (lib/interpreter/mediator.ts — the style is OFF by default).
+  const plan = buildInterpreterPlan({
+    engine,
+    pair,
+    context: stored.context,
+    style: interpreterMediatorEnabled() ? parseStyle(body.style) ?? undefined : undefined
+  });
   const transcribeModel = interpreterTranscribeModel();
 
   try {
     let legs: LegTicket[];
 
-    if (engine === "gemini-live") {
-      const apiKey = process.env.GEMINI_API_KEY?.trim();
-      if (!apiKey) throw new MintError("Gemini is not configured on this deployment.", 503, "not_configured");
+    if (engine === "grok-voice") {
+      const apiKey = requireKey(engine);
+      legs = await Promise.all(
+        plan.legs.map(async (leg): Promise<LegTicket> => {
+          const res = await fetch(`${XAI_BASE}/realtime/client_secrets`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              expires_after: { seconds: INTERPRETER_SECRET_TTL_SECONDS },
+              // All a Grok secret can bind (see the note at the top).
+              session: buildGrokSecretSession({ model: plan.model, reasoning: grokReasoning() })
+            }),
+            cache: "no-store"
+          });
+          const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+          const secret = secretFrom(payload);
+          if (!res.ok || !secret) throw new MintError(providerMessage(payload, res.status));
+          return {
+            ...ticketBase(leg),
+            transport: "realtime-ws",
+            wsUrl: `${XAI_WS_URL}?model=${encodeURIComponent(plan.model)}`,
+            protocols: [`xai-client-secret.${secret}`],
+            sessionUpdate: buildGrokSessionUpdate({
+              instructions: leg.instructions ?? "",
+              voice: leg.voice ?? ""
+            }),
+            inputRate: INTERPRETER_WS_INPUT_RATE,
+            outputRate: INTERPRETER_WS_OUTPUT_RATE
+          };
+        })
+      );
+    } else if (engine === "elevenlabs-realtime") {
+      const apiKey = requireKey(engine);
+      legs = await Promise.all(
+        plan.legs.map(async (leg): Promise<LegTicket> => {
+          const res = await fetch(`${ELEVENLABS_BASE}/convai/realtime/client_secrets`, {
+            method: "POST",
+            headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              expires_after: { anchor: "created_at", seconds: INTERPRETER_SECRET_TTL_SECONDS },
+              // "The session configuration you send when minting the client
+              // secret is the authoritative initial session": the briefing
+              // and the cloned voice are locked in here, server-side.
+              session: buildElevenLabsRealtimeSession({
+                model: plan.model,
+                instructions: leg.instructions ?? "",
+                voice: leg.voice ?? "",
+                // The language this leg LISTENS for; a single session that
+                // hears both is given none and left to detect.
+                language: leg.direction?.source ?? null,
+                maxSeconds: interpreterMaxMinutes() * 60,
+                eagerness: interpreterEagerness()
+              })
+            }),
+            cache: "no-store"
+          });
+          const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+          const secret = secretFrom(payload);
+          if (!res.ok || !secret) throw new MintError(providerMessage(payload, res.status));
+          return {
+            ...ticketBase(leg),
+            // A clone's ID is configuration, not something a screen needs.
+            voice: null,
+            transport: "realtime-ws",
+            wsUrl: ELEVENLABS_WS_URL,
+            // What OpenAI's own browser SDK sends, which ElevenLabs' guide uses.
+            protocols: ["realtime", `openai-insecure-api-key.${secret}`],
+            sessionUpdate: null,
+            inputRate: INTERPRETER_WS_INPUT_RATE,
+            outputRate: INTERPRETER_WS_OUTPUT_RATE
+          };
+        })
+      );
+    } else if (engine === "gemini-live") {
+      const apiKey = requireKey(engine);
       const now = Date.now();
       legs = await Promise.all(
         plan.legs.map(async (leg): Promise<LegTicket> => {
@@ -182,8 +337,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         })
       );
     } else {
-      const apiKey = process.env.OPENAI_API_KEY?.trim();
-      if (!apiKey) throw new MintError("OpenAI is not configured on this deployment.", 503, "not_configured");
+      const apiKey = requireKey(engine);
 
       if (engine === "openai-live") {
         // GPT-Live has no client secret: the browser's SDP offer is exchanged
@@ -251,7 +405,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // only: the briefing and the context block never reach a log line.
     console.info(
       `[taos-interpreter-mint] engine=${engine} model=${plan.model} pair=${mine}<>${theirs} ` +
-        `legs=${plan.legs.length} briefed=${plan.briefed ? 1 : 0} ` +
+        `legs=${plan.legs.length} briefed=${plan.briefed ? 1 : 0} style=${plan.style} ` +
         `context_chars=${plan.briefed ? stored.context.length : 0} context=${stored.status} ` +
         `context_tokens=${INTERPRETER_CONTEXT_TOKEN_LIMIT ?? "off"} max_s=${maxSeconds} idle_s=${idleSeconds}`
     );
@@ -263,6 +417,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         legs,
         maxSeconds,
         idleSeconds,
+        // What the session was actually briefed as — "interpreter" for an
+        // engine that takes no briefing, whatever the device asked for.
+        style: plan.style,
         briefing: {
           // False for gpt-realtime-translate: its session takes no instructions.
           applied: plan.briefed,
@@ -275,7 +432,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (error) {
     const status = error instanceof MintError ? error.status : 502;
     const code = error instanceof MintError ? error.code : undefined;
-    const apiKeys = [process.env.OPENAI_API_KEY, process.env.GEMINI_API_KEY]
+    const missingEnv = error instanceof MintError ? error.missingEnv : undefined;
+    const apiKeys = [
+      process.env.OPENAI_API_KEY,
+      process.env.GEMINI_API_KEY,
+      process.env.ELEVENLABS_API_KEY,
+      ...XAI_KEY_ENVS.map((name) => process.env[name])
+    ]
       .map((k) => k?.trim())
       .filter((k): k is string => !!k);
     // Scrubbed anyway: a fetch error that ever echoes a URL or header would
@@ -283,7 +446,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let details = error instanceof Error ? error.message : "Unexpected error.";
     for (const k of apiKeys) details = details.split(k).join("<key>");
     return NextResponse.json(
-      { error: "Could not start the interpreter.", details, ...(code ? { code } : {}), engine },
+      {
+        error: "Could not start the interpreter.",
+        details,
+        ...(code ? { code } : {}),
+        // A NAME, never a value: the variable Tom has to add in Vercel.
+        ...(missingEnv ? { missingEnv } : {}),
+        engine
+      },
       { status, headers: { "Cache-Control": "no-store" } }
     );
   }

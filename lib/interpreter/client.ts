@@ -38,9 +38,10 @@ import {
   emptyInterpreterTally,
   type InterpreterTally
 } from "./cost";
-import type { InterpreterEngine } from "./engine";
+import { engineBillsByTheMinute, type InterpreterEngine } from "./engine";
 import {
   createGeminiReader,
+  createPeerHeard,
   createRealtimeReader,
   createSharedHeard,
   createStreamReader,
@@ -48,6 +49,7 @@ import {
   type LegReader,
   type LegSink
 } from "./legEvents";
+import { DEFAULT_INTERPRETER_STYLE, parseStyle, type InterpreterStyle } from "./mediator";
 
 export interface InterpreterHandlers {
   onCaption: (update: CaptionUpdate) => void;
@@ -64,9 +66,26 @@ export interface BriefingReceipt {
   contextStatus: "ok" | "missing_table" | "unavailable";
 }
 
+/**
+ * The server refused to start an engine because its key is not configured.
+ * `missingEnv` is the NAME of the variable to add in Vercel — the screen says
+ * it in the reader's language (copy key `interpreterEngineNoKey`).
+ */
+export class InterpreterNotConfiguredError extends Error {
+  constructor(
+    message: string,
+    readonly missingEnv: string
+  ) {
+    super(message);
+    this.name = "InterpreterNotConfiguredError";
+  }
+}
+
 export interface ActiveInterpreter {
   engine: InterpreterEngine;
   model: string;
+  /** What the session was actually briefed as (the server's answer). */
+  style: InterpreterStyle;
   legs: number;
   maxSeconds: number;
   idleSeconds: number;
@@ -84,6 +103,14 @@ type LegTicket = {
   | { transport: "openai-webrtc"; clientSecret: string; callUrl: string }
   | { transport: "openai-live-relay"; relayUrl: string; leg: number }
   | { transport: "gemini-ws"; wsUrl: string }
+  | {
+      transport: "realtime-ws";
+      wsUrl: string;
+      protocols: string[];
+      sessionUpdate: Record<string, unknown> | null;
+      inputRate: number;
+      outputRate: number;
+    }
 );
 
 interface MintResponse {
@@ -92,9 +119,12 @@ interface MintResponse {
   legs?: LegTicket[];
   maxSeconds?: number;
   idleSeconds?: number;
+  style?: string;
   briefing?: BriefingReceipt;
   error?: string;
   details?: string;
+  code?: string;
+  missingEnv?: string;
 }
 
 interface Leg {
@@ -111,6 +141,13 @@ const TICK_MS = 250;
 /** Gemini's sockets last ~10 minutes; a dinner is longer. */
 const MAX_GEMINI_RECONNECTS = 6;
 const GEMINI_OUT_RATE = 24_000;
+/**
+ * xAI's own interpreter recipe: "about one connection in ten opened and then
+ * never started a session … give each try five seconds to send
+ * session.created, then try again with a new token", up to three times.
+ */
+const WS_SESSION_TIMEOUT_MS = 5_000;
+const WS_CONNECT_ATTEMPTS = 3;
 
 function hiddenAudio(): HTMLAudioElement {
   const el = document.createElement("audio");
@@ -122,15 +159,24 @@ function hiddenAudio(): HTMLAudioElement {
   return el;
 }
 
-async function mintSession(engine: InterpreterEngine, mine: string, theirs: string): Promise<MintResponse> {
+async function mintSession(
+  engine: InterpreterEngine,
+  mine: string,
+  theirs: string,
+  style: InterpreterStyle
+): Promise<MintResponse> {
   const res = await fetch("/api/tabletop/interpreter/session", {
     method: "POST",
     headers: await jsonAuthHeaders(),
-    body: JSON.stringify({ engine, mine, theirs })
+    body: JSON.stringify({ engine, mine, theirs, style })
   });
   const body = (await res.json().catch(() => ({}))) as MintResponse;
   if (!res.ok || !Array.isArray(body.legs) || body.legs.length === 0) {
-    throw new Error(body.details || body.error || "Could not start the interpreter.");
+    const message = body.details || body.error || "Could not start the interpreter.";
+    if (body.code === "not_configured" && typeof body.missingEnv === "string" && body.missingEnv) {
+      throw new InterpreterNotConfiguredError(message, body.missingEnv);
+    }
+    throw new Error(message);
   }
   return body;
 }
@@ -139,9 +185,12 @@ export async function startInterpreter(opts: {
   engine: InterpreterEngine;
   mine: string;
   theirs: string;
+  /** "mediator" = the experimental style. Absent = the interpreter. */
+  style?: InterpreterStyle;
   handlers: InterpreterHandlers;
 }): Promise<ActiveInterpreter> {
   const { handlers, mine, theirs } = opts;
+  const style = opts.style ?? DEFAULT_INTERPRETER_STYLE;
   let mic: MediaStream | null = null;
   let legs: Leg[] = [];
   let stopped = false;
@@ -165,10 +214,10 @@ export async function startInterpreter(opts: {
 
   function currentTally(): InterpreterTally {
     if (finalTally) return finalTally;
-    if (tally.engine !== "openai-translate" && tally.engine !== "openai-live") return tally;
-    // Per-minute engines. GPT-Live reports its own seconds; where a leg has
-    // not (and for translate, which never does) the wall clock stands in —
-    // both bill the session's duration, silence included.
+    if (!engineBillsByTheMinute(tally.engine)) return tally;
+    // Per-minute engines. GPT-Live and Grok report their own seconds; where a
+    // leg has not (and for translate and ElevenLabs, which never do) the wall
+    // clock stands in — all four bill the session's duration, silence included.
     let seconds = 0;
     legs.forEach((leg, index) => {
       seconds += billedByLeg.get(index) ?? leg.connectedSeconds();
@@ -215,17 +264,34 @@ export async function startInterpreter(opts: {
     const micTrack = mic.getAudioTracks()[0];
     if (!micTrack) throw new Error("No microphone track.");
 
-    const mint = await mintSession(opts.engine, mine, theirs);
+    const mint = await mintSession(opts.engine, mine, theirs, style);
     const tickets = mint.legs ?? [];
     const engine = mint.engine ?? opts.engine;
-    tally = emptyInterpreterTally(engine, mint.model ?? "", Date.now(), tickets.length);
+    // The server's word on the style, not the device's wish: an engine that
+    // takes no briefing answers "interpreter" whatever was asked.
+    const appliedStyle = parseStyle(mint.style) ?? DEFAULT_INTERPRETER_STYLE;
+    tally = { ...emptyInterpreterTally(engine, mint.model ?? "", Date.now(), tickets.length), style: appliedStyle };
 
     const shared = createSharedHeard();
+    const peers = createPeerHeard();
     // Gate a leg's speaker on WORDS only where a second leg is listening to
-    // the same sentence and told to keep quiet (see LegSink.gate).
-    const gated = engine === "openai-realtime" && tickets.length > 1;
+    // the same sentence and told to keep quiet (see LegSink.gate). Every
+    // briefed two-leg engine: the quiet leg of each one "says" something that
+    // is not words — wordless frames (OpenAI), `<no speech>` (Gemini), a
+    // silence token or an echo (ElevenLabs).
+    const gated =
+      tickets.length > 1 &&
+      (engine === "openai-realtime" ||
+        engine === "gemini-live" ||
+        engine === "grok-voice" ||
+        engine === "elevenlabs-realtime");
 
-    const sinkFor = (index: number, setAudible: (open: boolean) => void, flush: () => void): LegSink => ({
+    const sinkFor = (
+      index: number,
+      setAudible: (open: boolean) => void,
+      flush: () => void,
+      dropHeld: () => void = () => {}
+    ): LegSink => ({
       caption: (update) => {
         if (!stopped) handlers.onCaption(update);
       },
@@ -245,6 +311,9 @@ export async function startInterpreter(opts: {
         if (gated) setAudible(open);
       },
       flushAudio: flush,
+      responseSilent: () => {
+        if (gated) dropHeld();
+      },
       error: (message) => {
         publish({ ...tally, errors: tally.errors + 1 });
         if (!stopped) handlers.onError(message);
@@ -262,12 +331,38 @@ export async function startInterpreter(opts: {
           identity,
           micTrack,
           makeReader: (sink) => createGeminiReader(identity, sink, shared, { ownsHeard: index === 0 }),
-          sinkFor: (flush) => sinkFor(index, () => {}, flush),
+          sinkFor: (setAudible, flush, dropHeld) => sinkFor(index, setAudible, flush, dropHeld),
+          startHeld: gated,
           remint: async () => {
-            const again = await mintSession(engine, mine, theirs);
+            const again = await mintSession(engine, mine, theirs, style);
             const next = again.legs?.[index];
             if (!next || next.transport !== "gemini-ws") throw new Error("Could not reconnect.");
             return next.wsUrl;
+          },
+          onLost: () => {
+            if (!stopped) handlers.onLegLost();
+          },
+          isStopped: () => stopped
+        });
+      }
+      if (ticket.transport === "realtime-ws") {
+        return connectRealtimeWsLeg({
+          ticket,
+          identity,
+          micTrack,
+          makeReader: (sink) =>
+            createRealtimeReader(identity, sink, {
+              // The cascade that answers in the wrong language by repeating.
+              echoGuard: engine === "elevenlabs-realtime" && tickets.length > 1,
+              peers
+            }),
+          sinkFor: (setAudible, flush, dropHeld) => sinkFor(index, setAudible, flush, dropHeld),
+          startHeld: gated,
+          remint: async () => {
+            const again = await mintSession(engine, mine, theirs, style);
+            const next = again.legs?.[index];
+            if (!next || next.transport !== "realtime-ws") throw new Error("Could not reconnect.");
+            return next;
           },
           onLost: () => {
             if (!stopped) handlers.onLegLost();
@@ -281,6 +376,7 @@ export async function startInterpreter(opts: {
         micTrack,
         mine,
         theirs,
+        style,
         startMuted: gated,
         makeReader: (sink) =>
           engine === "openai-realtime"
@@ -309,6 +405,7 @@ export async function startInterpreter(opts: {
     return {
       engine,
       model: mint.model ?? "",
+      style: appliedStyle,
       legs: legs.length,
       maxSeconds: typeof mint.maxSeconds === "number" && mint.maxSeconds > 0 ? mint.maxSeconds : 1800,
       idleSeconds: typeof mint.idleSeconds === "number" && mint.idleSeconds > 0 ? mint.idleSeconds : 60,
@@ -330,6 +427,7 @@ async function connectWebRtcLeg(opts: {
   micTrack: MediaStreamTrack;
   mine: string;
   theirs: string;
+  style: InterpreterStyle;
   startMuted: boolean;
   makeReader: (sink: LegSink) => LegReader;
   sinkFor: (setAudible: (open: boolean) => void) => LegSink;
@@ -412,7 +510,13 @@ async function connectWebRtcLeg(opts: {
       const res = await fetch(ticket.relayUrl, {
         method: "POST",
         headers: await jsonAuthHeaders(),
-        body: JSON.stringify({ sdp: offer.sdp ?? "", leg: ticket.leg, mine: opts.mine, theirs: opts.theirs })
+        body: JSON.stringify({
+          sdp: offer.sdp ?? "",
+          leg: ticket.leg,
+          mine: opts.mine,
+          theirs: opts.theirs,
+          style: opts.style
+        })
       });
       const body = (await res.json().catch(() => ({}))) as { sdp?: string; error?: string; details?: string };
       if (!res.ok || !body.sdp) {
@@ -494,7 +598,9 @@ function base64ToBytes(b64: string): Uint8Array {
  * (not straight to the context's destination) so it is page audio like the
  * WebRTC legs' — which is what the echo canceller is listening for.
  */
-function createPcmPlayer(): { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void } | null {
+function createPcmPlayer(
+  rate: number = GEMINI_OUT_RATE
+): { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void } | null {
   const ctx = ensureTabletopAudioContext();
   if (!ctx || typeof ctx.createMediaStreamDestination !== "function") return null;
   const out = ctx.createMediaStreamDestination();
@@ -507,7 +613,7 @@ function createPcmPlayer(): { play: (bytes: Uint8Array) => void; flush: () => vo
     play: (bytes) => {
       const samples = Math.floor(bytes.length / 2);
       if (!samples) return;
-      const buffer = ctx.createBuffer(1, samples, GEMINI_OUT_RATE);
+      const buffer = ctx.createBuffer(1, samples, rate);
       const channel = buffer.getChannelData(0);
       const view = new DataView(bytes.buffer, bytes.byteOffset, samples * 2);
       for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 0x8000;
@@ -545,22 +651,246 @@ function createPcmPlayer(): { play: (bytes: Uint8Array) => void; flush: () => vo
   };
 }
 
+/**
+ * A socket leg's speaker, with the gate in front of it. A leg told to keep
+ * quiet for one of the two languages still SENDS something for it — wordless
+ * frames, the sound of a `<no speech>`, a cascade's echo — so, on a two-leg
+ * table, audio is HELD until the reader says the response has words
+ * (LegSink.gate) and thrown away if it ends without any
+ * (LegSink.responseSilent). On a one-leg table nothing is held.
+ */
+function createGatedPlayer(
+  player: { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void },
+  startHeld: boolean
+): {
+  play: (bytes: Uint8Array) => void;
+  setAudible: (open: boolean) => void;
+  dropHeld: () => void;
+  /** A new response begins: shut the gate again. */
+  rearm: () => void;
+  flush: () => void;
+  close: () => void;
+} {
+  /** ~20 s of 24 kHz s16 — far past any real lead of audio over its words. */
+  const MAX_HELD_BYTES = 960_000;
+  let audible = !startHeld;
+  let held: Uint8Array[] = [];
+  let heldBytes = 0;
+  const dropHeld = () => {
+    held = [];
+    heldBytes = 0;
+  };
+  return {
+    play: (bytes) => {
+      if (audible) {
+        player.play(bytes);
+        return;
+      }
+      held.push(bytes);
+      heldBytes += bytes.length;
+      while (heldBytes > MAX_HELD_BYTES && held.length > 1) heldBytes -= held.shift()!.length;
+    },
+    setAudible: (open) => {
+      if (!startHeld) return;
+      audible = open;
+      if (open) {
+        for (const chunk of held) player.play(chunk);
+        dropHeld();
+      }
+    },
+    dropHeld,
+    rearm: () => {
+      if (!startHeld) return;
+      audible = false;
+      dropHeld();
+    },
+    flush: () => {
+      dropHeld();
+      player.flush();
+    },
+    close: () => {
+      dropHeld();
+      player.flush();
+      player.close();
+    }
+  };
+}
+
+// ── Realtime-over-WebSocket legs: Grok Voice, ElevenLabs Realtime ──────────
+// Both speak the OpenAI Realtime wire protocol, and neither has WebRTC — so
+// the microphone goes up as PCM events and the voice comes down as PCM events,
+// the way Gemini's does, while the EVENTS are read by the same reader as the
+// flagship's (lib/interpreter/legEvents.ts, createRealtimeReader).
+
+type RealtimeWsTicket = Extract<LegTicket, { transport: "realtime-ws" }>;
+
+async function connectRealtimeWsLeg(opts: {
+  ticket: RealtimeWsTicket;
+  identity: LegIdentity;
+  micTrack: MediaStreamTrack;
+  makeReader: (sink: LegSink) => LegReader;
+  sinkFor: (setAudible: (open: boolean) => void, flush: () => void, dropHeld: () => void) => LegSink;
+  startHeld: boolean;
+  /** A fresh ticket for this leg (a client secret opens ONE session). */
+  remint: () => Promise<RealtimeWsTicket>;
+  onLost: () => void;
+  isStopped: () => boolean;
+}): Promise<Leg> {
+  const raw = createPcmPlayer(opts.ticket.outputRate);
+  if (!raw) throw new Error("This browser cannot play the interpreter's audio.");
+  const player = createGatedPlayer(raw, opts.startHeld);
+  const track = opts.micTrack.clone();
+  const connectedAt = Date.now();
+  const reader = opts.makeReader(opts.sinkFor(player.setAudible, player.flush, player.dropHeld));
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let tap: MicPcmTap | null = null;
+
+  const open = (ticket: RealtimeWsTicket): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(ticket.wsUrl, ticket.protocols);
+      ws = socket;
+      let ready = false;
+      let updateSent = false;
+      const timeout = window.setTimeout(() => {
+        if (ready) return;
+        // Opened (or not) and never started a session: abandon this socket.
+        if (ws === socket) ws = null;
+        try {
+          socket.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error("The interpreter did not connect in time — try again."));
+      }, WS_SESSION_TIMEOUT_MS);
+      socket.onmessage = (ev) => {
+        if (ws !== socket) return;
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        const type = typeof msg.type === "string" ? msg.type : "";
+        if (type === "session.created" && !ready) {
+          // Grok: instructions, voice and turn detection can only be set
+          // here. ElevenLabs: null — its session was locked in at the mint.
+          if (ticket.sessionUpdate) {
+            socket.send(JSON.stringify({ type: "session.update", session: ticket.sessionUpdate }));
+            updateSent = true;
+          } else {
+            ready = true;
+            window.clearTimeout(timeout);
+            resolve();
+          }
+          return;
+        }
+        // xAI confirms the browser-supplied briefing and audio settings with
+        // session.updated. Do not send microphone audio before that contract
+        // is active (its official live-interpreter recipe does the same).
+        if (type === "session.updated" && updateSent && !ready) {
+          ready = true;
+          window.clearTimeout(timeout);
+          resolve();
+          return;
+        }
+        if (type === "response.created") player.rearm();
+        // BARGE-IN: the provider cancels its response when someone speaks
+        // over it; what is already queued here has to stop too.
+        if (type === "input_audio_buffer.speech_started") player.flush();
+        if (type === "response.output_audio.delta" || type === "response.audio.delta") {
+          const data = msg.delta;
+          if (typeof data === "string" && data) player.play(base64ToBytes(data));
+        }
+        reader.handle(msg);
+      };
+      socket.onclose = () => {
+        if (ws !== socket) return;
+        window.clearTimeout(timeout);
+        ws = null;
+        if (!ready) {
+          reject(new Error("The interpreter connection failed — try again."));
+          return;
+        }
+        if (closed || opts.isStopped()) return;
+        opts.onLost();
+      };
+    });
+
+  try {
+    let ticket = opts.ticket;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await open(ticket);
+        break;
+      } catch (error) {
+        if (attempt >= WS_CONNECT_ATTEMPTS || opts.isStopped()) throw error;
+        ticket = await opts.remint();
+      }
+    }
+    tap = tapMicPcm(
+      track,
+      (pcm) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        // Drop, never queue: a backed-up socket must not turn into latency.
+        if (ws.bufferedAmount > 96 * 1024) return;
+        ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: bytesToBase64(s16ToLeBytes(pcm)) }));
+      },
+      ticket.inputRate
+    );
+    if (!tap) throw new Error("This browser cannot stream the microphone to the interpreter.");
+    return {
+      tick: reader.tick,
+      connectedSeconds: () => Math.max(0, (Date.now() - connectedAt) / 1000),
+      close: async () => {
+        closed = true;
+        tap?.release();
+        tap = null;
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+        ws = null;
+        player.close();
+        track.stop();
+      }
+    };
+  } catch (error) {
+    closed = true;
+    tap?.release();
+    try {
+      (ws as WebSocket | null)?.close();
+    } catch {
+      /* ignore */
+    }
+    player.close();
+    track.stop();
+    throw error;
+  }
+}
+
 async function connectGeminiLeg(opts: {
   ticket: Extract<LegTicket, { transport: "gemini-ws" }>;
   identity: LegIdentity;
   micTrack: MediaStreamTrack;
   makeReader: (sink: LegSink) => LegReader;
-  sinkFor: (flush: () => void) => LegSink;
+  sinkFor: (setAudible: (open: boolean) => void, flush: () => void, dropHeld: () => void) => LegSink;
+  /** Hold audio until the transcript has words (a two-leg table). */
+  startHeld: boolean;
   /** A fresh one-use socket URL for this leg. */
   remint: () => Promise<string>;
   onLost: () => void;
   isStopped: () => boolean;
 }): Promise<Leg> {
-  const player = createPcmPlayer();
-  if (!player) throw new Error("This browser cannot play Gemini's audio.");
+  const rawPlayer = createPcmPlayer();
+  if (!rawPlayer) throw new Error("This browser cannot play Gemini's audio.");
+  // Gemini's quiet leg answers the other person's language with `<no speech>`
+  // — and with audio frames for it (Tom's table, 2026-11-09). Held and dropped.
+  const player = createGatedPlayer(rawPlayer, opts.startHeld);
   const track = opts.micTrack.clone();
   const connectedAt = Date.now();
-  const reader = opts.makeReader(opts.sinkFor(() => player.flush()));
+  const reader = opts.makeReader(opts.sinkFor(player.setAudible, player.flush, player.dropHeld));
   let ws: WebSocket | null = null;
   let ready = false;
   let closed = false;
@@ -654,7 +984,6 @@ async function connectGeminiLeg(opts: {
           /* ignore */
         }
         ws = null;
-        player.flush();
         player.close();
         track.stop();
       }

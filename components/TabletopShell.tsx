@@ -166,6 +166,7 @@ export function TabletopShell({
   defaultBrain = "openai",
   autoEnabled = false,
   interpreterEnabled = false,
+  interpreterMediatorEnabled = false,
   interpreterEngine = "openai-realtime"
 }: {
   /**
@@ -174,6 +175,8 @@ export function TabletopShell({
    * (lib/interpreter/flag.ts); everyone else's table is untouched.
    */
   interpreterEnabled?: boolean;
+  /** TAOS_INTERPRETER_MEDIATOR_ENABLED, server-only and false by default. */
+  interpreterMediatorEnabled?: boolean;
   /** TAOS_INTERPRETER_ENGINE, read on the server: the picker's default. */
   interpreterEngine?: InterpreterEngine;
   /** TAOS_TABLETOP_BRAIN, read on the server. Founders only; see brain.ts. */
@@ -1095,6 +1098,7 @@ export function TabletopShell({
         mine={mine}
         theirs={theirs}
         defaultEngine={interpreterEngine}
+        mediatorEnabled={interpreterMediatorEnabled}
         onExit={() => setInterpreterOpen(false)}
       />
     );

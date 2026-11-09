@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guardInterpreter } from "@/lib/interpreter/guard";
+import { interpreterMediatorEnabled } from "@/lib/interpreter/flag";
 import { loadInterpreterContext } from "@/lib/interpreter/contextStore";
 import { buildInterpreterPlan } from "@/lib/interpreter/plan";
+import { parseStyle } from "@/lib/interpreter/mediator";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 
 export const runtime = "nodejs";
@@ -44,6 +46,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     leg?: unknown;
     mine?: unknown;
     theirs?: unknown;
+    style?: unknown;
   };
   const sdp = typeof body.sdp === "string" ? body.sdp : "";
   if (!sdp.startsWith("v=") || sdp.length > MAX_SDP_CHARS) {
@@ -58,7 +61,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const plan = buildInterpreterPlan({
     engine: "openai-live",
     pair: { a: mine, b: theirs },
-    context: stored.context
+    context: stored.context,
+    style: interpreterMediatorEnabled() ? parseStyle(body.style) ?? undefined : undefined
   });
   const index = typeof body.leg === "number" && Number.isInteger(body.leg) ? body.leg : -1;
   const leg = plan.legs[index];
