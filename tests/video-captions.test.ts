@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   batchSegments,
+  captionSttModel,
   formatSrtTimestamp,
   formatVttTimestamp,
   toSrt,
@@ -28,6 +29,15 @@ describe("timestamp formatting", () => {
   it("clamps negative and non-finite times to zero", () => {
     expect(formatSrtTimestamp(-3)).toBe("00:00:00,000");
     expect(formatVttTimestamp(Number.NaN)).toBe("00:00:00.000");
+  });
+});
+
+describe("caption transcriber", () => {
+  it("keeps whisper-1 as the timestamp default and exposes its dedicated knob", () => {
+    expect(captionSttModel(undefined)).toBe("whisper-1");
+    expect(captionSttModel("  ")).toBe("whisper-1");
+    expect(captionSttModel(" gpt-transcribe ")).toBe("gpt-transcribe");
+    expect(captionSttModel(" gpt-live-transcribe ")).toBe("gpt-live-transcribe");
   });
 });
 

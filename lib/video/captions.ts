@@ -8,6 +8,15 @@
 // VideoShell builds the downloadable .srt/.vtt files and the <track> blob in
 // the browser. Keep this module dependency-free.
 
+export const CAPTION_STT_MODEL_DEFAULT = "whisper-1";
+
+/** /video's timestamp transcriber; kept separate from ordinary file STT. */
+export function captionSttModel(
+  raw: string | undefined = process.env.OPENAI_CAPTION_STT_MODEL
+): string {
+  return (raw ?? "").trim() || CAPTION_STT_MODEL_DEFAULT;
+}
+
 export interface CaptionSegment {
   /** Segment start, in seconds from the beginning of the video. */
   start: number;

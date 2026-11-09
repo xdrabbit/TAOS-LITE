@@ -55,9 +55,11 @@ export interface TranscribeOptions {
    */
   model?: string;
   /**
-   * The API's own `language` field (ISO-639-1, "es"). Only the short-transcript
-   * retry and /review's Redo pass it (lib/translate/shortTranscript.ts); every
-   * first transcription is sent exactly as before. It exists because whisper-1
+   * The API's language hint (ISO-639-1, "es"). Legacy models receive singular
+   * `language`; gpt-transcribe successors receive plural `languages[]`. Only
+   * the short-transcript retry and /review's Redo pass it
+   * (lib/translate/shortTranscript.ts); every first transcription is sent
+   * exactly as before. It exists because whisper-1
    * reads `prompt` as sample text to continue, not as instructions — an
    * English prompt that SAYS "Spoken Spanish" pulls whisper-1 toward English
    * output (measured on the 11/5 clip: 48 English words for a minute of
@@ -99,6 +101,11 @@ export function getTranscribeModel(): string {
   return defaultTranscribeModel();
 }
 
+/** New transcription models use plural language hints, never `language`. */
+export function usesPluralLanguageHints(model: string): boolean {
+  return /^(?:gpt-transcribe|gpt-live-transcribe)(?:$|-)/i.test(model.trim());
+}
+
 /**
  * Transcribe one audio file.
  *
@@ -116,7 +123,10 @@ export async function transcribeAudio(
   const form = new FormData();
   form.append("file", file, file.name || "audio.webm");
   form.append("model", model);
-  if (options.languageCode) form.append("language", options.languageCode);
+  if (options.languageCode) {
+    if (usesPluralLanguageHints(model)) form.append("languages[]", options.languageCode);
+    else form.append("language", options.languageCode);
+  }
   // A language hint sharpens accuracy; omit it in auto-detect mode so the model
   // is free to recognize whichever language was spoken. Cantonese always gets
   // the colloquial-written-form hint or the transcript comes back as Standard

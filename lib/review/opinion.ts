@@ -20,7 +20,7 @@ import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 /**
  * The second transcriber. whisper-1 by default: a different family from the
  * gpt-4o-transcribe every mic uses, which is the point of a second opinion.
- * It retires 2026-02-26 per OpenAI's deprecation page, so it is a knob, not a
+ * It retires 2027-02-26 per OpenAI's deprecation page, so it is a knob, not a
  * constant — set TAOS_REVIEW_STT_MODEL when it goes.
  */
 export const REVIEW_STT_MODEL_DEFAULT = "whisper-1";
@@ -35,12 +35,34 @@ export function reviewSttModel(raw: string | undefined = process.env.TAOS_REVIEW
  * exactly what produced the turn — then the next different one, so the
  * second opinion is never the same model reading the same clip twice.
  */
-export const REVIEW_STT_FALLBACKS = ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"] as const;
+export const REVIEW_STT_FALLBACKS_DEFAULT = [
+  "whisper-1",
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe"
+] as const;
 
-export function pickAltSttModel(turnModel: string | null | undefined, preferred: string = reviewSttModel()): string {
+/**
+ * Ordered alternatives when the preferred model produced the original turn.
+ * Comma-separated so the retiring Whisper literal is deploy-time movable too.
+ */
+export function reviewSttFallbacks(
+  raw: string | undefined = process.env.TAOS_REVIEW_STT_FALLBACK_MODELS
+): string[] {
+  const configured = (raw ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return configured.length ? configured : [...REVIEW_STT_FALLBACKS_DEFAULT];
+}
+
+export function pickAltSttModel(
+  turnModel: string | null | undefined,
+  preferred: string = reviewSttModel(),
+  fallbacks: readonly string[] = reviewSttFallbacks()
+): string {
   const used = (turnModel ?? "").trim().toLowerCase();
   if (preferred.trim().toLowerCase() !== used) return preferred;
-  return REVIEW_STT_FALLBACKS.find((m) => m !== used) ?? preferred;
+  return fallbacks.find((model) => model.trim().toLowerCase() !== used) ?? preferred;
 }
 
 /** How many turns one "check all" click may send. Default 50, never above 200. */

@@ -39,9 +39,8 @@ function numberFromEnv(name: string, fallback: number): number {
  * 60 is deliberately generous against real typing: at a 300ms debounce, a
  * person typing a phrase and pausing to think produces on the order of five
  * to ten requests a sentence, so a minute of continuous work sits well under
- * this. It is tight against a runaway: 60 quickies is $0.016 of Azure or
- * $0.0016 of gpt-4.1-nano (docs/fast-engine.md), so a stuck loop costs cents
- * an hour rather than dollars.
+ * this. It is tight against a runaway, so a stuck loop remains bounded even
+ * when the configured provider or model price changes.
  */
 const FAST_PER_MINUTE = numberFromEnv("TAOS_FAST_RATE_PER_MINUTE", 60);
 

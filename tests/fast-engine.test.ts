@@ -147,11 +147,8 @@ describe("which engine takes a pair", () => {
 });
 
 describe("the literal model is chosen for /fast, not inherited", () => {
-  it("defaults to gpt-4.1-nano", () => {
-    // Measured 2026-08-30: the most literal of the three candidates AND a
-    // quarter the price of gpt-4.1-mini, which drifted idiomatic on exactly
-    // the inputs this screen exists for. docs/fast-engine.md has the table.
-    expect(getFastModel()).toBe("gpt-4.1-nano");
+  it("defaults to gpt-5.6-luna", () => {
+    expect(getFastModel()).toBe("gpt-5.6-luna");
   });
 
   it("does not follow OPENAI_PARAPHRASE_MODEL", () => {
@@ -159,7 +156,7 @@ describe("the literal model is chosen for /fast, not inherited", () => {
     // routes. A screen whose brand is the literal register must not move when
     // somebody retunes the register of a different one.
     process.env.OPENAI_PARAPHRASE_MODEL = "gpt-4.1";
-    expect(getFastModel()).toBe("gpt-4.1-nano");
+    expect(getFastModel()).toBe("gpt-5.6-luna");
     delete process.env.OPENAI_PARAPHRASE_MODEL;
   });
 

@@ -17,8 +17,9 @@ node tests/live-fire/fast-typing-browser-check.mjs                              
 
 ## The decision
 
-> **What is running today: `gpt-4.1-nano` with a literal prompt.** Every
-> `/fast` translation in production comes from it. The Azure Translator
+> **Current code default: `gpt-5.6-luna` with a literal prompt.** It replaced
+> the retired `gpt-4.1-nano` default on 2026-11-09. `OPENAI_FAST_MODEL`, when
+> set, still overrides the code default; this change did not edit Vercel. The Azure Translator
 > resource **has not been created** — `AZURE_SPEECH_KEY` is a different
 > resource kind and cannot open that API — so the code path that prefers Azure
 > has never once executed outside a test. The badge on screen says which engine
@@ -38,9 +39,10 @@ this page did not:
   order of magnitude *cheaper* than a per-character MT service.
 
 So the decision to promote Azure is **pending Tom creating the resource** and
-a re-run of the rigs above. Until then `gpt-4.1-nano` is not a fallback that
-happens to be running — it is the engine, and the measured one. The ten catalog
-languages Azure cannot translate at all stay on it permanently either way.
+a re-run of the rigs above. Until then the OpenAI fallback is the engine. The
+August measurements below remain the historical basis for the literal prompt,
+but Luna needs its own representative quality/latency run. The ten catalog
+languages Azure cannot translate at all stay on the OpenAI fallback either way.
 
 ---
 
@@ -112,8 +114,9 @@ must not do:
 | no worries (PL) | `nie martwi się` | `nie martw się` | `bez obaw` ❌ idiomatic |
 | I am looking forward to it (ES) | `Estoy mirando hacia adelante a ello` ✅ | `Estoy esperando con ansias eso` ❌ | `Estoy deseando eso` ❌ |
 
-`gpt-4.1-nano` held the literal register best **and** was a quarter the price of
-mini — which is why it is the fallback model rather than the app's usual
+In the August bake-off, `gpt-4.1-nano` held the literal register best **and**
+was a quarter the price of mini — which is why `/fast` has its own model knob
+rather than inheriting the app's usual
 `OPENAI_PARAPHRASE_MODEL` (gpt-4.1-mini). `lib/fast/engine.ts` reads its own
 `OPENAI_FAST_MODEL` var for exactly this reason: a screen whose brand is the
 literal register must not move when somebody retunes a conversational one.
@@ -165,8 +168,10 @@ back 401. `lib/fast/azure.ts` deliberately does not read the Speech vars, so
      npx vitest run --config vitest.measure.config.ts tests/live-fire/fast-engine.measure.ts
    ```
 
-**Until then `/fast` works**, on `gpt-4.1-nano`, and says so on screen. It does
-not fail, and it does not pretend to be Azure.
+**Until then `/fast` works**, on the `OPENAI_FAST_MODEL` override or the
+`gpt-5.6-luna` code default, and says so on screen. It does not fail, and it
+does not pretend to be Azure. Luna is sent through Chat Completions with no
+`temperature`; auto mode keeps its supported JSON response format.
 
 ---
 

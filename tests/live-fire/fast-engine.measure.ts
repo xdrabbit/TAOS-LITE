@@ -23,7 +23,7 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
 
 /** $/1M tokens, in/out. Update alongside the provider's pricing page. */
 const PRICES: Record<string, { in: number; out: number }> = {
-  "gpt-4.1-nano": { in: 0.1, out: 0.4 },
+  "gpt-5.6-luna": { in: 0.2, out: 1.2 },
   "gpt-4.1-mini": { in: 0.4, out: 1.6 },
   "gpt-5.4-nano": { in: 0.05, out: 0.4 }
 };

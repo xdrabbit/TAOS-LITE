@@ -400,6 +400,8 @@ describe("the knobs", () => {
     expect(opinion.reviewSttModel(undefined)).toBe("whisper-1");
     expect(opinion.reviewSttModel("  ")).toBe("whisper-1");
     expect(opinion.reviewSttModel("gpt-4o-mini-transcribe")).toBe("gpt-4o-mini-transcribe");
+    expect(opinion.reviewSttModel("gpt-transcribe")).toBe("gpt-transcribe");
+    expect(opinion.reviewSttModel("gpt-live-transcribe")).toBe("gpt-live-transcribe");
   });
 
   it("never re-reads a clip with the model that produced the turn", () => {
@@ -407,6 +409,21 @@ describe("the knobs", () => {
     expect(opinion.pickAltSttModel("whisper-1", "whisper-1")).toBe("gpt-4o-mini-transcribe");
     expect(opinion.pickAltSttModel("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe")).toBe("whisper-1");
     expect(opinion.pickAltSttModel(null, "whisper-1")).toBe("whisper-1");
+  });
+
+  it("makes the hard-coded Review fallback chain a deploy-time knob", () => {
+    expect(opinion.reviewSttFallbacks(undefined)).toEqual([
+      "whisper-1",
+      "gpt-4o-mini-transcribe",
+      "gpt-4o-transcribe"
+    ]);
+    expect(opinion.reviewSttFallbacks(" gpt-transcribe, gpt-live-transcribe ")).toEqual([
+      "gpt-transcribe",
+      "gpt-live-transcribe"
+    ]);
+    expect(
+      opinion.pickAltSttModel("gpt-transcribe", "gpt-transcribe", ["gpt-live-transcribe"])
+    ).toBe("gpt-live-transcribe");
   });
 
   it("the grader is the strongest text model the repo already runs, unless TAOS_REVIEW_GRADER_MODEL says otherwise", () => {
