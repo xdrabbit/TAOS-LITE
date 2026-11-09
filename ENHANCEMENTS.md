@@ -1117,6 +1117,19 @@ blank.
 
 ## Shipped
 
+- Retired fast model replaced — `/fast`'s OpenAI fallback default moves from
+  `gpt-4.1-nano` (shut down 2026-10-23) to `gpt-5.6-luna`;
+  `OPENAI_FAST_MODEL` is still the override, and Production has it set to
+  `gpt-5.6-luna`. The shared `chatCompletion` now sends no `temperature` to
+  GPT-5/6 and o-series models (`acceptsTemperature` in
+  `lib/translateProvider.ts`), which is what the fast path was failing on.
+  Whisper's successors are prepared but not flipped: every `whisper-1`
+  default is unchanged, `gpt-transcribe` gets plural `languages[]` hints,
+  `/review`'s alternate-transcriber list is now
+  `TAOS_REVIEW_STT_FALLBACK_MODELS`, and `docs/model-inventory.md` records
+  the shutdown dates and the two blockers (`gpt-live-transcribe` is
+  Realtime-only; `/video` needs `verbose_json` timestamps) — 2026-11-09,
+  PR #127
 - Transcriber quits early — short-transcript auto-retry on `/api/translate`
   (under 0.4 words/s on a clip of 8 s or more → one pass through
   `TAOS_TRANSCRIBE_FALLBACK_MODEL`, kept only at 2× the words), Redo ·
