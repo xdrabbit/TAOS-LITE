@@ -21,6 +21,7 @@ import { emptyInterpreterTally } from "@/lib/interpreter/cost";
 import { ENGINE_STORAGE_KEY, engineTakesBriefing, type InterpreterEngine } from "@/lib/interpreter/engine";
 import { STYLE_STORAGE_KEY, type InterpreterStyle } from "@/lib/interpreter/mediator";
 import type { InterpreterHandlers } from "@/lib/interpreter/client";
+import { createSessionTimeline, DIAG_STORAGE_KEY, type TimelineExport } from "@/lib/interpreter/timeline";
 import type { InterpreterModeProps } from "@/components/tabletop/InterpreterMode";
 
 const world = vi.hoisted(() => ({ email: "xdrabbit@gmail.com" }));
@@ -58,6 +59,7 @@ interface FakeSession {
   mine: string;
   theirs: string;
   style?: InterpreterStyle;
+  diagnostics?: boolean;
   handlers: InterpreterHandlers;
 }
 const fake = {
@@ -66,7 +68,9 @@ const fake = {
   maxSeconds: 1800,
   idleSeconds: 60,
   briefing: { applied: true, contextChars: 120, contextStatus: "ok" as const },
-  fail: null as string | null
+  fail: null as string | null,
+  /** What the session's diagnostics recorder would hand back. */
+  timeline: null as TimelineExport | null
 };
 
 const fakeStart: NonNullable<InterpreterModeProps["start"]> = async (opts) => {
@@ -82,6 +86,7 @@ const fakeStart: NonNullable<InterpreterModeProps["start"]> = async (opts) => {
     maxSeconds: fake.maxSeconds,
     idleSeconds: fake.idleSeconds,
     briefing: fake.briefing,
+    timeline: () => fake.timeline,
     tally: () => ({
       ...emptyInterpreterTally(opts.engine, "gpt-realtime-2.1", startedAt, 2),
       responses: 4,
@@ -111,6 +116,7 @@ beforeEach(() => {
   fake.idleSeconds = 60;
   fake.briefing = { applied: true, contextChars: 120, contextStatus: "ok" };
   fake.fail = null;
+  fake.timeline = null;
   posted = [];
   contextOnServer = { context: "", status: "ok" };
   vi.stubGlobal(
@@ -457,6 +463,83 @@ describe("the founder engine picker", () => {
     fake.briefing = { applied: false, contextChars: 0, contextStatus: "ok" };
     await tapStart(container);
     expect(container.querySelector("[data-interpreter-unbriefed]")).not.toBeNull();
+  });
+});
+
+describe("the founder Diagnostics chip", () => {
+  const chip = (c: HTMLElement) => c.querySelector<HTMLButtonElement>("[data-interpreter-diag]")!;
+
+  /** A timeline the way the recorder makes one — with a marker where words would be. */
+  function recorded(): TimelineExport {
+    const timeline = createSessionTimeline({ engine: "grok-voice", model: "grok-voice-3.0", now: () => 5000 });
+    const leg = timeline.leg(0, { source: "en", target: "es", transport: "realtime-ws" });
+    leg.recv({ type: "response.created", response: { id: "r1" } }, 100);
+    leg.recv({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "SMUGGLED hola" }, 100);
+    return timeline.export(5000);
+  }
+
+  it("is on unless this device turned it off, and the session is started with it", async () => {
+    const { container } = await mountMode({ defaultEngine: "grok-voice" });
+    expect(chip(container).getAttribute("aria-pressed")).toBe("true");
+    await tapStart(container);
+    expect(fake.sessions[0].diagnostics).toBe(true);
+    // Not offered mid-session: the strip is Stop and nothing else.
+    expect(chip(container)).toBeNull();
+  });
+
+  it("off is remembered on this device, and the next session records nothing", async () => {
+    const { container, unmount } = await mountMode();
+    await act(async () => {
+      fireEvent.click(chip(container));
+    });
+    expect(chip(container).getAttribute("aria-pressed")).toBe("false");
+    expect(window.localStorage.getItem(DIAG_STORAGE_KEY)).toBe("0");
+    await tapStart(container);
+    expect(fake.sessions[0].diagnostics).toBe(false);
+    unmount();
+    const again = await mountMode();
+    expect(chip(again.container).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("Stop posts the per-leg digest beside the summary — numbers and tokens, no words — and offers the timeline", async () => {
+    fake.timeline = recorded();
+    const { container } = await mountMode({ defaultEngine: "grok-voice" });
+    expect(container.querySelector("[data-interpreter-diag-save]")).toBeNull();
+    await tapStart(container);
+    await tapStart(container);
+    const post = usagePosts()[0];
+    const diag = post.body!.diag as Record<string, unknown>[];
+    expect(diag).toHaveLength(1);
+    expect(diag[0]).toMatchObject({ leg: 0, transport: "realtime-ws", responses: 1, with_words: 1, said_chars: 13 });
+    for (const value of Object.values(diag[0])) {
+      expect(typeof value === "number" || /^[A-Za-z0-9_.\-]+$/.test(String(value))).toBe(true);
+    }
+    expect(JSON.stringify(post.body)).not.toContain("SMUGGLED");
+    // The full timeline stays on the phone until a founder asks for it.
+    expect(JSON.stringify(post.body)).not.toContain('"rows"');
+    expect(container.querySelector("[data-interpreter-diag-save]")).not.toBeNull();
+  });
+
+  it("its words are in the copy table, in both languages, marked for Liz", async () => {
+    const { copyFor } = await import("@/lib/chrome/copy");
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("lib/chrome/copy.ts", "utf8");
+    for (const key of ["interpreterDiag", "interpreterDiagSave", "interpreterDiagHint"] as const) {
+      expect(copyFor("es")[key], key).not.toBe(copyFor("en")[key]);
+      const line = src.split("\n").find((l) => l.startsWith(`    ${key}: `))!;
+      expect(line, key).toContain("pendiente de revisión por Liz");
+    }
+    const { container } = await mountMode({ mine: "es", theirs: "en" });
+    expect(chip(container).textContent).toBe("Diagnóstico");
+  });
+
+  it("with diagnostics off the post is the summary alone, and nothing is offered", async () => {
+    window.localStorage.setItem(DIAG_STORAGE_KEY, "0");
+    const { container } = await mountMode();
+    await tapStart(container);
+    await tapStart(container);
+    expect(usagePosts()[0].body).not.toHaveProperty("diag");
+    expect(container.querySelector("[data-interpreter-diag-save]")).toBeNull();
   });
 });
 

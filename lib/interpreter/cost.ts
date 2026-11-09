@@ -69,14 +69,30 @@ export const OPENAI_LIVE_USD_PER_MINUTE = 0.05;
 export const GROK_VOICE_USD_PER_MINUTE = 0.08;
 
 /**
- * ElevenLabs Realtime: $0.08 per connected minute, per session (= per leg) —
- * the ElevenAgents rate for minutes past a plan's included ones — PLUS the
- * Realtime model's tokens (Mini $0.20 in / $6 out per 1M, Max $1.80 / $9),
- * which its wire protocol does not report (`response.done` carries no usage).
- * So this figure is a FLOOR: the per-minute part only, at the overage rate,
- * with no credit for the 95 % discount ElevenLabs gives silences over ten
- * seconds. The true number is on the ElevenLabs dashboard.
- * (elevenlabs.io/pricing/agents, read 2026-11-09.)
+ * ElevenLabs Realtime: $0.08 per connected minute, per session (= PER LEG) —
+ * so a two-leg table is $0.16 a minute, which is what the meter shows and
+ * what ElevenLabs charges. Checked against their own records on 2026-11-09
+ * (GET /v1/convai/conversations/<id> for the two sessions of one probe run,
+ * tests/live-fire/interpreter-engines.measure.ts — every Realtime session is
+ * a conversation there, `authorization_method: "realtime"`):
+ *
+ *   realtime_audio   0.9685 min → $0.07748   = $0.0800/min, by the second,
+ *                    for the whole 58 s connection — the quiet stretches
+ *                    included (none of them ran past ten seconds, so the
+ *                    discount ElevenLabs advertises for long silences was not
+ *                    exercised and is not credited here).
+ *   llm (Mini)       $0.0014 and $0.0020 for the two sessions — about 2 % on
+ *                    top. The wire protocol does not report it (`response.
+ *                    done` carries no usage), so the meter leaves it out.
+ *   plan             `free_minutes_consumed: 0`, `is_burst: false`: the
+ *                    account's included minutes were not drawn on, and the
+ *                    2× burst rate did not apply to two sessions at once.
+ *
+ * So the figure is the bill to within about 2 %, a little under. Tom's table
+ * of the same morning read $0.19 at 1:11 — 71 s × 2 legs × $0.08/min. The
+ * "$0.08 a minute" people remember is this constant; a table is two of them
+ * (usdPerTableMinute). TAOS_INTERPRETER_LEGS=1 halves it and costs the second
+ * voice.
  */
 export const ELEVENLABS_REALTIME_USD_PER_MINUTE = 0.08;
 
@@ -88,6 +104,17 @@ export function usdPerMinute(engine: InterpreterEngine): number | null {
   if (engine === "grok-voice") return GROK_VOICE_USD_PER_MINUTE;
   if (engine === "elevenlabs-realtime") return ELEVENLABS_REALTIME_USD_PER_MINUTE;
   return null;
+}
+
+/**
+ * What a TABLE costs per minute on an engine that bills the clock: the
+ * per-session rate times the sessions open at once. This — not usdPerMinute —
+ * is the number to quote for a dinner; quoting the per-leg rate for a two-leg
+ * table is how "$0.08 a minute" turned into a meter reading double.
+ */
+export function usdPerTableMinute(engine: InterpreterEngine, legs: number): number | null {
+  const flat = usdPerMinute(engine);
+  return flat === null ? null : flat * Math.max(1, legs);
 }
 
 /** gpt-transcribe, for the captions of what each person said. By duration. */

@@ -65,6 +65,14 @@ export interface LegSink {
   error: (message: string) => void;
   /** The provider says the session is over. */
   closed: () => void;
+  /**
+   * This leg is the one interpreting the utterance on the table: "start" when
+   * a response of its is first let out of the speaker, "done" when one that
+   * spoke has finished without being cut off. Only the realtime dialect says
+   * it, and only ElevenLabs' transport listens (see `clearPeersOnTurn` in
+   * lib/interpreter/client.ts) — optional, so every other sink ignores it.
+   */
+  tookTurn?: (phase: "start" | "done") => void;
 }
 
 export interface LegReader {
@@ -140,6 +148,17 @@ export function createRealtimeReader(
   const startedAt = new Map<string, number>();
   /** The response whose words are currently allowed out of the speaker. */
   let gatedOpenFor: string | null = null;
+  /** Responses this leg has claimed the table's utterance with (LegSink.tookTurn). */
+  const tookTurnFor = new Set<string>();
+  /**
+   * The response most recently created and not yet done. A provider of this
+   * dialect that leaves `response_id` off a delta (xAI documents the field
+   * list of none of its delta events) still means THIS response — without the
+   * fallback its words are dropped on the floor, which on a two-leg table
+   * also means its audio is held behind the gate and never played.
+   */
+  let currentResponse = "";
+  const responseOf = (ev: Record<string, unknown>) => str(ev.response_id) || currentResponse;
 
   const liveResponses = new Set<string>();
   const captionId = (responseId: string) => `${leg.index}:${responseId}`;
@@ -194,6 +213,10 @@ export function createRealtimeReader(
     if (gatedOpenFor !== responseId) {
       gatedOpenFor = responseId;
       sink.gate(true);
+    }
+    if (!tookTurnFor.has(responseId)) {
+      tookTurnFor.add(responseId);
+      sink.tookTurn?.("start");
     }
   };
 
@@ -252,11 +275,12 @@ export function createRealtimeReader(
           itemsOfResponse.set(id, pendingItems.slice());
           startedAt.set(id, now());
           liveResponses.add(id);
+          currentResponse = id;
         }
         return;
       }
       if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") {
-        const id = str(ev.response_id);
+        const id = responseOf(ev);
         const delta = str(ev.delta);
         if (!id || !delta) return;
         const hadWords = !!words(id);
@@ -273,7 +297,7 @@ export function createRealtimeReader(
       if (type === "response.output_audio.delta" || type === "response.audio.delta") {
         // Only the socket engines send audio as events (WebRTC carries it on
         // a track). The first frame is the moment the echo guard decides.
-        const id = str(ev.response_id);
+        const id = responseOf(ev);
         if (!id || audioStarted.has(id)) return;
         audioStarted.add(id);
         if (echoGuard && words(id)) {
@@ -307,6 +331,7 @@ export function createRealtimeReader(
           if (typeof billed === "number" && Number.isFinite(billed)) sink.billed(billed);
         }
         liveResponses.delete(id);
+        if (currentResponse === id) currentResponse = "";
         // Words that never got an audio frame (text-only tail, or a response
         // cut off first) are judged now, so the caption is not lost.
         if (echoGuard && words(id) && !verdict.has(id)) {
@@ -326,7 +351,11 @@ export function createRealtimeReader(
           // Cut off by someone speaking — the barge-in the brief asks to count.
           const reason = str(obj(response.status_details).reason);
           if (str(response.status) === "cancelled" && reason === "turn_detected") sink.bargeIn();
+          // Finished uninterrupted: nobody has spoken since it began (they
+          // would have cut it off), so the table is quiet right now.
+          else if (str(response.status) === "completed") sink.tookTurn?.("done");
         }
+        tookTurnFor.delete(id);
         // Keep the maps from growing all dinner.
         if (saidByResponse.size > 40) {
           const drop = saidByResponse.keys().next().value as string;

@@ -226,6 +226,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     if (engine === "grok-voice") {
       const apiKey = requireKey(engine);
+      const reasoning = grokReasoning();
       legs = await Promise.all(
         plan.legs.map(async (leg): Promise<LegTicket> => {
           const res = await fetch(`${XAI_BASE}/realtime/client_secrets`, {
@@ -234,7 +235,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             body: JSON.stringify({
               expires_after: { seconds: INTERPRETER_SECRET_TTL_SECONDS },
               // All a Grok secret can bind (see the note at the top).
-              session: buildGrokSecretSession({ model: plan.model, reasoning: grokReasoning() })
+              session: buildGrokSecretSession({ model: plan.model, reasoning })
             }),
             cache: "no-store"
           });
@@ -244,11 +245,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           return {
             ...ticketBase(leg),
             transport: "realtime-ws",
-            wsUrl: `${XAI_WS_URL}?model=${encodeURIComponent(plan.model)}`,
+            // The effort again, as xAI's documented query parameter: the
+            // secret may not carry it (see buildGrokSessionUpdate).
+            wsUrl: `${XAI_WS_URL}?model=${encodeURIComponent(plan.model)}&reasoning.effort=${reasoning}`,
             protocols: [`xai-client-secret.${secret}`],
             sessionUpdate: buildGrokSessionUpdate({
               instructions: leg.instructions ?? "",
-              voice: leg.voice ?? ""
+              voice: leg.voice ?? "",
+              reasoning
             }),
             inputRate: INTERPRETER_WS_INPUT_RATE,
             outputRate: INTERPRETER_WS_OUTPUT_RATE

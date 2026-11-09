@@ -86,6 +86,37 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   until then the mode runs on the role alone and the edit box says so.
   → Gemini leg is unverified end to end (no key on the build machine).
   → Spanish strings are an agent's, pendiente de revisión por Liz.
+  → Second table test, 2026-11-09 ~11:00 MT, on the two socket engines added
+  that morning. **Grok** answered once ("O si simplemente está tardando
+  mucho.") and then nothing for the rest of a 41 s session; **ElevenLabs
+  Realtime** was right but slow, and its meter read double the "$0.08 a
+  minute" people had in mind. What that turned into:
+  - *Diagnostics.* A founder **Diagnostics** chip on the Interpreter strip
+    (on unless a device turns it off; `?diag=0|1`). Each session records a
+    per-leg event timeline — event types, times, counts and byte sizes, never
+    a word or a sample (`lib/interpreter/timeline.ts`) — and Stop writes one
+    `[taos-interpreter-diag]` line of numbers per leg to the log beside the
+    cost line; **⬇ Save timeline** hands over the whole thing as a JSON file.
+  - *Grok.* Not reproduced: the build machine has no xAI key. Best hypothesis
+    is that `reasoning.effort` was never off — xAI's default is `high` and its
+    own pages disagree on whether a client secret can carry it — so each
+    answer took seconds and Tom's next sentence cancelled it. The effort is
+    now sent in all three places xAI documents; the diag line's `reasoning=`
+    says which one took. → Next Grok table test decides it.
+  - *ElevenLabs latency* is its cascade: 0.7–2.0 s from the last word to the
+    first sound, measured, and no session setting moves it (`server_vad` is
+    refused; `high` eagerness is no faster; the model is already Mini).
+  - *ElevenLabs cost* was never wrong on the meter: it is $0.08 a minute PER
+    LEG, so a two-leg table is $0.16 — confirmed against ElevenLabs' own
+    conversation records ($0.0800/min each, plus about 2 % of model tokens
+    the meter cannot see).
+  - *Found on the way, and worse than either report:* on a two-leg ElevenLabs
+    table the Spanish→English direction never played at all (0 of 4 lines) —
+    the quiet leg skips the other person's turns and then repeats them. Now
+    17 of 20 with the other legs cleared on each turn; still not reliable.
+    One session both ways (`TAOS_INTERPRETER_LEGS=1`, one voice, half the
+    price) did better in two runs. → Tom's call whether the clone-per-speaker
+    arm is worth keeping in this shape.
 
 - **Founder translation review — keep audio (opt-in, 14 days) + /review with
   flagging; built 2026-11-04, draft PR open, founders only.** Tom: translations

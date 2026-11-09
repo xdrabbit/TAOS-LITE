@@ -502,6 +502,11 @@ const EN = {
   // the mediator SAYS before a note (lib/interpreter/mediator.ts) — the
   // captions split on it, so it must stay a short, distinctive phrase.
   interpreterEngineNoKey: "This engine is not set up yet: {name} is missing on the server.",
+  // Founder diagnostics (lib/interpreter/timeline.ts): event types, times and
+  // sizes of a session — never a word, never audio.
+  interpreterDiag: "Diagnostics",
+  interpreterDiagSave: "Save timeline",
+  interpreterDiagHint: "Event types and timings only — no words, no audio.",
   interpreterStyle: "Style",
   interpreterStyleInterpreter: "Interpreter",
   interpreterStyleMediator: "Mediator (experimental)",
@@ -911,6 +916,9 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     interpreterEndedIdle: "Se detuvo tras un minuto de silencio. Inicia de nuevo para seguir.", // pendiente de revisión por Liz
     interpreterEndedError: "El intérprete perdió la conexión. Inicia de nuevo.", // pendiente de revisión por Liz
     interpreterEngineNoKey: "Este motor aún no está configurado: falta {name} en el servidor.", // pendiente de revisión por Liz
+    interpreterDiag: "Diagnóstico", // pendiente de revisión por Liz
+    interpreterDiagSave: "Guardar registro", // pendiente de revisión por Liz
+    interpreterDiagHint: "Solo tipos de evento y tiempos: ni palabras ni audio.", // pendiente de revisión por Liz
     interpreterStyle: "Estilo", // pendiente de revisión por Liz
     interpreterStyleInterpreter: "Intérprete", // pendiente de revisión por Liz
     interpreterStyleMediator: "Mediador (experimental)", // pendiente de revisión por Liz

@@ -35,11 +35,17 @@
 //                        but over a WebSocket only — there is no WebRTC
 //                        endpoint — and its client secret can lock only the
 //                        model, so the briefing rides in the browser's first
-//                        `session.update`. Flat $0.08 per minute, per leg.
-//   elevenlabs-realtime  eleven_realtime_v1_max — ElevenLabs' Realtime tier
+//                        `session.update`. Flat $0.08 per minute PER LEG —
+//                        $0.16 for a two-leg table.
+//   elevenlabs-realtime  eleven_realtime_v1_mini — ElevenLabs' Realtime tier
 //                        (a cascaded ASR → LLM → TTS pipeline they manage; the
 //                        LLM is theirs and cannot be chosen — Mini or Max is
-//                        the whole choice). The point of this arm is the
+//                        the whole choice, and Mini is "lowest latency and
+//                        cost" in their words). Being a cascade is also its
+//                        latency floor: 0.8–1.7 s from the speaker's last
+//                        word to the first audio frame, measured 2026-11-09,
+//                        and no session setting moves it (session.ts). $0.08
+//                        per minute PER LEG. The point of this arm is the
 //                        VOICE: it speaks in the founders' own ElevenLabs
 //                        clones, by the same voice-follows-speaker rule as
 //                        every other screen (lib/tts/voice.ts). Also the

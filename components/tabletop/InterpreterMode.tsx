@@ -36,6 +36,13 @@ import {
   STYLE_STORAGE_KEY,
   type InterpreterStyle
 } from "@/lib/interpreter/mediator";
+import {
+  DIAG_STORAGE_KEY,
+  resolveDiagnostics,
+  summarizeLegDigest,
+  timelineFileName,
+  type TimelineExport
+} from "@/lib/interpreter/timeline";
 import { ExitHome } from "../ExitHome";
 import { JumpToTail, useFollowTail } from "../FollowTail";
 
@@ -57,7 +64,11 @@ import { JumpToTail, useFollowTail } from "../FollowTail";
 //
 // Nothing a person says is stored: the captions live in this component's
 // state and are gone when it unmounts. What leaves the phone at the end of a
-// session is one line of NUMBERS (lib/interpreter/cost.ts).
+// session is one line of NUMBERS (lib/interpreter/cost.ts) — and, with the
+// Diagnostics chip on, one more line of numbers per leg: what kinds of events
+// the provider sent and when (lib/interpreter/timeline.ts). The full timeline
+// stays on the phone until a founder taps "Save timeline"; it has event types,
+// times and byte counts in it and no word or sound of anybody's.
 
 type Phase = "idle" | "connecting" | "live" | "stopping";
 type EndedNotice = { kind: "cap"; minutes: number } | { kind: "idle" } | { kind: "error" } | null;
@@ -203,6 +214,9 @@ export function InterpreterMode({
   const [contextStatus, setContextStatus] = useState<ContextStatus>("loading");
   const [contextMax, setContextMax] = useState(4000);
   const [contextNote, setContextNote] = useState<"saved" | "failed" | "saving" | null>(null);
+  // Diagnostics: on unless this device turned it off (resolveDiagnostics).
+  const [diag, setDiag] = useState(true);
+  const [lastTimeline, setLastTimeline] = useState<TimelineExport | null>(null);
 
   const activeRef = useRef<ActiveInterpreter | null>(null);
   const clockRef = useRef<SessionClock | null>(null);
@@ -229,7 +243,52 @@ export function InterpreterMode({
     } else {
       setStyle(DEFAULT_INTERPRETER_STYLE);
     }
+    let storedDiag: string | null = null;
+    let queryDiag: string | null = null;
+    try {
+      storedDiag = window.localStorage.getItem(DIAG_STORAGE_KEY);
+      queryDiag = new URLSearchParams(window.location.search).get("diag");
+      if (queryDiag === "0" || queryDiag === "1") window.localStorage.setItem(DIAG_STORAGE_KEY, queryDiag);
+    } catch {
+      /* private mode */
+    }
+    setDiag(resolveDiagnostics({ stored: storedDiag, query: queryDiag }));
   }, [defaultEngine, mediatorEnabled]);
+
+  const toggleDiag = useCallback(() => {
+    setDiag((on) => {
+      try {
+        window.localStorage.setItem(DIAG_STORAGE_KEY, on ? "0" : "1");
+      } catch {
+        /* the choice still holds for this visit */
+      }
+      return !on;
+    });
+  }, []);
+
+  /** Hand the last session's timeline to the founder: share sheet, else a file. */
+  const saveTimeline = useCallback(async () => {
+    if (!lastTimeline) return;
+    const name = timelineFileName(lastTimeline);
+    const json = JSON.stringify(lastTimeline);
+    try {
+      const file = new File([json], name, { type: "application/json" });
+      if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: name });
+        return;
+      }
+    } catch {
+      /* cancelled, or no share sheet: fall through to a download */
+    }
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }, [lastTimeline]);
 
   const chooseStyle = useCallback((next: InterpreterStyle) => {
     setStyle(next);
@@ -249,21 +308,31 @@ export function InterpreterMode({
     }
   }, []);
 
-  /** One line of numbers to the Vercel log. Never text. */
-  const postUsage = useCallback((active: ActiveInterpreter, stop: InterpreterStop) => {
+  /**
+   * One line of numbers to the Vercel log — and, with diagnostics on, one
+   * more per leg (the timeline's digest). Never text. Returns the timeline.
+   */
+  const postUsage = useCallback((active: ActiveInterpreter, stop: InterpreterStop): TimelineExport | null => {
     const summary = summarizeTally(active.tally(), Date.now(), stop);
+    const timeline = active.timeline();
+    const body = timeline ? { ...summary, diag: timeline.digest.map(summarizeLegDigest) } : summary;
+    if (timeline) {
+      // The same thing "Save timeline" hands over, for a phone on a cable.
+      console.info("[taos-interpreter-timeline]", JSON.stringify(timeline));
+    }
     void jsonAuthHeaders()
       .then((headers) =>
         fetch("/api/tabletop/interpreter/usage", {
           method: "POST",
           headers,
-          body: JSON.stringify(summary),
+          body: JSON.stringify(body),
           keepalive: true
         })
       )
       .catch(() => {
         /* the session is over either way */
       });
+    return timeline;
   }, []);
 
   const end = useCallback(
@@ -277,7 +346,7 @@ export function InterpreterMode({
       try {
         await active.stop();
       } finally {
-        postUsage(active, stop);
+        setLastTimeline(postUsage(active, stop));
         setUsd(estimateUsd(active.tally()));
         activeRef.current = null;
         endingRef.current = false;
@@ -308,6 +377,7 @@ export function InterpreterMode({
     setElapsed(0);
     setUsd(0);
     setReceipt(null);
+    setLastTimeline(null);
     setPhase("connecting");
     try {
       const active = await start({
@@ -315,6 +385,7 @@ export function InterpreterMode({
         mine,
         theirs,
         style: mediatorEnabled ? style : DEFAULT_INTERPRETER_STYLE,
+        diagnostics: diag,
         handlers: {
           onCaption: (update) => setEntries((prev) => applyCaption(prev, update)),
           onActivity: () => {
@@ -351,7 +422,7 @@ export function InterpreterMode({
       );
       setPhase("idle");
     }
-  }, [engine, mine, theirs, style, mediatorEnabled, phase, start, end, t.interpreterEndedError, t.interpreterEngineNoKey]);
+  }, [engine, mine, theirs, style, mediatorEnabled, diag, phase, start, end, t.interpreterEndedError, t.interpreterEngineNoKey]);
 
   // The session clock: the cap and the idle stop, once a second.
   useEffect(() => {
@@ -532,6 +603,29 @@ export function InterpreterMode({
             >
               ✎ {t.interpreterContext}
             </button>
+            <button
+              type="button"
+              data-interpreter-diag=""
+              onClick={toggleDiag}
+              aria-pressed={diag}
+              title={t.interpreterDiagHint}
+              className={`rounded-full px-3 py-1 text-xs ${
+                diag ? "bg-sky-300 text-stone-950" : "border border-white/10 bg-white/5 text-amber-100/70"
+              }`}
+            >
+              {t.interpreterDiag}
+            </button>
+            {lastTimeline ? (
+              <button
+                type="button"
+                data-interpreter-diag-save=""
+                onClick={() => void saveTimeline()}
+                title={t.interpreterDiagHint}
+                className="rounded-full border border-sky-300/40 bg-white/5 px-3 py-1 text-xs text-sky-100"
+              >
+                ⬇ {t.interpreterDiagSave}
+              </button>
+            ) : null}
           </div>
         ) : null}
 

@@ -4,7 +4,8 @@
 //   OPENAI_API_KEY=… node tests/live-fire/interpreter-browser-check.mjs [engine …]
 //
 // Engines default to: openai-realtime openai-translate openai-live.
-// (gemini-live needs GEMINI_API_KEY in the environment; add it to the list.)
+// (gemini-live needs GEMINI_API_KEY in the environment, elevenlabs-realtime
+// ELEVENLABS_API_KEY, grok-voice XAI_API_KEY; add them to the list.)
 // Needs google-chrome on PATH. SPENDS REAL MONEY — a few cents per engine —
 // so it lives beside the live-fire rig and `npm test` never runs it.
 //
@@ -312,7 +313,13 @@ for (const engine of ENGINES) {
   console.log(`  audio elements: ${JSON.stringify(snapshot.audio)}`);
   console.log(`  speaker open (ms, per element): ${JSON.stringify(snapshot.open)}`);
   console.log(`  usage posted: ${JSON.stringify(usage)}`);
-  const perMinute = engine === "openai-translate" || engine === "openai-live";
+  // The founder Diagnostics chip is on by default: the digest rides in `diag`.
+  for (const leg of usage?.diag ?? []) console.log(`  diag leg${leg.leg}: ${JSON.stringify(leg)}`);
+  const perMinute =
+    engine === "openai-translate" ||
+    engine === "openai-live" ||
+    engine === "grok-voice" ||
+    engine === "elevenlabs-realtime";
   const metered = !!usage && (perMinute ? usage.billed_secs > 0 : usage.audio_out_tokens > 0);
   const ok =
     snapshot.far.some((l) => l.startsWith("incoming")) && snapshot.near.some((l) => l.startsWith("incoming")) && metered;

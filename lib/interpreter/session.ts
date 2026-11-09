@@ -233,10 +233,25 @@ export const INTERPRETER_WS_OUTPUT_RATE = 24_000;
 
 export const GROK_TRANSCRIBE_MODEL = "grok-transcribe";
 
-export function buildGrokSessionUpdate(opts: { instructions: string; voice: string }): Record<string, unknown> {
+export function buildGrokSessionUpdate(opts: {
+  instructions: string;
+  voice: string;
+  /**
+   * Sent HERE as well as at the mint and on the socket URL. xAI's default is
+   * `high`, and its two pages disagree on whether a client secret can bind
+   * anything (the realtime reference documents `session` on the mint; the
+   * ephemeral-tokens page says the endpoint "does not support session") — so
+   * after Tom's table test of 2026-11-09, where Grok answered once and late,
+   * the effort is stated in all three documented places and the diagnostics
+   * timeline records which one the provider echoes (lib/interpreter/
+   * timeline.ts, `reasoning=`).
+   */
+  reasoning?: "none" | "high";
+}): Record<string, unknown> {
   return {
     instructions: opts.instructions,
     voice: opts.voice,
+    ...(opts.reasoning ? { reasoning: { effort: opts.reasoning } } : {}),
     turn_detection: { type: "server_vad" },
     audio: {
       input: {
@@ -271,6 +286,50 @@ export function buildGrokSecretSession(opts: {
 //
 // `max_duration_seconds` DEFAULTS TO 600: left alone, ElevenLabs hangs up a
 // dinner at ten minutes. It is set from our own cap, plus the cap's grace.
+//
+// ── What was measured on 2026-11-09 ────────────────────────────────────────
+// tests/live-fire/interpreter-engines.measure.ts: these builders, a six-line
+// synthetic table (two speakers), clean speech, a wired connection.
+//
+// LATENCY. From the speaker's last audible sample to the first audio frame:
+// 0.7–2.0 s, median ≈ 1.3 s, over ~70 turns — and there is nothing left in
+// this session object to make it shorter:
+//
+//   · the model is already Mini, their "lowest latency and cost";
+//   · turn detection is `semantic_vad` or manual — the mint answers 422
+//     "server_vad is not supported; use semantic_vad or null (manual)";
+//   · eagerness `high` measured the same as `medium`;
+//   · the output is PCM at 24 kHz with no rate, codec or latency field, and
+//     the voice model and transcriber are theirs (eleven_v4_turbo,
+//     scribe_realtime — read back from the conversation record).
+//
+// The provider sends speech_stopped, committed, response.created and the
+// first audio frame within a few milliseconds of each other: the turn
+// decision, the transcript, the text and the first sound are all finished
+// before the socket hears about any of them. That wait is the cascade.
+//
+// TWO LEGS. Their semantic turn-taking decides whether the AGENT should
+// answer, and a leg told to keep quiet for the other person's language often
+// decides it should not: no speech_stopped, no commit, nothing. What it
+// skipped is not forgotten — it is glued onto the next turn it DOES take. So
+// the Spanish→English leg, after three English sentences, said all three
+// again in English and then the interpretation; the echo guard (rightly)
+// refused the lot; and the Spanish speaker was never interpreted at all.
+// Lines whose meaning reached the other language, of those spoken:
+//
+//   two legs, as first shipped        7 of 12    Spanish→English 0 of 4
+//   + the other legs cleared on a     43 of 60   Spanish→English 17 of 20
+//     turn (client.ts,                           (eagerness medium 19/30,
+//     clearPeersOnTurn)                          high 24/30 — not a
+//                                                difference at this size)
+//   + eagerness high, NOT cleared     2 of 6     Spanish→English 0 of 2
+//   ONE leg (TAOS_INTERPRETER_LEGS=1) 10 of 12   Spanish→English 2 of 4, and
+//     — one voice, half the price                a third cut off half-way
+//
+// The clear is what moved it; it does not make two legs reliable. The losses
+// that remain are the same glue surviving a clear, and Mini ANSWERING the
+// speaker instead of interpreting ("Estoy aquí, listo para interpretar").
+// A forced commit on the quiet leg was tried and made it invent lines.
 
 /** ElevenLabs' bounds for `max_duration_seconds`. */
 const ELEVENLABS_MIN_DURATION_S = 60;

@@ -90,9 +90,12 @@ import {
   addUsage,
   emptyInterpreterTally,
   estimateUsd,
+  formatUsd,
   interpreterLogLine,
   parseInterpreterSummary,
-  summarizeTally
+  summarizeTally,
+  usdPerMinute,
+  usdPerTableMinute
 } from "@/lib/interpreter/cost";
 import { buildInterpreterPlan } from "@/lib/interpreter/plan";
 import {
@@ -114,6 +117,21 @@ import {
   type LegSink
 } from "@/lib/interpreter/legEvents";
 import { MEANING_FIRST_RULE } from "@/lib/translate/prompts";
+import {
+  createSessionTimeline,
+  parseTimelineDigest,
+  summarizeLegDigest,
+  type LegDigest
+} from "@/lib/interpreter/timeline";
+
+/** A real digest, from the real recorder, for the usage-route tests. */
+function exportedDigest(index: number): LegDigest {
+  const timeline = createSessionTimeline({ engine: "grok-voice", model: "m", now: () => 1000 });
+  const leg = timeline.leg(index, { source: "en", target: "es", transport: "realtime-ws" });
+  leg.recv({ type: "input_audio_buffer.speech_started" }, 80);
+  leg.recv({ type: "response.created", response: { id: "r1" } }, 120);
+  return timeline.export(1000).digest[0];
+}
 
 // ── stand-ins ──────────────────────────────────────────────────────────────
 
@@ -1589,7 +1607,9 @@ describe("grok-voice", () => {
     ]);
     for (const leg of legs) {
       expect(leg.transport).toBe("realtime-ws");
-      expect(leg.wsUrl).toBe("wss://api.x.ai/v1/realtime?model=grok-voice-3.0");
+      // The effort rides on the URL too (xAI's documented query parameter):
+      // its default is `high`, and the secret may not carry it.
+      expect(leg.wsUrl).toBe("wss://api.x.ai/v1/realtime?model=grok-voice-3.0&reasoning.effort=none");
       // A browser cannot set a header on a socket: the secret is a subprotocol.
       expect(leg.protocols).toEqual([expect.stringMatching(/^xai-client-secret\.ek_secret_\d+$/)]);
       expect(leg.inputRate).toBe(24000);
@@ -1616,8 +1636,11 @@ describe("grok-voice", () => {
       expect(audio.input.format).toEqual({ type: "audio/pcm", rate: 24000 });
       expect(audio.input.transcription).toEqual({ model: "grok-transcribe" });
       expect(audio.output.format).toEqual({ type: "audio/pcm", rate: 24000 });
+      // …and in the update itself: reasoning stays OFF wherever xAI reads it.
+      expect(s.reasoning).toEqual({ effort: "none" });
     }
     expect(buildGrokSessionUpdate({ instructions: "x", voice: "eve" })).toMatchObject({ voice: "eve", instructions: "x" });
+    expect(buildGrokSessionUpdate({ instructions: "x", voice: "eve" })).not.toHaveProperty("reasoning");
     // The mint line: numbers and closed-set values only.
     expect(logged.join("\n")).not.toContain(CONTEXT_MARKER);
     expect(logged.join("\n")).not.toContain("OUTPUT LANGUAGE");
@@ -2027,5 +2050,191 @@ describe("the [taos-interpreter] cost line — follow-up", () => {
     expect(interpreterLogLine(smuggled!, "m")).not.toContain("SMUGGLED");
     expect(summarizeTally({ ...emptyInterpreterTally("gemini-live", "m", 0), style: "mediator" }, 1000, "user").style).toBe("mediator");
     expect(summarizeTally(emptyInterpreterTally("gemini-live", "m", 0), 1000, "user").style).toBe("interpreter");
+  });
+});
+
+// ── after the second table test (2026-11-09): Grok stalled, ElevenLabs slow ─
+
+describe("what the socket engines' table test changed", () => {
+  it("TAOS_INTERPRETER_GROK_REASONING=high reaches all three places xAI reads it", async () => {
+    process.env.TAOS_INTERPRETER_GROK_REASONING = "high";
+    try {
+      const { json } = await startSession({ engine: "grok-voice" });
+      for (const call of sent) expect(call.body.session).toEqual({ model: "grok-voice-3.0", reasoning: { effort: "high" } });
+      for (const leg of json.legs as { wsUrl: string; sessionUpdate: Record<string, unknown> }[]) {
+        expect(leg.wsUrl.endsWith("&reasoning.effort=high")).toBe(true);
+        expect(leg.sessionUpdate.reasoning).toEqual({ effort: "high" });
+      }
+    } finally {
+      delete process.env.TAOS_INTERPRETER_GROK_REASONING;
+    }
+  });
+
+  it("a delta with no response_id belongs to the response that is live", () => {
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink);
+    reader.handle({ type: "response.created", response: { id: "r1" } });
+    // xAI documents the field list of none of its delta events.
+    reader.handle({ type: "response.output_audio_transcript.delta", delta: "Hola, " });
+    reader.handle({ type: "response.output_audio.delta", delta: "AAAA" });
+    reader.handle({ type: "response.output_audio_transcript.delta", delta: "¿cómo estás?" });
+    expect(r.calls).toContain("gate:open");
+    reader.handle({ type: "response.done", response: { id: "r1", status: "completed" } });
+    expect(r.captions.at(-1)).toMatchObject({ id: "0:r1", said: "Hola, ¿cómo estás?", live: false });
+    // …and once it is done, a stray delta opens nothing.
+    const before = r.captions.length;
+    reader.handle({ type: "response.output_audio_transcript.delta", delta: "tarde" });
+    expect(r.captions).toHaveLength(before);
+  });
+
+  it("a delivery tag that is still arriving opens no caption and no speaker", () => {
+    // "[neu" + "tral] <silent>" — ElevenLabs' quiet leg, in fragments.
+    expect(spokenWords("[neu")).toBe("");
+    expect(spokenWords("[neutral")).toBe("");
+    expect(spokenWords("[neutral] <silent>")).toBe("");
+    expect(stripControlMarkers("Hola [neu")).toBe("Hola");
+    expect(stripControlMarkers("[neutral] Okey. Ahora estoy probando.")).toBe("Okey. Ahora estoy probando.");
+    // A bracketed name is still text, and still text while it arrives.
+    expect(stripControlMarkers("Llamó [María")).toBe("Llamó [María");
+
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink, { echoGuard: true });
+    reader.handle({ type: "response.created", response: { id: "r1" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "[neutral" });
+    reader.handle({ type: "response.output_audio.delta", response_id: "r1", delta: "AAAA" });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "] <silent>" });
+    reader.handle({ type: "response.done", response: { id: "r1", status: "completed" } });
+    expect(r.captions).toEqual([]);
+    expect(r.calls).not.toContain("gate:open");
+    expect(r.calls).toContain("silent");
+  });
+
+  it("a leg says when it has taken the turn, and when it finished uncut — never for an echo or a silence", () => {
+    const turns: string[] = [];
+    const r = recorder();
+    const sink = { ...r.sink, tookTurn: (phase: "start" | "done") => turns.push(phase) };
+    const reader = createRealtimeReader({ index: 1, source: "es", target: "en" }, sink, { echoGuard: true });
+
+    // An interpretation: start when it is let out, done when it completes.
+    reader.handle({ type: "input_audio_buffer.committed", item_id: "i1" });
+    reader.handle({ type: "conversation.item.input_audio_transcription.completed", item_id: "i1", transcript: "Te escucho bien." });
+    reader.handle({ type: "response.created", response: { id: "r1" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "I can hear you well." });
+    expect(turns).toEqual([]);
+    reader.handle({ type: "response.output_audio.delta", response_id: "r1", delta: "AAAA" });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: " Really." });
+    expect(turns).toEqual(["start"]);
+    reader.handle({ type: "response.done", response: { id: "r1", status: "completed" } });
+    expect(turns).toEqual(["start", "done"]);
+
+    // Cut off by the speaker: started, never "done" — somebody IS talking.
+    reader.handle({ type: "response.created", response: { id: "r2" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r2", delta: "Do you want" });
+    reader.handle({ type: "response.output_audio.delta", response_id: "r2", delta: "AAAA" });
+    reader.handle({
+      type: "response.done",
+      response: { id: "r2", status: "cancelled", status_details: { reason: "turn_detected" } }
+    });
+    expect(turns).toEqual(["start", "done", "start"]);
+
+    // An echo and a silence token take no turn at all.
+    reader.handle({ type: "input_audio_buffer.committed", item_id: "i3" });
+    reader.handle({ type: "conversation.item.input_audio_transcription.completed", item_id: "i3", transcript: "Yes, let's order." });
+    reader.handle({ type: "response.created", response: { id: "r3" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r3", delta: "Yes, let's order." });
+    reader.handle({ type: "response.output_audio.delta", response_id: "r3", delta: "AAAA" });
+    reader.handle({ type: "response.done", response: { id: "r3", status: "completed" } });
+    reader.handle({ type: "response.created", response: { id: "r4" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "r4", delta: "[neutral] <silent>" });
+    reader.handle({ type: "response.output_audio.delta", response_id: "r4", delta: "AAAA" });
+    reader.handle({ type: "response.done", response: { id: "r4", status: "completed" } });
+    expect(turns).toEqual(["start", "done", "start"]);
+    // A sink that does not listen (every other engine's) is simply not called.
+    expect(() =>
+      createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink).handle({
+        type: "response.output_audio_transcript.delta",
+        response_id: "x",
+        delta: "Hola"
+      })
+    ).not.toThrow();
+  });
+
+  it("the client clears the OTHER legs on a turn for ElevenLabs only, and re-sends a refused Grok update once", () => {
+    const client = readFileSync("lib/interpreter/client.ts", "utf8");
+    expect(client).toMatch(/const clearPeersOnTurn = engine === "elevenlabs-realtime" && tickets\.length > 1;/);
+    expect(client).toMatch(/if \(other !== index\) leg\.clearInput\?\.\(\)/);
+    expect(client).toContain('JSON.stringify({ type: "input_audio_buffer.clear" })');
+    // The fallback: an error between session.update and session.updated.
+    expect(client).toMatch(/type === "error" && updateSent && !ready && !updateRetried && ticket\.sessionUpdate\?\.reasoning/);
+    // ElevenLabs offers semantic VAD or manual turns; `server_vad` is a 422.
+    const session = readFileSync("lib/interpreter/session.ts", "utf8");
+    const builder = session.slice(session.indexOf("export function buildElevenLabsRealtimeSession"));
+    expect(builder).toContain('type: "semantic_vad"');
+    expect(builder).not.toContain('"server_vad"');
+  });
+
+  it("the usage route writes one [taos-interpreter-diag] line per leg — numbers and protocol tokens only", async () => {
+    const { POST } = await import("@/app/api/tabletop/interpreter/usage/route");
+    const leg = (index: number) =>
+      summarizeLegDigest({
+        ...exportedDigest(index),
+        lastInType: "response.done",
+        reasoning: "high",
+        vad: "server_vad"
+      });
+    const res = await POST(
+      request(USAGE, "POST", {
+        ...VALID_SUMMARY,
+        engine: "grok-voice",
+        diag: [leg(0), { ...leg(1), transcript: "SMUGGLED hola", note: "SMUGGLED" }]
+      })
+    );
+    expect(res.status).toBe(200);
+    const lines = logged.filter((l) => l.startsWith("[taos-interpreter-diag] "));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^\[taos-interpreter-diag\] engine=grok-voice leg=0 transport=realtime-ws speech_started=\d+ /);
+    expect(lines[0]).toContain(" last_in=response.done ");
+    expect(lines[0]).toContain(" reasoning=high vad=server_vad");
+    for (const line of lines) {
+      expect(line).not.toContain("SMUGGLED");
+      for (const part of line.split(" ").slice(1)) expect(part).toMatch(/^[a-z_0-9]+=[A-Za-z0-9.\-_]+$/);
+    }
+    // The session's own line is still there, once.
+    expect(logged.filter((l) => l.startsWith("[taos-interpreter] "))).toHaveLength(1);
+  });
+
+  it("a diag that is not numbers and tokens is dropped whole; the cost line is written anyway", async () => {
+    const { POST } = await import("@/app/api/tabletop/interpreter/usage/route");
+    const good = summarizeLegDigest(exportedDigest(0));
+    for (const bad of [
+      [{ ...good, last_in: "she said SMUGGLED hola" }],
+      [{ ...good, committed: "SMUGGLED" }],
+      [{ ...good, transport: "SMUGGLED TEXT" }],
+      [good, good, good, good, good],
+      "SMUGGLED",
+      [{ leg: 0 }]
+    ]) {
+      logged.length = 0;
+      const res = await POST(request(USAGE, "POST", { ...VALID_SUMMARY, diag: bad }));
+      expect(res.status).toBe(200);
+      expect(logged.filter((l) => l.startsWith("[taos-interpreter] "))).toHaveLength(1);
+      expect(logged.filter((l) => l.startsWith("[taos-interpreter-diag] "))).toHaveLength(0);
+      expect(logged.join("\n")).not.toContain("SMUGGLED");
+    }
+    expect(parseTimelineDigest([good])).toHaveLength(1);
+  });
+
+  it("ElevenLabs is priced per LEG: a two-leg table is $0.16 a minute, as their own records bill it", () => {
+    // conv_… records of the 2026-11-09 probe: realtime_audio 0.9685 min →
+    // $0.07748 per session, twice, plus $0.0014–0.0020 of model tokens each.
+    expect(usdPerMinute("elevenlabs-realtime")).toBe(0.08);
+    expect(usdPerTableMinute("elevenlabs-realtime", 2)).toBeCloseTo(0.16, 6);
+    expect(usdPerTableMinute("grok-voice", 2)).toBeCloseTo(0.16, 6);
+    expect(usdPerTableMinute("openai-live", 2)).toBeCloseTo(0.1, 6);
+    expect(usdPerTableMinute("elevenlabs-realtime", 1)).toBeCloseTo(0.08, 6);
+    expect(usdPerTableMinute("openai-realtime", 2)).toBeNull();
+    // Tom's screenshot: 1:11 on the clock, two legs → $0.19 on the meter.
+    const table = { ...emptyInterpreterTally("elevenlabs-realtime", "eleven_realtime_v1_mini", 0, 2), billedSeconds: 2 * 71 };
+    expect(formatUsd(estimateUsd(table))).toBe("$0.19");
   });
 });

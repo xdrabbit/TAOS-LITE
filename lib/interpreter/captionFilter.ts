@@ -83,6 +83,14 @@ const ANNOTATION = new RegExp(
  * a bracketed Capitalised name or a number is left alone.
  */
 const DELIVERY_TAG = /\[[a-z]{2,16}(?: [a-z]{2,16})?\]/gu;
+/**
+ * …and the same tag while it is still arriving: "[neu" + "tral]". Held back
+ * while it is the tail of the text, like OPEN_TAIL — without this a response
+ * that was only `[neutral] <silent>` opened the speaker and left "[neutral"
+ * on the screen for good (probe, 2026-11-09: the full text has no words, so
+ * the caption that the fragment opened was never finished or corrected).
+ */
+const OPEN_DELIVERY_TAIL = /\[[a-z]{0,16}(?: [a-z]{0,16})?$/u;
 
 /**
  * The text with every control / silence marker taken out. Idempotent, and
@@ -98,7 +106,8 @@ export function stripControlMarkers(text: string): string {
     .replace(BRACE, " ")
     .replace(ANNOTATION, " ")
     .replace(DELIVERY_TAG, " ")
-    .replace(OPEN_TAIL, "");
+    .replace(OPEN_TAIL, "")
+    .replace(OPEN_DELIVERY_TAIL, "");
   if (stripped === text) return text;
   return stripped
     .replace(/[ \t ]{2,}/g, " ")
