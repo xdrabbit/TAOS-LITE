@@ -67,11 +67,21 @@ import {
 } from "@/lib/interpreter/engine";
 import {
   DEFAULT_INTERPRETER_STYLE,
+  INTERPRETER_STYLES,
+  INTRO_TRIGGER,
+  introCueFrames,
+  isIntroCueError,
+  isMediatorStyle,
+  mediatorIntroLine,
+  mediatorIntroSpoken,
   mediatorMarker,
   parseStyle,
   resolveStyle,
   splitMediatorNotes
 } from "@/lib/interpreter/mediator";
+import { MEDIATOR_HARD_RULES, PERSONA_BLOCKS, TERMS_LEDGER_BLOCK } from "@/lib/interpreter/briefing";
+import { engineIntroduces } from "@/lib/interpreter/engine";
+import { INTERPRETER_DEAL_CONTEXT_TOKEN_LIMIT, interpreterContextTokenLimit } from "@/lib/interpreter/session";
 import { ELEVENLABS_TOM_VOICE } from "@/lib/tts/voice";
 import {
   interpreterEnabled,
@@ -2329,5 +2339,379 @@ describe("what the socket engines' table test changed", () => {
     // Tom's screenshot: 1:11 on the clock, two legs → $0.19 on the meter.
     const table = { ...emptyInterpreterTally("elevenlabs-realtime", "eleven_realtime_v1_mini", 0, 2), billedSeconds: 2 * 71 };
     expect(formatUsd(estimateUsd(table))).toBe("$0.19");
+  });
+});
+
+// ── Mediator v2: self-introduction, two personas, the terms ledger ─────────
+// Tom, 2026-11-10 ~06:30 MT, after his first Mediator table: "it never spoke
+// in 4 ordinary turns — correct per its hard rules, but [I] couldn't tell it
+// was running." These pin what the PROMPT says and what goes on the wire.
+// What the model then DOES is probabilistic and is measured, not tested:
+// tests/live-fire/mediator-v2.measure.ts.
+
+describe("Mediator v2 — the styles", () => {
+  const MEDIATORS = ["mediator", "entendimiento", "deal"] as const;
+  const es2en = { source: "es", target: "en" };
+  const pair = { a: "en", b: "es" };
+
+  it("has four styles, the interpreter still the default, and three of them mediators", () => {
+    expect(INTERPRETER_STYLES).toEqual(["interpreter", "mediator", "entendimiento", "deal"]);
+    expect(DEFAULT_INTERPRETER_STYLE).toBe("interpreter");
+    expect(INTERPRETER_STYLES.filter(isMediatorStyle)).toEqual([...MEDIATORS]);
+    expect(isMediatorStyle("interpreter")).toBe(false);
+    expect(isMediatorStyle(undefined)).toBe(false);
+    expect(resolveStyle(" Deal")).toBe("deal");
+    expect(resolveStyle("Entendimiento")).toBe("entendimiento");
+    expect(resolveStyle("understanding")).toBe("interpreter");
+    expect(resolveStyle("therapist")).toBe("interpreter");
+  });
+
+  it("EVERY persona stands on Tom's hard rules — each one verbatim, and placed after the persona's own text", () => {
+    expect(MEDIATOR_HARD_RULES).toHaveLength(7);
+    for (const style of MEDIATORS) {
+      for (const b of [buildLegBriefing({ direction: es2en, style }), buildInterpreterBriefing({ pair, style })]) {
+        for (const rule of MEDIATOR_HARD_RULES) expect(b, style).toContain(rule);
+        // The floor, as Tom listed it for v2.
+        expect(b).toMatch(/NEVER take sides/);
+        expect(b).toMatch(/NEVER give advice, suggestions or opinions/);
+        expect(b).toMatch(/NEVER summarise, describe or interpret anyone's FEELINGS, and never judge/);
+        expect(b).toMatch(/ALWAYS neutral/);
+        expect(b).toMatch(/RARE: at most one note every few minutes, unless someone asks you directly/);
+        expect(b).toMatch(/addresses you directly — "mediator" or "interpreter"/);
+        // Still an interpreter first, with the meaning-at-risk cases intact.
+        expect(b).toMatch(/You are an interpreter first/);
+        expect(b).toMatch(/ONLY when MEANING IS AT RISK/);
+        expect(b).toContain(MEANING_FIRST_RULE());
+        if (style !== "mediator") {
+          const persona = b.indexOf(PERSONA_BLOCKS[style]);
+          const floor = b.indexOf("THE FLOOR — in every style, and overriding anything above:");
+          expect(persona, style).toBeGreaterThan(0);
+          expect(floor, style).toBeGreaterThan(persona);
+          expect(b.indexOf(MEDIATOR_HARD_RULES[0])).toBeGreaterThan(floor);
+          expect(b).toContain("In this style there are also the cases listed under STYLE below.");
+        }
+      }
+    }
+    // The plain mediator carries no persona and no ledger; the interpreter none of it.
+    const plainMediator = buildLegBriefing({ direction: es2en, style: "mediator" });
+    expect(plainMediator).not.toMatch(/STYLE —|TERMS LEDGER|THE FLOOR/);
+    expect(buildLegBriefing({ direction: es2en })).not.toMatch(/STYLE —|TERMS LEDGER|MEDIATOR|SESSION START/);
+  });
+
+  it("Entendimiento: three things it may DESCRIBE — and no patterns, no therapy, no 'should'", () => {
+    const block = PERSONA_BLOCKS.entendimiento;
+    expect(block).toMatch(/A reply answered a DIFFERENT QUESTION than the one that was asked/);
+    expect(block).toMatch(/The SAME WORD is carrying two different meanings for the two speakers/);
+    expect(block).toMatch(/A REQUEST was phrased as an accusation and may land harder than it was meant/);
+    expect(block).toMatch(/you only DESCRIBE what was said — you never explain why, and never say what anyone should do/);
+    // Tom: descriptive restatement only — never "you two are doing X pattern".
+    expect(block).toMatch(/Never name a pattern, a habit or a dynamic \("you two always…", "you are doing X"/);
+    expect(block).toMatch(/Never use the vocabulary of therapy or psychology/);
+    expect(block).toMatch(/Do not call it an accusation/);
+    expect(block).toMatch(/If you are not sure one of the three cases happened, no note/);
+    // No therapy CLAIM, and no school named to the model.
+    expect(block).not.toMatch(/Gottman|Nonviolent|NVC|therap(ist|eutic)|counsel/i);
+    expect(buildLegBriefing({ direction: es2en, style: "entendimiento" })).not.toContain(TERMS_LEDGER_BLOCK);
+  });
+
+  it("Deal: interests as OBSERVATION — never a recommendation, a number or a ruling", () => {
+    const block = PERSONA_BLOCKS.deal;
+    expect(block).toMatch(/Both people appear to WANT THE SAME THING and are saying it in different words/);
+    expect(block).toMatch(/INTEREST THE PERSON THEMSELVES SAID/);
+    // Tom's own example sentence.
+    expect(block).toContain(`"The disagreement seems to be about timing, not price."`);
+    expect(block).toMatch(/only as an OBSERVATION of what was said/);
+    expect(block).toMatch(/Never recommend\. Never propose a term, a number, a compromise or a next step/);
+    expect(block).toMatch(/Never say an offer is fair, good, bad, high or low/);
+    expect(block).toMatch(/Never name an interest that nobody voiced/);
+    expect(block).not.toMatch(/Fisher|Ury|Getting to Yes/i);
+  });
+
+  it("Deal's TERMS LEDGER: explicit agreement only, read back numbered in both languages, only when asked", () => {
+    for (const b of [buildLegBriefing({ direction: es2en, style: "deal" }), buildInterpreterBriefing({ pair, style: "deal" })]) {
+      expect(b).toContain(TERMS_LEDGER_BLOCK);
+    }
+    const l = TERMS_LEDGER_BLOCK;
+    expect(l).toMatch(/keep track of every point BOTH people have EXPLICITLY agreed to/);
+    expect(l).toMatch(/only when one person stated it and the other clearly accepted THAT SAME point in words/);
+    expect(l).toMatch(/Silence is not agreement/);
+    expect(l).toMatch(/a counter-offer, or one person repeating their own position is not agreement/);
+    // The summons, both languages, as Tom gave them.
+    expect(l).toContain(`"mediator, where are we?"`);
+    expect(l).toContain(`"mediador, ¿dónde estamos?"`);
+    expect(l).toMatch(/NUMBERED, each in one short neutral sentence/);
+    expect(l).toMatch(/then the same numbered list in the other language/);
+    expect(l).toMatch(/Add NOTHING to the list/);
+    expect(l).toMatch(/Never declare agreement that was not explicit/);
+    expect(l).toMatch(/say plainly that nothing has been agreed so far, in both languages/);
+    expect(l).toMatch(/You never read it, or mention it, unless asked/);
+    // Nobody else gets one.
+    for (const style of ["mediator", "entendimiento", "interpreter"] as const) {
+      expect(buildLegBriefing({ direction: es2en, style })).not.toMatch(/TERMS LEDGER/);
+    }
+  });
+
+  it("a Deal session remembers ten times as far back — the ledger IS the model's memory", () => {
+    expect(INTERPRETER_CONTEXT_TOKEN_LIMIT).toBe(600);
+    expect(INTERPRETER_DEAL_CONTEXT_TOKEN_LIMIT).toBe(6000);
+    expect(interpreterContextTokenLimit("deal")).toBe(6000);
+    for (const style of ["interpreter", "mediator", "entendimiento", undefined] as const) {
+      expect(interpreterContextTokenLimit(style)).toBe(600);
+    }
+  });
+
+  it("no mediator ever thinks aloud in a speaker's voice (measured: 'Let me think for a moment…')", () => {
+    for (const style of MEDIATORS) {
+      expect(buildLegBriefing({ direction: es2en, style })).toMatch(
+        /NO PREAMBLE, ever\. Do not use a preamble and do not speak in the commentary channel.*NEVER say that you are thinking, organising, pausing or about to answer/
+      );
+    }
+  });
+});
+
+describe("Mediator v2 — the self-introduction", () => {
+  const pair = { a: "en", b: "es" };
+  const plan = (engine: Parameters<typeof buildInterpreterPlan>[0]["engine"], style?: "mediator" | "entendimiento" | "deal" | "interpreter", env: Record<string, string | undefined> = {}) =>
+    buildInterpreterPlan({ engine, pair, context: "", style, env });
+
+  it("ONE leg introduces — the one that speaks the phone owner's language — and only it is told how", () => {
+    for (const style of ["mediator", "entendimiento", "deal"] as const) {
+      const p = plan("openai-realtime", style);
+      expect(p.introLeg, style).toBe(1);
+      expect(p.legs[1].direction).toEqual({ source: "es", target: "en" });
+      const [quiet, intro] = p.legs.map((l) => l.instructions ?? "");
+      expect(intro).toContain(`When you receive the system message "${INTRO_TRIGGER}" — and ONLY then — introduce yourself ONCE, as a mediator note`);
+      // The exact script: owner's language first, then the other, each half behind its marker.
+      expect(intro).toContain(`"${mediatorMarker("en")}: ${mediatorIntroLine(style, "en")}"`);
+      expect(intro).toContain(`"${mediatorMarker("es")}: ${mediatorIntroLine(style, "es")}"`);
+      expect(intro.indexOf(`"${mediatorMarker("en")}: ${mediatorIntroLine(style, "en")}"`)).toBeLessThan(
+        intro.indexOf(`"${mediatorMarker("es")}: ${mediatorIntroLine(style, "es")}"`)
+      );
+      expect(intro).toMatch(/Never give this introduction at any other time and never repeat it/);
+      expect(intro).toMatch(/if someone talks over it, let it go and interpret them/);
+      // The other leg has never heard of an introduction: it cannot give one.
+      expect(quiet).not.toContain(INTRO_TRIGGER);
+      expect(quiet).not.toContain(mediatorIntroLine(style, "en"));
+    }
+    // With the pair the other way round, it is still the owner's-language leg.
+    const flipped = buildInterpreterPlan({ engine: "openai-realtime", pair: { a: "es", b: "en" }, context: "", style: "mediator", env: {} });
+    expect(flipped.introLeg).toBe(1);
+    expect(flipped.legs[1].direction).toEqual({ source: "en", target: "es" });
+    expect(flipped.legs[1].instructions).toMatch(/Say "Nota del mediador: .*" — and then "Mediator note: /);
+  });
+
+  it("the interpreter never introduces itself, and only an engine that can be cued does", () => {
+    expect(plan("openai-realtime").introLeg).toBeNull();
+    expect(plan("openai-realtime", "interpreter").introLeg).toBeNull();
+    expect(JSON.stringify(plan("openai-realtime").legs)).not.toContain(INTRO_TRIGGER);
+    expect(engineIntroduces("openai-realtime")).toBe(true);
+    expect(engineIntroduces("openai-live")).toBe(true);
+    expect(plan("openai-live", "mediator").introLeg).toBe(1);
+    for (const engine of ["gemini-live", "grok-voice", "elevenlabs-realtime", "openai-translate"] as const) {
+      expect(engineIntroduces(engine), engine).toBe(false);
+      const p = plan(engine, "mediator");
+      expect(p.introLeg, engine).toBeNull();
+      // Not cued → not briefed for it either: an introduction nobody asked for cannot leak out.
+      expect(JSON.stringify(p.legs), engine).not.toContain(INTRO_TRIGGER);
+    }
+    // One session both ways: it is leg 0, owner's language first.
+    const single = plan("openai-realtime", "deal", { TAOS_INTERPRETER_LEGS: "1" });
+    expect(single.legs).toHaveLength(1);
+    expect(single.introLeg).toBe(0);
+    expect(single.legs[0].instructions).toMatch(/Say "Mediator note: .*" — and then "Nota del mediador: /);
+  });
+
+  it("the lines are short, in both languages, name the summons — and a language without one is asked for it", () => {
+    for (const style of ["mediator", "entendimiento", "deal"] as const) {
+      const en = mediatorIntroLine(style, "en");
+      const es = mediatorIntroLine(style, "es");
+      expect(es).not.toBe(en);
+      // One breath: the first draft (20 words a language) ran 16–19 s aloud.
+      expect(en.split(/\s+/).length, style).toBeLessThanOrEqual(14);
+      expect(es.split(/\s+/).length, style).toBeLessThanOrEqual(14);
+      expect(en).toMatch(/I interpret everything/);
+      expect(en).toMatch(/“mediator/);
+      expect(es).toMatch(/«mediador/);
+      expect(mediatorIntroSpoken(style, "en", "es")).toBe(`Mediator note: ${en} Nota del mediador: ${es}`);
+    }
+    // Deal's summons is the ledger's.
+    expect(mediatorIntroLine("deal", "en")).toContain("“mediator, where are we?”");
+    expect(mediatorIntroLine("deal", "es")).toContain("«mediador, ¿dónde estamos?»");
+    // French has no line of its own yet: the English one, to be SAID in French.
+    expect(mediatorIntroLine("mediator", "fr")).toBe(mediatorIntroLine("mediator", "en"));
+    const fr = buildLegBriefing({ direction: { source: "en", target: "fr" }, style: "mediator", intro: true });
+    expect(fr).toContain(`followed by this, said in French: "${mediatorIntroLine("mediator", "en")}"`);
+  });
+
+  it("is marked for Liz, like every Spanish string an agent wrote", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("lib/chrome/copy.ts", "utf8");
+    const esBlock = src.slice(src.indexOf('    interpreterMediatorNote: "Nota del mediador"'));
+    for (const key of [
+      "interpreterStyleEntendimiento",
+      "interpreterStyleDeal",
+      "interpreterStyleEntendimientoHint",
+      "interpreterStyleDealHint",
+      "interpreterMediatorIntro",
+      "interpreterMediatorIntroEntendimiento",
+      "interpreterMediatorIntroDeal"
+    ]) {
+      const at = esBlock.indexOf(`    ${key}:`);
+      expect(at, key).toBeGreaterThan(-1);
+      const value = esBlock.slice(at, esBlock.indexOf("\n    interpreter", at + 5) > -1 ? esBlock.indexOf("\n    interpreter", at + 5) : esBlock.indexOf("\n  }", at));
+      expect(value, key).toContain("pendiente de revisión por Liz");
+    }
+  });
+
+  it("the cue on the wire: a system message and a response for Realtime, words to say for GPT-Live", () => {
+    expect(introCueFrames("openai-webrtc", "ignored")).toEqual([
+      {
+        type: "conversation.item.create",
+        event_id: "taos_intro_item",
+        item: { type: "message", role: "system", content: [{ type: "input_text", text: "SESSION START" }] }
+      },
+      { type: "response.create", event_id: "taos_intro_go" }
+    ]);
+    const spoken = mediatorIntroSpoken("mediator", "en", "es");
+    expect(introCueFrames("openai-live-relay", spoken)).toEqual([
+      { type: "session.commentary.append", event_id: "taos_intro_say", delegation_id: null, content: spoken }
+    ]);
+    // Someone already talking makes the cue collide with THEIR response: skipped, never an error on screen.
+    expect(isIntroCueError({ type: "error", error: { event_id: "taos_intro_go", message: "Conversation already has an active response" } })).toBe(true);
+    expect(isIntroCueError({ type: "error", event_id: "taos_intro_say" })).toBe(true);
+    expect(isIntroCueError({ type: "error", error: { event_id: "evt_other", message: "x" } })).toBe(false);
+    expect(isIntroCueError({ type: "error", error: { message: "x" } })).toBe(false);
+    expect(isIntroCueError({ type: "response.done", event_id: "taos_intro_go" })).toBe(false);
+    const client = require("node:fs").readFileSync("lib/interpreter/client.ts", "utf8") as string;
+    // Cued once every leg is up, never as one connects; and the cue's own error is swallowed before the reader.
+    expect(client).toMatch(/if \(typeof mint\.introLeg === "number"\) legByIndex\.get\(mint\.introLeg\)\?\.introduce\?\.\(\);/);
+    expect(client.indexOf("isIntroCueError(msg)")).toBeLessThan(client.indexOf("reader.handle(msg);"));
+  });
+
+  it("the introduction is captioned as the MEDIATOR, on both panes, each in its reader's language", () => {
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 1, source: "es", target: "en" }, r.sink, () => 1000);
+    // No utterance came first: the cue made this response.
+    reader.handle({ type: "response.created", response: { id: "resp_intro" } });
+    const spoken = mediatorIntroSpoken("deal", "en", "es");
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "resp_intro", delta: spoken.slice(0, 20) });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "resp_intro", delta: spoken.slice(20) });
+    reader.handle({ type: "response.done", response: { id: "resp_intro", status: "completed" } });
+    expect(r.calls).toContain("gate:open");
+    const last = r.captions.at(-1)!;
+    expect(last).toMatchObject({ source: "es", target: "en", heard: "", said: spoken, live: false });
+
+    const entries = applyCaption([], last);
+    const langs = ["en", "es"];
+    // Nobody SAID anything: no incoming line, no outgoing line — a note, and only a note.
+    expect(paneLines(entries, "en", { mediatorLangs: langs })).toEqual([
+      { id: "1:resp_intro:note:0", kind: "note", text: mediatorIntroLine("deal", "en"), live: false }
+    ]);
+    expect(paneLines(entries, "es", { mediatorLangs: langs })).toEqual([
+      { id: "1:resp_intro:note:0", kind: "note", text: mediatorIntroLine("deal", "es"), live: false }
+    ]);
+  });
+
+  it("a spoken preamble (phase: commentary) is never captioned as something a person said", () => {
+    const r = recorder();
+    const reader = createRealtimeReader({ index: 0, source: "en", target: "es" }, r.sink, () => 1000);
+    reader.handle({ type: "input_audio_buffer.committed", item_id: "item_q" });
+    reader.handle({ type: "response.created", response: { id: "resp_1" } });
+    reader.handle({ type: "response.output_item.added", response_id: "resp_1", item: { id: "out_pre", type: "message", phase: "commentary" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "resp_1", item_id: "out_pre", delta: "Déjame pensar un momento." });
+    // Not a word of it on screen, and the speaker gate has not opened for it.
+    expect(r.captions).toHaveLength(0);
+    expect(r.calls).not.toContain("gate:open");
+    reader.handle({ type: "response.output_item.added", response_id: "resp_1", item: { id: "out_ans", type: "message", phase: "final_answer" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "resp_1", item_id: "out_ans", delta: "Mediador, ¿dónde estamos?" });
+    reader.handle({ type: "response.done", response: { id: "resp_1", status: "completed" } });
+    expect(r.captions.at(-1)).toMatchObject({ said: "Mediador, ¿dónde estamos?", live: false });
+    // An item with no phase at all (every other provider of this dialect) is an answer.
+    reader.handle({ type: "response.created", response: { id: "resp_2" } });
+    reader.handle({ type: "response.output_item.added", response_id: "resp_2", item: { id: "out_3", type: "message" } });
+    reader.handle({ type: "response.output_audio_transcript.delta", response_id: "resp_2", item_id: "out_3", delta: "Hola." });
+    expect(r.captions.at(-1)).toMatchObject({ said: "Hola." });
+  });
+
+  it("a ledger read-back is captioned the same way: the question as the person's, the list as the mediator's", () => {
+    const entry: CaptionEntry = {
+      id: "0:r9",
+      source: "en",
+      target: "es",
+      heard: "Mediator, where are we?",
+      said:
+        "Mediador, ¿dónde estamos? Nota del mediador: 1. El alquiler empieza el 1 de diciembre. 2. Un mes de depósito. Mediator note: 1. The rental starts on December 1. 2. A deposit of one month.",
+      live: false,
+      at: 1
+    };
+    const langs = ["en", "es"];
+    expect(paneLines([entry], "en", { mediatorLangs: langs })).toEqual([
+      { id: "0:r9", kind: "outgoing", text: "Mediator, where are we?", live: false },
+      { id: "0:r9:note:0", kind: "note", text: "1. The rental starts on December 1. 2. A deposit of one month.", live: false }
+    ]);
+    expect(paneLines([entry], "es", { mediatorLangs: langs })).toEqual([
+      { id: "0:r9", kind: "incoming", text: "Mediador, ¿dónde estamos?", live: false },
+      { id: "0:r9:note:0", kind: "note", text: "1. El alquiler empieza el 1 de diciembre. 2. Un mes de depósito.", live: false }
+    ]);
+  });
+});
+
+describe("Mediator v2 — at the mint", () => {
+  it("personas ride the EXISTING mediator flag: off, they are the plain interpreter with no introduction", async () => {
+    for (const style of ["entendimiento", "deal"]) {
+      sent.length = 0;
+      const { json } = await startSession({ style });
+      expect(json.style, style).toBe("interpreter");
+      expect(json.introLeg, style).toBeNull();
+      expect(JSON.stringify(sent.map((c) => c.body))).not.toMatch(/MEDIATOR|TERMS LEDGER|SESSION START/);
+    }
+    const flag = require("node:fs").readFileSync("lib/interpreter/flag.ts", "utf8") as string;
+    // No new Production switch: one mediator gate, the one already there.
+    expect(flag.match(/process\.env\.TAOS_INTERPRETER_\w*(MEDIATOR|PERSONA|DEAL|ENTENDIMIENTO)\w*/g)).toEqual([
+      "process.env.TAOS_INTERPRETER_MEDIATOR_ENABLED"
+    ]);
+  });
+
+  it("on, each persona reaches the provider — with its cap, its intro leg, and nothing of it in the log", async () => {
+    process.env.TAOS_INTERPRETER_MEDIATOR_ENABLED = "1";
+    for (const [style, cap] of [["mediator", 600], ["entendimiento", 600], ["deal", 6000]] as const) {
+      sent.length = 0;
+      logged.length = 0;
+      const { json } = await startSession({ style });
+      expect(json.style).toBe(style);
+      expect(json.introLeg).toBe(1);
+      const sessions = sent.map((c) => c.body.session as { instructions: string; truncation: { token_limits: { post_instructions: number } } });
+      expect(sessions).toHaveLength(2);
+      for (const session of sessions) expect(session.truncation.token_limits.post_instructions).toBe(cap);
+      expect(sessions[0].instructions).not.toContain(INTRO_TRIGGER);
+      expect(sessions[1].instructions).toContain(INTRO_TRIGGER);
+      if (style === "deal") for (const session of sessions) expect(session.instructions).toContain(TERMS_LEDGER_BLOCK);
+      // The browser is told WHICH leg, never what it says.
+      expect(JSON.stringify(json)).not.toMatch(/SESSION START|I interpret everything|TERMS LEDGER/);
+      const line = logged.find((l) => l.startsWith("[taos-interpreter-mint] "))!;
+      expect(line).toContain(` style=${style} `);
+      expect(line).toContain(` context_tokens=${cap} `);
+      expect(line.endsWith(" intro_leg=1")).toBe(true);
+      expect(logged.join("\n")).not.toMatch(/MEDIATOR|TERMS LEDGER|I interpret everything/);
+    }
+    // GPT-Live's relay rebuilds the same plan: leg 1 carries the introduction, leg 0 does not.
+    const { POST } = await import("@/app/api/tabletop/interpreter/live/route");
+    for (const [leg, has] of [[0, false], [1, true]] as const) {
+      sent.length = 0;
+      await POST(request(LIVE, "POST", { sdp: "v=0\r\noffer", leg, mine: "en", theirs: "es", style: "deal" }));
+      const instructions = (sent[0].body.session as { instructions: string }).instructions;
+      expect(instructions.includes(INTRO_TRIGGER)).toBe(has);
+      expect(instructions).toContain(TERMS_LEDGER_BLOCK);
+    }
+    // An engine that cannot be cued says so with a null.
+    const { json } = await startSession({ engine: "gemini-live", style: "deal" });
+    expect(json.style).toBe("deal");
+    expect(json.introLeg).toBeNull();
+  });
+
+  it("the cost line takes the new styles as a closed set", () => {
+    expect(parseInterpreterSummary({ ...VALID_SUMMARY, style: "deal" })?.style).toBe("deal");
+    expect(parseInterpreterSummary({ ...VALID_SUMMARY, style: "entendimiento" })?.style).toBe("entendimiento");
+    expect(parseInterpreterSummary({ ...VALID_SUMMARY, style: "deal: they agreed 900" })?.style).toBe("interpreter");
   });
 });

@@ -65,7 +65,15 @@ import {
   type LegReader,
   type LegSink
 } from "./legEvents";
-import { DEFAULT_INTERPRETER_STYLE, parseStyle, type InterpreterStyle } from "./mediator";
+import {
+  DEFAULT_INTERPRETER_STYLE,
+  introCueFrames,
+  isIntroCueError,
+  isMediatorStyle,
+  mediatorIntroSpoken,
+  parseStyle,
+  type InterpreterStyle
+} from "./mediator";
 import {
   base64Bytes,
   createSessionTimeline,
@@ -149,6 +157,8 @@ interface MintResponse {
   maxSeconds?: number;
   idleSeconds?: number;
   style?: string;
+  /** The leg to cue for the mediator's introduction. Null/absent = none. */
+  introLeg?: number | null;
   briefing?: BriefingReceipt;
   error?: string;
   details?: string;
@@ -163,6 +173,12 @@ interface Leg {
   connectedSeconds: () => number;
   /** Throw away what this leg has heard and not yet answered (socket legs). */
   clearInput?: () => void;
+  /**
+   * Cue this leg to give the mediator's introduction (lib/interpreter/
+   * mediator.ts, INTRO_TRIGGER). Once; later calls do nothing. Only the legs
+   * of an engine that can be cued have it (engineIntroduces).
+   */
+  introduce?: () => void;
 }
 
 const CONNECT_TIMEOUT_MS = 15_000;
@@ -472,6 +488,11 @@ export async function startInterpreter(opts: {
         mine,
         theirs,
         style,
+        // The leg the server named, and only for a style that speaks.
+        introSay:
+          mint.introLeg === index && isMediatorStyle(appliedStyle)
+            ? mediatorIntroSpoken(appliedStyle, ticket.target ?? mine, ticket.source ?? theirs)
+            : null,
         startMuted: gated,
         makeReader: (sink) =>
           engine === "openai-realtime"
@@ -503,6 +524,10 @@ export async function startInterpreter(opts: {
       for (const leg of legs) leg.tick(nowMs);
     }, TICK_MS);
 
+    // Every leg is up: the mediator says who it is, once (one leg, cued here
+    // rather than as it connects, so it never talks over a leg still dialling).
+    if (typeof mint.introLeg === "number") legByIndex.get(mint.introLeg)?.introduce?.();
+
     return {
       engine,
       model: mint.model ?? "",
@@ -531,6 +556,8 @@ async function connectWebRtcLeg(opts: {
   mine: string;
   theirs: string;
   style: InterpreterStyle;
+  /** The introduction this leg gives when cued, as spoken. Null = not this leg. */
+  introSay: string | null;
   startMuted: boolean;
   makeReader: (sink: LegSink) => LegReader;
   sinkFor: (setAudible: (open: boolean) => void) => LegSink;
@@ -548,6 +575,8 @@ async function connectWebRtcLeg(opts: {
   const connectedAt = Date.now();
   let closed = false;
   let sawClosed: (() => void) | null = null;
+  let sendIntro: () => void = () => {};
+  let requestIntro: () => void = () => {};
 
   const sink = opts.sinkFor((open) => {
     if (open && audioEl.muted) opts.timeline?.note("gate-open");
@@ -587,11 +616,47 @@ async function connectWebRtcLeg(opts: {
     };
 
     const dc = pc.createDataChannel("oai-events");
+    // GPT-Live takes the cue only once its session has started; the Realtime
+    // API takes it as soon as the channel is open.
+    let sessionStarted = ticket.transport !== "openai-live-relay";
+    let introWanted = false;
+    let introSent = false;
+    sendIntro = () => {
+      if (introSent || closed || !opts.introSay || dc.readyState !== "open") return;
+      introSent = true;
+      try {
+        for (const frame of introCueFrames(ticket.transport, opts.introSay)) {
+          const json = JSON.stringify(frame);
+          dc.send(json);
+          opts.timeline?.sent(String(frame.type), json.length);
+        }
+        opts.timeline?.note("intro-cue");
+      } catch {
+        /* no introduction is not a reason to end a dinner */
+      }
+    };
+    requestIntro = () => {
+      if (!opts.introSay || introWanted) return;
+      introWanted = true;
+      if (sessionStarted) sendIntro();
+      // `session.started` that never shows on the channel must not cost the
+      // introduction: after a moment, cue it anyway.
+      else window.setTimeout(sendIntro, 2500);
+    };
     dc.onmessage = ({ data }) => {
       try {
         const raw = String(data);
         const msg = JSON.parse(raw) as Record<string, unknown>;
         opts.timeline?.recv(msg, raw.length);
+        if (msg.type === "session.started" && !sessionStarted) {
+          sessionStarted = true;
+          if (introWanted) sendIntro();
+        }
+        // Skipped because someone was already talking — see isIntroCueError.
+        if (isIntroCueError(msg)) {
+          opts.timeline?.note("intro-skipped");
+          return;
+        }
         reader.handle(msg);
       } catch {
         /* a frame we cannot read is not a reason to end a dinner */
@@ -662,6 +727,7 @@ async function connectWebRtcLeg(opts: {
     return {
       tick: reader.tick,
       connectedSeconds: () => Math.max(0, (Date.now() - connectedAt) / 1000),
+      ...(opts.introSay ? { introduce: () => requestIntro() } : {}),
       close: async () => {
         if (closed) return;
         closed = true;

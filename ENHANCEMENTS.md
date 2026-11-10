@@ -137,6 +137,60 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     choice: someone who talks WHILE the interpretation is playing is not
     heard. Grok is left full-duplex. → Phone re-test decides it.
 
+- **Mediator v2 — it says who it is, two personas, and a terms ledger; built
+  2026-11-10, draft PR open, founders only behind the existing
+  `TAOS_INTERPRETER_MEDIATOR_ENABLED`.** Tom (2026-11-10 ~06:30 MT), after his
+  first Mediator table: it never spoke in four ordinary turns — correct by its
+  own rules, "but [he] couldn't tell it was running". Three things:
+  1. **Self-introduction.** A mediator session opens with one mediator note,
+     both languages: *"Mediator note: I interpret everything and rarely
+     interrupt. Say “mediator” to ask me. / Nota del mediador: Interpreto todo
+     y casi no interrumpo. Digan «mediador» para preguntarme."* The script is
+     in the briefing (server-side); when every leg is up the screen cues ONE
+     leg — the one that speaks the phone owner's language — and the other leg
+     has never heard of an introduction. Talking over it skips it. Realtime
+     2.1 and GPT-Live only (the two keepers); Gemini, Grok and ElevenLabs
+     mediate without announcing themselves.
+  2. **Personas** on the Style row: Interpreter (default) | Mediator |
+     **Entendimiento** | **Deal**. Each persona is one editable paragraph in
+     `lib/interpreter/briefing.ts` (`PERSONA_BLOCKS`) on top of the same hard
+     rules — never a side, never advice, never anyone's feelings, rare,
+     neutral, always answers when addressed. *Entendimiento* may describe a
+     reply that answered a different question, one word carrying two meanings,
+     or the request inside an accusation; never a pattern, never therapy
+     words. *Deal* may observe that both want the same thing, or what a
+     disagreement seems to be about; never a recommendation or a number.
+  3. **Terms ledger** (Deal): "mediator, where are we?" / "mediador, ¿dónde
+     estamos?" reads back, numbered and in both languages, the points both
+     people EXPLICITLY agreed — and says so plainly when there are none.
+     Prompt-side only: the list is the model's memory of the session, stored
+     and logged nowhere. So a Deal session's context cap is 6,000 tokens
+     (`TAOS_INTERPRETER_DEAL_CONTEXT_TOKENS`) where every other style's is
+     600 — about ten minutes of memory instead of one.
+  → Measured 2026-11-10 on gpt-realtime-2.1 (`tests/live-fire/
+  mediator-v2.measure.ts`, and the real screen in headless Chrome for both
+  engines): the introduction is said word for word and captioned as a note on
+  both panes; a scripted negotiation with two agreements and three traps (a
+  counter-offer, a "maybe", an "I understand") read back exactly the two, on
+  both legs; an empty session says nothing has been agreed. One run each —
+  read-back fidelity is probabilistic and the table is the real test.
+  → The introduction is HEARD at ~12 s, not the 5–10 Tom asked for: the model
+  speaks it slowly (3.4 s of that is its own pauses) and cutting words bought
+  little. Tom's call whether to drop a clause.
+  → Found on the way: asked directly, the flagship sometimes opened with a
+  spoken "Let me think for a moment…" in the SPEAKER's voice (OpenAI calls it
+  a preamble; no switch for it). A prompt rule took it from 3 in 3 answers to
+  0 in 4, and a preamble the provider labels is no longer captioned. It
+  applied to the v1 Mediator's direct answers too.
+  → Ledger memory is the window: a point agreed more than ~10 minutes ago and
+  never read back since can be forgotten. GPT-Live has no such cap of ours
+  (and none we can set); how far back IT remembers is unmeasured.
+  → Persona NOTES (as opposed to the ledger) were not probed: whether
+  Entendimiento or Deal speaks up at the right moments, and stays inside the
+  hard rules when it does, is for the table.
+  → Spanish strings (labels, hints, the three introduction lines) are an
+  agent's, pendiente de revisión por Liz.
+
 - **Founder translation review — keep audio (opt-in, 14 days) + /review with
   flagging; built 2026-11-04, draft PR open, founders only.** Tom: translations
   between him and Liz have "pretty horrible mistakes" and the text alone cannot
