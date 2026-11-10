@@ -138,7 +138,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
     heard. Grok is left full-duplex. → Phone re-test decides it.
 
 - **Mediator v2 — it says who it is, two personas, and a terms ledger; built
-  2026-11-10, draft PR open, founders only behind the existing
+  2026-11-10, draft PR #130 open, founders only behind the existing
   `TAOS_INTERPRETER_MEDIATOR_ENABLED`.** Tom (2026-11-10 ~06:30 MT), after his
   first Mediator table: it never spoke in four ordinary turns — correct by its
   own rules, "but [he] couldn't tell it was running". Three things:
