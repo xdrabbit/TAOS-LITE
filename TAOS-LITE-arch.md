@@ -95,6 +95,17 @@ OpenAI over WebRTC. Neither screen writes to Postgres. Context truncation caps
 live in `lib/realtime/truncation.ts`, with session builders in `lib/live/` and
 `lib/tabletop/`.
 
+`/tabletop` also carries **Interpreter mode** (founders only,
+`TAOS_INTERPRETER_ENABLED`): a continuous, hands-free speech-to-speech session
+— no talk button — on one of four engines (`lib/interpreter/engine.ts`), one
+provider session per direction. Routes under `app/api/tabletop/interpreter/`;
+the briefing's context block is the one thing it stores
+(`taos_lite_interpreter_context`, service role only). Captions live in
+component state and are never written anywhere.
+A founder Diagnostics chip records a per-leg event timeline for each session
+(`lib/interpreter/timeline.ts`: event types, times and sizes — never content)
+and logs one `[taos-interpreter-diag]` line of numbers per leg at Stop.
+
 ### Chat (`/chat`)
 
 Two-person threads; an account can hold several (`lib/chatThreads.ts`). Invite

@@ -42,6 +42,9 @@ import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
 import { copyFor } from "@/lib/chrome/copy";
 import { JumpToTail, useFollowTail, type FollowTail } from "./FollowTail";
 import { ExitHome } from "./ExitHome";
+import { interpreterVisibleTo } from "@/lib/interpreter/flag";
+import { STABLE_ENGINES, type InterpreterEngine } from "@/lib/interpreter/engine";
+import { InterpreterMode } from "./tabletop/InterpreterMode";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
 // Party mode. One phone on the table: the TOP half renders rotated 180° so it
@@ -161,8 +164,27 @@ function pickRecordingMime(): string {
 
 export function TabletopShell({
   defaultBrain = "openai",
-  autoEnabled = false
+  autoEnabled = false,
+  interpreterEnabled = false,
+  interpreterMediatorEnabled = false,
+  interpreterEngine = "openai-realtime",
+  interpreterEngines = STABLE_ENGINES
 }: {
+  /**
+   * The engines the picker offers, from the server
+   * (TAOS_INTERPRETER_EXPERIMENTAL_ENGINES). Default: no experimental engine.
+   */
+  interpreterEngines?: readonly InterpreterEngine[];
+  /**
+   * TAOS_INTERPRETER_ENABLED, read on the server. Interpreter mode's chip
+   * shows only when this is true AND the user is a founder
+   * (lib/interpreter/flag.ts); everyone else's table is untouched.
+   */
+  interpreterEnabled?: boolean;
+  /** TAOS_INTERPRETER_MEDIATOR_ENABLED, server-only and false by default. */
+  interpreterMediatorEnabled?: boolean;
+  /** TAOS_INTERPRETER_ENGINE, read on the server: the picker's default. */
+  interpreterEngine?: InterpreterEngine;
   /** TAOS_TABLETOP_BRAIN, read on the server. Founders only; see brain.ts. */
   defaultBrain?: TabletopBrainKind;
   /**
@@ -231,6 +253,11 @@ export function TabletopShell({
   const lastSourceRef = useRef<Lang | null>(null);
   // Bumped by every new turn so an old turn's readout queue stops cleanly.
   const speakGenRef = useRef(0);
+  // ── Interpreter mode (founders + TAOS_INTERPRETER_ENABLED) ──
+  // A separate, continuous mode: while it is open this shell renders
+  // components/tabletop/InterpreterMode.tsx INSTEAD of the two talk panes.
+  const [interpreterAllowed, setInterpreterAllowed] = useState(false);
+  const [interpreterOpen, setInterpreterOpen] = useState(false);
   const autoActive = autoAllowed && autoOn && engine === "live";
   // Auto-detect always runs on openai — see autoBrain in lib/tabletop/brain.ts.
   const { brain: runBrain, autoFellBack } = autoBrain(brain, autoActive);
@@ -256,12 +283,13 @@ export function TabletopShell({
       }
       setBrain(resolveBrain({ founder: isF, stored, envDefault: defaultBrain }));
       setAutoAllowed(tabletopAutoVisibleTo(data.session?.user?.email, autoEnabled));
+      setInterpreterAllowed(interpreterVisibleTo(data.session?.user?.email, interpreterEnabled));
       if (isF) setLastSession(readLastSession());
     });
     return () => {
       active = false;
     };
-  }, [defaultBrain, autoEnabled]);
+  }, [defaultBrain, autoEnabled, interpreterEnabled]);
 
   // A brain session ended (idle, cap, failure, the end chip, leaving): its
   // numbers become the card, and — founders only — one [taos-tabletop] line
@@ -887,6 +915,19 @@ export function TabletopShell({
     });
   }, []);
 
+  // Into Interpreter mode. Only between turns (the chip is disabled during
+  // one), and the push-to-talk session is closed first: two realtime sessions
+  // on one microphone would both be billed and only one would be heard.
+  const openInterpreter = useCallback(() => {
+    if (turnRef.current.kind !== "idle") return;
+    speakGenRef.current += 1;
+    playerRef.current?.pause();
+    playerRef.current = null;
+    liveRef.current?.stop();
+    liveRef.current = null;
+    setInterpreterOpen(true);
+  }, []);
+
   // Latest lines relevant to a pane, in ITS language.
   const paneLines = useCallback(
     (lang: Lang): { theirs: Exchange | null; mine: Exchange | null } => {
@@ -1055,6 +1096,21 @@ export function TabletopShell({
   // "text only" mark, because half the table still gets a voice.
   const tableTextOnly = isTextOnlyLanguage(topLang) && isTextOnlyLanguage(bottomLang);
 
+  // Interpreter mode replaces the table while it is open. Asked again here,
+  // not just at the chip: a session that expired mid-visit closes the mode.
+  if (interpreterOpen && interpreterAllowed) {
+    return (
+      <InterpreterMode
+        mine={mine}
+        theirs={theirs}
+        defaultEngine={interpreterEngine}
+        engines={interpreterEngines}
+        mediatorEnabled={interpreterMediatorEnabled}
+        onExit={() => setInterpreterOpen(false)}
+      />
+    );
+  }
+
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden">
       {renderPane(topLang, true, topTail)}
@@ -1101,6 +1157,17 @@ export function TabletopShell({
         >
           {tableTextOnly ? "🔇 text only" : voiceOn ? "🔊 voice on" : "🔇 voice off"}
         </button>
+        {interpreterAllowed ? (
+          <button
+            type="button"
+            data-tabletop-interpreter=""
+            onClick={openInterpreter}
+            disabled={turn.kind !== "idle"}
+            className="rounded-full border border-emerald-300/40 bg-white/5 px-3 py-1 text-xs text-emerald-200 disabled:opacity-40"
+          >
+            ◉ {copyFor(mine).interpreterMode}
+          </button>
+        ) : null}
         {error ? <span className="max-w-[40%] truncate text-xs text-red-300">{error}</span> : null}
         </div>
         {autoAllowed && engine === "live" ? (

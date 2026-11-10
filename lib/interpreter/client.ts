@@ -1,0 +1,1163 @@
+"use client";
+
+// Interpreter mode in the browser: one microphone, shared by every LEG of the
+// session, and each leg's voice played as it arrives (Tom, 2026-11-09).
+//
+//   startInterpreter()  mic → POST /api/tabletop/interpreter/session → one
+//                       transport per leg → resolves once every leg is live.
+//
+// A leg is one provider session (lib/interpreter/plan.ts). Its transport is
+// here; what its events MEAN is in lib/interpreter/legEvents.ts, which has no
+// browser in it and is what the tests exercise.
+//
+// ── Continuous, not push-to-talk ───────────────────────────────────────────
+// The mic track is live from the first tap to Stop. Nothing here opens or
+// closes a turn: the provider's own turn detection decides when a thought is
+// finished and answers it, and speaking over the interpreter cuts it off
+// (barge-in) — that is configured on the session, server-side.
+//
+// ── The speaker is next to the microphone ──────────────────────────────────
+// One phone, lying on the table, playing the interpretation out of the same
+// device that is listening. The first line of defence is the browser's echo
+// canceller (`echoCancellation: true` below), which works on audio the PAGE
+// plays — so every leg plays through an <audio> element, the same way
+// /tutor's voice does.
+//
+// It is not enough on a real phone. Tom and Liz's table (2026-11-09,
+// ElevenLabs) heard itself: phantom `speech_started` on both legs at once,
+// each one cutting the translation off. So the socket engine that showed it
+// runs HALF-DUPLEX (lib/interpreter/halfDuplex.ts): while any leg's voice is
+// playing, every leg's microphone is sent silence; a `speech_started` never
+// stops the speaker — only the provider cancelling a reply for a new turn
+// does; and a reply the gate has let through is played to its end.
+//
+// ── What ends a session ────────────────────────────────────────────────────
+// Stop, the cap, the idle stop (the shell's clock, lib/interpreter/limits.ts)
+// or a leg failing. All of them go through stop(), which closes every leg,
+// stops the mic, and returns the final tally for the cost line.
+
+import { jsonAuthHeaders } from "@/lib/authClient";
+import { ensureTabletopAudioContext, tapMicPcm, type MicPcmTap } from "@/lib/tabletop/audio";
+import { bytesToBase64, PCM_IN_RATE, s16ToLeBytes } from "@/lib/tabletop/pcm";
+import { createAudioGate } from "./audioGate";
+import type { CaptionUpdate } from "./captions";
+import {
+  addGeminiUsage,
+  addUsage,
+  emptyInterpreterTally,
+  type InterpreterTally
+} from "./cost";
+import { engineBillsByTheMinute, type InterpreterEngine } from "./engine";
+import {
+  createHalfDuplex,
+  engineIsHalfDuplex,
+  gateFollows,
+  speakerActionFor,
+  type HalfDuplex
+} from "./halfDuplex";
+import {
+  createGeminiReader,
+  createPeerHeard,
+  createRealtimeReader,
+  createSharedHeard,
+  createStreamReader,
+  type LegIdentity,
+  type LegReader,
+  type LegSink
+} from "./legEvents";
+import { DEFAULT_INTERPRETER_STYLE, parseStyle, type InterpreterStyle } from "./mediator";
+import {
+  base64Bytes,
+  createSessionTimeline,
+  type LegTimeline,
+  type SessionTimeline,
+  type TimelineExport
+} from "./timeline";
+
+export interface InterpreterHandlers {
+  onCaption: (update: CaptionUpdate) => void;
+  onActivity: () => void;
+  onTally: (tally: InterpreterTally) => void;
+  onError: (message: string) => void;
+  /** A leg died underneath a running session. The shell stops it. */
+  onLegLost: () => void;
+}
+
+export interface BriefingReceipt {
+  applied: boolean;
+  contextChars: number;
+  contextStatus: "ok" | "missing_table" | "unavailable";
+}
+
+/**
+ * The server refused to start an engine because its key is not configured.
+ * `missingEnv` is the NAME of the variable to add in Vercel — the screen says
+ * it in the reader's language (copy key `interpreterEngineNoKey`).
+ */
+export class InterpreterNotConfiguredError extends Error {
+  constructor(
+    message: string,
+    readonly missingEnv: string
+  ) {
+    super(message);
+    this.name = "InterpreterNotConfiguredError";
+  }
+}
+
+export interface ActiveInterpreter {
+  engine: InterpreterEngine;
+  model: string;
+  /** What the session was actually briefed as (the server's answer). */
+  style: InterpreterStyle;
+  legs: number;
+  maxSeconds: number;
+  idleSeconds: number;
+  briefing: BriefingReceipt;
+  tally: () => InterpreterTally;
+  /**
+   * The session's event timeline — types, times and sizes, never content
+   * (lib/interpreter/timeline.ts). Null unless it was started with
+   * `diagnostics`.
+   */
+  timeline: () => TimelineExport | null;
+  /** Close everything. Idempotent; resolves with the final tally. */
+  stop: () => Promise<InterpreterTally>;
+}
+
+type LegTicket = {
+  source: string | null;
+  target: string | null;
+  voice: string | null;
+} & (
+  | { transport: "openai-webrtc"; clientSecret: string; callUrl: string }
+  | { transport: "openai-live-relay"; relayUrl: string; leg: number }
+  | { transport: "gemini-ws"; wsUrl: string }
+  | {
+      transport: "realtime-ws";
+      wsUrl: string;
+      protocols: string[];
+      sessionUpdate: Record<string, unknown> | null;
+      inputRate: number;
+      outputRate: number;
+    }
+);
+
+interface MintResponse {
+  engine?: InterpreterEngine;
+  model?: string;
+  legs?: LegTicket[];
+  maxSeconds?: number;
+  idleSeconds?: number;
+  style?: string;
+  briefing?: BriefingReceipt;
+  error?: string;
+  details?: string;
+  code?: string;
+  missingEnv?: string;
+}
+
+interface Leg {
+  close: () => Promise<void>;
+  tick: (nowMs: number) => void;
+  /** Wall-clock seconds this leg has been connected. */
+  connectedSeconds: () => number;
+  /** Throw away what this leg has heard and not yet answered (socket legs). */
+  clearInput?: () => void;
+}
+
+const CONNECT_TIMEOUT_MS = 15_000;
+/** How long Stop waits for a provider's final usage before hanging up anyway. */
+const CLOSE_GRACE_MS = 1200;
+const TICK_MS = 250;
+/** Gemini's sockets last ~10 minutes; a dinner is longer. */
+const MAX_GEMINI_RECONNECTS = 6;
+const GEMINI_OUT_RATE = 24_000;
+/**
+ * xAI's own interpreter recipe: "about one connection in ten opened and then
+ * never started a session … give each try five seconds to send
+ * session.created, then try again with a new token", up to three times.
+ */
+const WS_SESSION_TIMEOUT_MS = 5_000;
+const WS_CONNECT_ATTEMPTS = 3;
+const CLEAR_INPUT_FRAME = JSON.stringify({ type: "input_audio_buffer.clear" });
+
+function hiddenAudio(): HTMLAudioElement {
+  const el = document.createElement("audio");
+  el.autoplay = true;
+  (el as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
+  // Some browsers will not play a detached element; keep it in the DOM, unseen.
+  el.style.display = "none";
+  document.body.appendChild(el);
+  return el;
+}
+
+async function mintSession(
+  engine: InterpreterEngine,
+  mine: string,
+  theirs: string,
+  style: InterpreterStyle
+): Promise<MintResponse> {
+  const res = await fetch("/api/tabletop/interpreter/session", {
+    method: "POST",
+    headers: await jsonAuthHeaders(),
+    body: JSON.stringify({ engine, mine, theirs, style })
+  });
+  const body = (await res.json().catch(() => ({}))) as MintResponse;
+  if (!res.ok || !Array.isArray(body.legs) || body.legs.length === 0) {
+    const message = body.details || body.error || "Could not start the interpreter.";
+    if (body.code === "not_configured" && typeof body.missingEnv === "string" && body.missingEnv) {
+      throw new InterpreterNotConfiguredError(message, body.missingEnv);
+    }
+    throw new Error(message);
+  }
+  return body;
+}
+
+export async function startInterpreter(opts: {
+  engine: InterpreterEngine;
+  mine: string;
+  theirs: string;
+  /** "mediator" = the experimental style. Absent = the interpreter. */
+  style?: InterpreterStyle;
+  /** Record the per-leg event timeline (shape only — see timeline.ts). */
+  diagnostics?: boolean;
+  handlers: InterpreterHandlers;
+}): Promise<ActiveInterpreter> {
+  const { handlers, mine, theirs } = opts;
+  const style = opts.style ?? DEFAULT_INTERPRETER_STYLE;
+  let mic: MediaStream | null = null;
+  let legs: Leg[] = [];
+  /** Legs by index as each connects — one leg may need to reach another. */
+  const legByIndex = new Map<number, Leg>();
+  let timeline: SessionTimeline | null = null;
+  let stopped = false;
+  let ticker: number | null = null;
+  let tally = emptyInterpreterTally(opts.engine, "", Date.now());
+  /** Provider-reported seconds per leg (GPT-Live). */
+  const billedByLeg = new Map<number, number>();
+
+  const publish = (next: InterpreterTally) => {
+    tally = next;
+    if (!stopped) handlers.onTally(currentTally());
+  };
+
+  /**
+   * Set by stop(): the numbers as they stood when the session ended. The cost
+   * line is read AFTER the legs are torn down, and a per-minute engine's
+   * seconds are computed from its legs — found by the browser check, which
+   * saw `billed_secs=0` on every per-minute session.
+   */
+  let finalTally: InterpreterTally | null = null;
+
+  function currentTally(): InterpreterTally {
+    if (finalTally) return finalTally;
+    if (!engineBillsByTheMinute(tally.engine)) return tally;
+    // Per-minute engines. GPT-Live and Grok report their own seconds; where a
+    // leg has not (and for translate and ElevenLabs, which never do) the wall
+    // clock stands in — all four bill the session's duration, silence included.
+    let seconds = 0;
+    legs.forEach((leg, index) => {
+      seconds += billedByLeg.get(index) ?? leg.connectedSeconds();
+    });
+    return { ...tally, billedSeconds: Math.max(tally.billedSeconds, seconds) };
+  }
+
+  let stopping: Promise<InterpreterTally> | null = null;
+  const stop = (): Promise<InterpreterTally> => {
+    stopping ??= (async () => {
+      const before = currentTally();
+      stopped = true;
+      if (ticker !== null) window.clearInterval(ticker);
+      ticker = null;
+      await Promise.all(legs.map((leg) => leg.close().catch(() => {})));
+      // Read again: a graceful close can deliver a leg's final seconds.
+      const after = currentTally();
+      finalTally = after.billedSeconds >= before.billedSeconds ? after : before;
+      legs = [];
+      legByIndex.clear();
+      mic?.getTracks().forEach((t) => t.stop());
+      mic = null;
+      return finalTally;
+    })();
+    return stopping;
+  };
+
+  try {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia ||
+      !window.isSecureContext
+    ) {
+      throw new Error("Microphone is unavailable here. Open the app over HTTPS and allow mic access.");
+    }
+    mic = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        // THE thing that keeps the interpreter from interpreting itself.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1
+      }
+    });
+    const micTrack = mic.getAudioTracks()[0];
+    if (!micTrack) throw new Error("No microphone track.");
+    // What the device actually GAVE, not what was asked for — a phone may
+    // decline echo cancellation and say so only here. Booleans and a number.
+    const micSettings = (() => {
+      try {
+        const got = micTrack.getSettings();
+        return {
+          ec: got.echoCancellation,
+          ns: got.noiseSuppression,
+          agc: got.autoGainControl,
+          rate: got.sampleRate,
+          ch: got.channelCount
+        };
+      } catch {
+        return null;
+      }
+    })();
+
+    const mint = await mintSession(opts.engine, mine, theirs, style);
+    const tickets = mint.legs ?? [];
+    const engine = mint.engine ?? opts.engine;
+    // The server's word on the style, not the device's wish: an engine that
+    // takes no briefing answers "interpreter" whatever was asked.
+    const appliedStyle = parseStyle(mint.style) ?? DEFAULT_INTERPRETER_STYLE;
+    tally = { ...emptyInterpreterTally(engine, mint.model ?? "", Date.now(), tickets.length), style: appliedStyle };
+    timeline = opts.diagnostics ? createSessionTimeline({ engine, model: mint.model ?? "" }) : null;
+    const timelineFor = (ticket: LegTicket, index: number): LegTimeline | null => {
+      const leg =
+        timeline?.leg(index, { source: ticket.source, target: ticket.target, transport: ticket.transport }) ?? null;
+      if (micSettings) leg?.note("mic-settings", { cfg: micSettings });
+      return leg;
+    };
+    // One per session: every socket leg reports its playback here, so a leg
+    // knows when ANOTHER leg's voice is in the room. Enforced (mic silenced,
+    // speech_started no longer a barge-in) only where the engine asks for it;
+    // everywhere else it only feeds the timeline's `spk` tag.
+    const duplex = createHalfDuplex();
+    const halfDuplex = engineIsHalfDuplex(engine);
+
+    const shared = createSharedHeard();
+    const peers = createPeerHeard();
+    // Gate a leg's speaker on WORDS only where a second leg is listening to
+    // the same sentence and told to keep quiet (see LegSink.gate). Every
+    // briefed two-leg engine: the quiet leg of each one "says" something that
+    // is not words — wordless frames (OpenAI), `<no speech>` (Gemini), a
+    // silence token or an echo (ElevenLabs).
+    const gated =
+      tickets.length > 1 &&
+      (engine === "openai-realtime" ||
+        engine === "gemini-live" ||
+        engine === "grok-voice" ||
+        engine === "elevenlabs-realtime");
+    // ElevenLabs, two legs: when one leg takes a turn, the OTHER legs forget
+    // what they were holding. Its semantic turn-taking lets the quiet leg
+    // decline to answer the other person's language — and then keeps that
+    // audio and glues it onto its next turn, so the Spanish→English leg, after
+    // three English sentences, repeated all three before interpreting, the
+    // echo guard refused the lot, and the Spanish speaker was never heard in
+    // English at all. Measured (lib/interpreter/session.ts has the table):
+    // Spanish→English went from 0 of 4 lines to 17 of 20. Better, not fixed.
+    //
+    // What it costs: a reply that begins in the second or so between one
+    // person finishing and their interpretation starting loses its first
+    // words on the leg being cleared. ElevenLabs offers nothing gentler — its
+    // mint refuses `server_vad`, and a forced commit made the quiet leg
+    // invent lines.
+    const clearPeersOnTurn = engine === "elevenlabs-realtime" && tickets.length > 1;
+
+    const sinkFor = (
+      index: number,
+      setAudible: (open: boolean) => void,
+      flush: () => void,
+      dropHeld: () => void = () => {}
+    ): LegSink => ({
+      caption: (update) => {
+        if (!stopped) handlers.onCaption(update);
+      },
+      activity: () => {
+        if (!stopped) handlers.onActivity();
+      },
+      usage: (usage) => publish(addUsage(tally, usage)),
+      geminiUsage: (usage) => publish(addGeminiUsage(tally, usage)),
+      transcribed: (seconds) =>
+        publish({ ...tally, transcribedSeconds: tally.transcribedSeconds + Math.max(0, seconds) }),
+      billed: (seconds) => {
+        billedByLeg.set(index, Math.max(billedByLeg.get(index) ?? 0, seconds));
+        publish(tally);
+      },
+      bargeIn: () => publish({ ...tally, bargeIns: tally.bargeIns + 1 }),
+      gate: (open) => {
+        if (gated) setAudible(open);
+      },
+      flushAudio: flush,
+      responseSilent: () => {
+        if (gated) dropHeld();
+      },
+      error: (message) => {
+        publish({ ...tally, errors: tally.errors + 1 });
+        if (!stopped) handlers.onError(message);
+      },
+      closed: () => {
+        if (!stopped) handlers.onLegLost();
+      },
+      // "start": this leg has the utterance. "done": it finished uncut, so
+      // nobody has spoken since — which also sweeps up what the other leg's
+      // transcriber only finished writing after the first clear.
+      tookTurn: () => {
+        if (!clearPeersOnTurn || stopped) return;
+        for (const [other, leg] of legByIndex) if (other !== index) leg.clearInput?.();
+      }
+    });
+
+    const connectLeg = (ticket: LegTicket, index: number): Promise<Leg> => {
+      const identity: LegIdentity = { index, source: ticket.source, target: ticket.target };
+      const legTimeline = timelineFor(ticket, index);
+      if (ticket.transport === "gemini-ws") {
+        return connectGeminiLeg({
+          ticket,
+          identity,
+          micTrack,
+          timeline: legTimeline,
+          makeReader: (sink) => createGeminiReader(identity, sink, shared, { ownsHeard: index === 0 }),
+          sinkFor: (setAudible, flush, dropHeld) => sinkFor(index, setAudible, flush, dropHeld),
+          startHeld: gated,
+          remint: async () => {
+            const again = await mintSession(engine, mine, theirs, style);
+            const next = again.legs?.[index];
+            if (!next || next.transport !== "gemini-ws") throw new Error("Could not reconnect.");
+            return next.wsUrl;
+          },
+          onLost: () => {
+            if (!stopped) handlers.onLegLost();
+          },
+          isStopped: () => stopped
+        });
+      }
+      if (ticket.transport === "realtime-ws") {
+        return connectRealtimeWsLeg({
+          ticket,
+          identity,
+          micTrack,
+          timeline: legTimeline,
+          makeReader: (sink) =>
+            createRealtimeReader(identity, sink, {
+              // The cascade that answers in the wrong language by repeating.
+              echoGuard: engine === "elevenlabs-realtime" && tickets.length > 1,
+              peers
+            }),
+          sinkFor: (setAudible, flush, dropHeld) => sinkFor(index, setAudible, flush, dropHeld),
+          startHeld: gated,
+          duplex,
+          halfDuplex,
+          remint: async () => {
+            const again = await mintSession(engine, mine, theirs, style);
+            const next = again.legs?.[index];
+            if (!next || next.transport !== "realtime-ws") throw new Error("Could not reconnect.");
+            return next;
+          },
+          onLost: () => {
+            if (!stopped) handlers.onLegLost();
+          },
+          isStopped: () => stopped
+        });
+      }
+      return connectWebRtcLeg({
+        ticket,
+        identity,
+        micTrack,
+        timeline: legTimeline,
+        mine,
+        theirs,
+        style,
+        startMuted: gated,
+        makeReader: (sink) =>
+          engine === "openai-realtime"
+            ? createRealtimeReader(identity, sink)
+            : createStreamReader(identity, sink, shared, { ownsHeard: index === 0 }),
+        sinkFor: (setAudible) => sinkFor(index, setAudible, () => {}),
+        graceful: engine !== "openai-realtime",
+        onLost: () => {
+          if (!stopped) handlers.onLegLost();
+        }
+      });
+    };
+
+    const connect = (ticket: LegTicket, index: number): Promise<Leg> =>
+      connectLeg(ticket, index).then((leg) => {
+        legByIndex.set(index, leg);
+        return leg;
+      });
+
+    const settled = await Promise.allSettled(tickets.map(connect));
+    legs = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) {
+      throw failed.reason instanceof Error ? failed.reason : new Error("Could not connect the interpreter.");
+    }
+
+    ticker = window.setInterval(() => {
+      const nowMs = Date.now();
+      for (const leg of legs) leg.tick(nowMs);
+    }, TICK_MS);
+
+    return {
+      engine,
+      model: mint.model ?? "",
+      style: appliedStyle,
+      legs: legs.length,
+      maxSeconds: typeof mint.maxSeconds === "number" && mint.maxSeconds > 0 ? mint.maxSeconds : 1800,
+      idleSeconds: typeof mint.idleSeconds === "number" && mint.idleSeconds > 0 ? mint.idleSeconds : 60,
+      briefing: mint.briefing ?? { applied: false, contextChars: 0, contextStatus: "unavailable" },
+      tally: currentTally,
+      timeline: () => timeline?.export() ?? null,
+      stop
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
+// ── WebRTC legs: gpt-realtime-2.1, gpt-realtime-translate, gpt-live-1 ──────
+
+async function connectWebRtcLeg(opts: {
+  ticket: Extract<LegTicket, { transport: "openai-webrtc" | "openai-live-relay" }>;
+  identity: LegIdentity;
+  micTrack: MediaStreamTrack;
+  timeline: LegTimeline | null;
+  mine: string;
+  theirs: string;
+  style: InterpreterStyle;
+  startMuted: boolean;
+  makeReader: (sink: LegSink) => LegReader;
+  sinkFor: (setAudible: (open: boolean) => void) => LegSink;
+  /** Send `session.close` and wait for the provider's last word before hanging up. */
+  graceful: boolean;
+  onLost: () => void;
+}): Promise<Leg> {
+  const { ticket } = opts;
+  const pc = new RTCPeerConnection();
+  const audioEl = hiddenAudio();
+  audioEl.muted = opts.startMuted;
+  // Each leg gets its OWN copy of the mic track: two peer connections cannot
+  // share one, and stopping a clone leaves the microphone to the others.
+  const track = opts.micTrack.clone();
+  const connectedAt = Date.now();
+  let closed = false;
+  let sawClosed: (() => void) | null = null;
+
+  const sink = opts.sinkFor((open) => {
+    if (open && audioEl.muted) opts.timeline?.note("gate-open");
+    audioEl.muted = !open;
+  });
+  const reader = opts.makeReader({
+    ...sink,
+    closed: () => {
+      sawClosed?.();
+      if (!closed) sink.closed();
+    }
+  });
+
+  const teardown = () => {
+    try {
+      pc.close();
+    } catch {
+      /* ignore */
+    }
+    track.stop();
+    audioEl.srcObject = null;
+    audioEl.remove();
+  };
+
+  try {
+    pc.ontrack = (ev) => {
+      audioEl.srcObject = ev.streams[0] ?? new MediaStream([ev.track]);
+      void audioEl.play().catch(() => {
+        /* autoplay refused: the captions still run, and Start was a tap */
+      });
+    };
+    pc.addTrack(track, new MediaStream([track]));
+    pc.onconnectionstatechange = () => {
+      opts.timeline?.note(`pc-${pc.connectionState}`);
+      if (closed) return;
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") opts.onLost();
+    };
+
+    const dc = pc.createDataChannel("oai-events");
+    dc.onmessage = ({ data }) => {
+      try {
+        const raw = String(data);
+        const msg = JSON.parse(raw) as Record<string, unknown>;
+        opts.timeline?.recv(msg, raw.length);
+        reader.handle(msg);
+      } catch {
+        /* a frame we cannot read is not a reason to end a dinner */
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    let answer: string;
+    if (ticket.transport === "openai-webrtc") {
+      const res = await fetch(ticket.callUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ticket.clientSecret}`, "Content-Type": "application/sdp" },
+        body: offer.sdp ?? ""
+      });
+      if (!res.ok) {
+        const details = await res.text().catch(() => "");
+        throw new Error(`Interpreter connection failed (${res.status}). ${details.slice(0, 200)}`);
+      }
+      answer = await res.text();
+    } else {
+      // GPT-Live: our server exchanges the offer (…/interpreter/live).
+      const res = await fetch(ticket.relayUrl, {
+        method: "POST",
+        headers: await jsonAuthHeaders(),
+        body: JSON.stringify({
+          sdp: offer.sdp ?? "",
+          leg: ticket.leg,
+          mine: opts.mine,
+          theirs: opts.theirs,
+          style: opts.style
+        })
+      });
+      const body = (await res.json().catch(() => ({}))) as { sdp?: string; error?: string; details?: string };
+      if (!res.ok || !body.sdp) {
+        throw new Error(body.details || body.error || `Interpreter connection failed (${res.status}).`);
+      }
+      answer = body.sdp;
+    }
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+
+    await new Promise<void>((resolve, reject) => {
+      if (dc.readyState === "open") {
+        resolve();
+        return;
+      }
+      const timeout = window.setTimeout(
+        () => reject(new Error("The interpreter did not connect in time — try again.")),
+        CONNECT_TIMEOUT_MS
+      );
+      dc.addEventListener(
+        "open",
+        () => {
+          window.clearTimeout(timeout);
+          resolve();
+        },
+        { once: true }
+      );
+      pc.addEventListener("connectionstatechange", () => {
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+          window.clearTimeout(timeout);
+          reject(new Error("The interpreter connection failed — try again."));
+        }
+      });
+    });
+
+    return {
+      tick: reader.tick,
+      connectedSeconds: () => Math.max(0, (Date.now() - connectedAt) / 1000),
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        if (opts.graceful && dc.readyState === "open") {
+          // Ask, then wait briefly for `session.closed` — it carries the
+          // session's final billed seconds.
+          await new Promise<void>((resolve) => {
+            const timer = window.setTimeout(resolve, CLOSE_GRACE_MS);
+            sawClosed = () => {
+              window.clearTimeout(timer);
+              resolve();
+            };
+            try {
+              dc.send(JSON.stringify({ type: "session.close" }));
+            } catch {
+              window.clearTimeout(timer);
+              resolve();
+            }
+          });
+        }
+        teardown();
+      }
+    };
+  } catch (error) {
+    closed = true;
+    teardown();
+    throw error;
+  }
+}
+
+// ── Gemini Live leg: a socket, PCM in, PCM out ─────────────────────────────
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Plays 24 kHz s16 chunks back to back. Routed through an <audio> element
+ * (not straight to the context's destination) so it is page audio like the
+ * WebRTC legs' — which is what the echo canceller is listening for.
+ */
+function createPcmPlayer(
+  rate: number = GEMINI_OUT_RATE,
+  /** Told when audio is scheduled (until when, wall clock) and when it is cut. */
+  watch?: { playing: (untilMs: number) => void; cut: () => void }
+): { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void } | null {
+  const ctx = ensureTabletopAudioContext();
+  if (!ctx || typeof ctx.createMediaStreamDestination !== "function") return null;
+  const out = ctx.createMediaStreamDestination();
+  const el = hiddenAudio();
+  el.srcObject = out.stream;
+  void el.play().catch(() => {});
+  let nextAt = 0;
+  let sources: AudioBufferSourceNode[] = [];
+  return {
+    play: (bytes) => {
+      const samples = Math.floor(bytes.length / 2);
+      if (!samples) return;
+      const buffer = ctx.createBuffer(1, samples, rate);
+      const channel = buffer.getChannelData(0);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, samples * 2);
+      for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 0x8000;
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(out);
+      const at = Math.max(ctx.currentTime + 0.02, nextAt);
+      source.start(at);
+      nextAt = at + buffer.duration;
+      if (watch) {
+        // Until the last sample has left the DEVICE, where the context can say.
+        const latency = typeof ctx.outputLatency === "number" && Number.isFinite(ctx.outputLatency) ? ctx.outputLatency : 0;
+        watch.playing(Date.now() + (nextAt - ctx.currentTime + latency) * 1000);
+      }
+      sources.push(source);
+      source.onended = () => {
+        sources = sources.filter((s) => s !== source);
+      };
+    },
+    flush: () => {
+      for (const s of sources) {
+        try {
+          s.stop();
+        } catch {
+          /* already ended */
+        }
+      }
+      sources = [];
+      nextAt = 0;
+      watch?.cut();
+    },
+    close: () => {
+      el.srcObject = null;
+      el.remove();
+      try {
+        out.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+}
+
+type PcmPlayer = { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void };
+
+/**
+ * A socket leg's speaker with the gate in front of it (lib/interpreter/
+ * audioGate.ts — pure, so the tests and the live probe run the same gate).
+ */
+function createGatedPlayer(player: PcmPlayer, startHeld: boolean, timeline: LegTimeline | null) {
+  const gate = createAudioGate<Uint8Array>(player, startHeld, {
+    onOpen: () => timeline?.note("gate-open"),
+    onDropped: (bytes) => timeline?.note("held-dropped", { bytes })
+  });
+  return {
+    ...gate,
+    close: () => {
+      gate.flush();
+      player.close();
+    }
+  };
+}
+
+// ── Realtime-over-WebSocket legs: Grok Voice, ElevenLabs Realtime ──────────
+// Both speak the OpenAI Realtime wire protocol, and neither has WebRTC — so
+// the microphone goes up as PCM events and the voice comes down as PCM events,
+// the way Gemini's does, while the EVENTS are read by the same reader as the
+// flagship's (lib/interpreter/legEvents.ts, createRealtimeReader).
+
+type RealtimeWsTicket = Extract<LegTicket, { transport: "realtime-ws" }>;
+
+async function connectRealtimeWsLeg(opts: {
+  ticket: RealtimeWsTicket;
+  identity: LegIdentity;
+  micTrack: MediaStreamTrack;
+  timeline: LegTimeline | null;
+  makeReader: (sink: LegSink) => LegReader;
+  sinkFor: (setAudible: (open: boolean) => void, flush: () => void, dropHeld: () => void) => LegSink;
+  startHeld: boolean;
+  /** The session's playback clock (lib/interpreter/halfDuplex.ts). */
+  duplex: HalfDuplex;
+  /** Enforce it: silence the mic while any leg plays, and never cut on speech_started. */
+  halfDuplex: boolean;
+  /** A fresh ticket for this leg (a client secret opens ONE session). */
+  remint: () => Promise<RealtimeWsTicket>;
+  onLost: () => void;
+  isStopped: () => boolean;
+}): Promise<Leg> {
+  const { duplex, halfDuplex } = opts;
+  const legIndex = opts.identity.index;
+  const raw = createPcmPlayer(opts.ticket.outputRate, {
+    playing: (untilMs) => duplex.playing(legIndex, untilMs),
+    cut: () => duplex.cut(legIndex, Date.now())
+  });
+  if (!raw) throw new Error("This browser cannot play the interpreter's audio.");
+  const tl = opts.timeline;
+  const player = createGatedPlayer(raw, opts.startHeld, tl);
+  const track = opts.micTrack.clone();
+  const connectedAt = Date.now();
+  const reader = opts.makeReader(
+    opts.sinkFor(
+      (open) => {
+        // Half-duplex never shuts the gate mid-reply (see gateFollows).
+        if (gateFollows(open, halfDuplex)) player.setAudible(open);
+      },
+      player.flush,
+      player.dropHeld
+    )
+  );
+  /** One 100 ms chunk of silence, as the frame the mic would have sent. */
+  let silentFrame: { samples: number; frame: string; bytes: number } | null = null;
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let tap: MicPcmTap | null = null;
+
+  const open = (ticket: RealtimeWsTicket): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(ticket.wsUrl, ticket.protocols);
+      ws = socket;
+      let ready = false;
+      let updateSent = false;
+      /** The session.update was already re-sent without `reasoning`. */
+      let updateRetried = false;
+      const sendUpdate = (session: Record<string, unknown>) => {
+        const frame = JSON.stringify({ type: "session.update", session });
+        socket.send(frame);
+        tl?.sent("session.update", frame.length);
+      };
+      socket.onopen = () => tl?.note("socket-open");
+      const timeout = window.setTimeout(() => {
+        if (ready) return;
+        tl?.note("socket-timeout");
+        // Opened (or not) and never started a session: abandon this socket.
+        if (ws === socket) ws = null;
+        try {
+          socket.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error("The interpreter did not connect in time — try again."));
+      }, WS_SESSION_TIMEOUT_MS);
+      socket.onmessage = (ev) => {
+        if (ws !== socket) return;
+        let msg: Record<string, unknown>;
+        const raw = String(ev.data);
+        try {
+          msg = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        const type = typeof msg.type === "string" ? msg.type : "";
+        tl?.recv(
+          msg,
+          raw.length,
+          type === "input_audio_buffer.speech_started" ? { speaker: duplex.micMuted(Date.now()) } : undefined
+        );
+        if (type === "session.created" && !ready) {
+          // Grok: instructions, voice and turn detection can only be set
+          // here. ElevenLabs: null — its session was locked in at the mint.
+          if (ticket.sessionUpdate) {
+            sendUpdate(ticket.sessionUpdate);
+            updateSent = true;
+          } else {
+            ready = true;
+            window.clearTimeout(timeout);
+            resolve();
+          }
+          return;
+        }
+        // xAI confirms the browser-supplied briefing and audio settings with
+        // session.updated. Do not send microphone audio before that contract
+        // is active (its official live-interpreter recipe does the same).
+        if (type === "session.updated" && updateSent && !ready) {
+          ready = true;
+          window.clearTimeout(timeout);
+          resolve();
+          return;
+        }
+        // The update was refused before it took. The one field in it that was
+        // not there when this handshake last worked at a table is `reasoning`
+        // (added 2026-11-09, untested against xAI — no key on the build
+        // machine): send it again without, once, rather than lose the session.
+        if (type === "error" && updateSent && !ready && !updateRetried && ticket.sessionUpdate?.reasoning) {
+          updateRetried = true;
+          const { reasoning: _dropped, ...rest } = ticket.sessionUpdate;
+          void _dropped;
+          tl?.note("update-retry");
+          sendUpdate(rest);
+          return;
+        }
+        // A new reply shuts the gate; a BARGE-IN stops what is playing and
+        // drops what is held. What counts as a barge-in differs by duplex —
+        // speech_started (full) or the provider's own cancellation (half):
+        // lib/interpreter/halfDuplex.ts, speakerActionFor.
+        const action = speakerActionFor(msg, halfDuplex);
+        if (action === "rearm") player.rearm();
+        else if (action === "cut") {
+          if (halfDuplex) tl?.note("speaker-cut");
+          player.flush();
+        }
+        if (type === "response.output_audio.delta" || type === "response.audio.delta") {
+          const data = msg.delta;
+          if (typeof data === "string" && data) player.play(base64ToBytes(data));
+        }
+        reader.handle(msg);
+      };
+      socket.onclose = (ev) => {
+        tl?.note("socket-close", { reason: ev.code });
+        if (ws !== socket) return;
+        window.clearTimeout(timeout);
+        ws = null;
+        if (!ready) {
+          reject(new Error("The interpreter connection failed — try again."));
+          return;
+        }
+        if (closed || opts.isStopped()) return;
+        opts.onLost();
+      };
+    });
+
+  try {
+    let ticket = opts.ticket;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await open(ticket);
+        break;
+      } catch (error) {
+        if (attempt >= WS_CONNECT_ATTEMPTS || opts.isStopped()) throw error;
+        tl?.note("remint");
+        ticket = await opts.remint();
+      }
+    }
+    tap = tapMicPcm(
+      track,
+      (pcm) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        // Drop, never queue: a backed-up socket must not turn into latency.
+        if (ws.bufferedAmount > 96 * 1024) {
+          tl?.note("mic-dropped", { bytes: pcm.length * 2 });
+          return;
+        }
+        if (halfDuplex && duplex.micMuted(Date.now())) {
+          // Our own voice is in the room: send the same 100 ms as SILENCE, so
+          // the provider's clock keeps running and its turn detection sees a
+          // pause — and nothing of what the speaker is saying.
+          if (!silentFrame || silentFrame.samples !== pcm.length) {
+            const quiet = bytesToBase64(s16ToLeBytes(new Int16Array(pcm.length)));
+            silentFrame = {
+              samples: pcm.length,
+              frame: JSON.stringify({ type: "input_audio_buffer.append", audio: quiet }),
+              bytes: pcm.length * 2
+            };
+          }
+          ws.send(silentFrame.frame);
+          tl?.note("mic-muted", { bytes: silentFrame.bytes, ms: Math.round((pcm.length / ticket.inputRate) * 1000) });
+          return;
+        }
+        const audio = bytesToBase64(s16ToLeBytes(pcm));
+        const frame = JSON.stringify({ type: "input_audio_buffer.append", audio });
+        ws.send(frame);
+        tl?.sent("input_audio_buffer.append", frame.length, base64Bytes(audio));
+      },
+      ticket.inputRate
+    );
+    if (!tap) throw new Error("This browser cannot stream the microphone to the interpreter.");
+    return {
+      tick: reader.tick,
+      connectedSeconds: () => Math.max(0, (Date.now() - connectedAt) / 1000),
+      clearInput: () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(CLEAR_INPUT_FRAME);
+        tl?.sent("input_audio_buffer.clear", CLEAR_INPUT_FRAME.length);
+      },
+      close: async () => {
+        closed = true;
+        tap?.release();
+        tap = null;
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+        ws = null;
+        player.close();
+        track.stop();
+      }
+    };
+  } catch (error) {
+    closed = true;
+    tap?.release();
+    try {
+      (ws as WebSocket | null)?.close();
+    } catch {
+      /* ignore */
+    }
+    player.close();
+    track.stop();
+    throw error;
+  }
+}
+
+async function connectGeminiLeg(opts: {
+  ticket: Extract<LegTicket, { transport: "gemini-ws" }>;
+  identity: LegIdentity;
+  micTrack: MediaStreamTrack;
+  timeline: LegTimeline | null;
+  makeReader: (sink: LegSink) => LegReader;
+  sinkFor: (setAudible: (open: boolean) => void, flush: () => void, dropHeld: () => void) => LegSink;
+  /** Hold audio until the transcript has words (a two-leg table). */
+  startHeld: boolean;
+  /** A fresh one-use socket URL for this leg. */
+  remint: () => Promise<string>;
+  onLost: () => void;
+  isStopped: () => boolean;
+}): Promise<Leg> {
+  const rawPlayer = createPcmPlayer();
+  if (!rawPlayer) throw new Error("This browser cannot play Gemini's audio.");
+  // Gemini's quiet leg answers the other person's language with `<no speech>`
+  // — and with audio frames for it (Tom's table, 2026-11-09). Held and dropped.
+  const player = createGatedPlayer(rawPlayer, opts.startHeld, opts.timeline);
+  const track = opts.micTrack.clone();
+  const connectedAt = Date.now();
+  const reader = opts.makeReader(opts.sinkFor(player.setAudible, player.flush, player.dropHeld));
+  let ws: WebSocket | null = null;
+  let ready = false;
+  let closed = false;
+  let reconnects = 0;
+  let tap: MicPcmTap | null = null;
+
+  const open = (url: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      ws = socket;
+      ready = false;
+      const timeout = window.setTimeout(() => {
+        if (!ready) reject(new Error("Gemini did not answer in time."));
+      }, CONNECT_TIMEOUT_MS);
+      // Model, voice and briefing are all inside the token.
+      socket.onopen = () => socket.send(JSON.stringify({ setup: {} }));
+      socket.onmessage = (ev) => {
+        if (ws !== socket) return;
+        let msg: Record<string, unknown>;
+        try {
+          const raw = typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer);
+          msg = JSON.parse(raw) as Record<string, unknown>;
+          // Gemini's messages have no `type`: their top-level key is the kind
+          // (setupComplete, serverContent, usageMetadata, goAway …).
+          opts.timeline?.recv({ type: `gemini.${Object.keys(msg).sort().join("+")}` }, raw.length);
+        } catch {
+          return;
+        }
+        if (msg.setupComplete) {
+          window.clearTimeout(timeout);
+          ready = true;
+          resolve();
+          return;
+        }
+        const content = msg.serverContent as { modelTurn?: { parts?: { inlineData?: { data?: string } }[] } } | undefined;
+        for (const part of content?.modelTurn?.parts ?? []) {
+          const data = part?.inlineData?.data;
+          if (typeof data === "string" && data) player.play(base64ToBytes(data));
+        }
+        reader.handle(msg);
+      };
+      socket.onclose = (ev) => {
+        opts.timeline?.note("socket-close", { reason: ev.code });
+        if (ws !== socket) return;
+        window.clearTimeout(timeout);
+        const wasReady = ready;
+        ws = null;
+        ready = false;
+        if (!wasReady) {
+          reject(new Error(`Gemini closed the connection (${ev.code}).`));
+          return;
+        }
+        if (closed || opts.isStopped()) return;
+        // The ~10-minute socket limit (goAway), or a drop. Open a fresh one;
+        // the briefing rides in the new token, so the interpreter loses only
+        // its short memory of the conversation.
+        if (reconnects >= MAX_GEMINI_RECONNECTS) {
+          opts.onLost();
+          return;
+        }
+        reconnects += 1;
+        void opts
+          .remint()
+          .then((next) => open(next))
+          .catch(() => opts.onLost());
+      };
+    });
+
+  try {
+    await open(opts.ticket.wsUrl);
+    tap = tapMicPcm(track, (pcm) => {
+      if (!ws || !ready || ws.readyState !== WebSocket.OPEN) return;
+      // Drop, never queue: a backed-up socket must not turn into latency.
+      if (ws.bufferedAmount > 64 * 1024) return;
+      ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            audio: { data: bytesToBase64(s16ToLeBytes(pcm)), mimeType: `audio/pcm;rate=${PCM_IN_RATE}` }
+          }
+        })
+      );
+    });
+    if (!tap) throw new Error("This browser cannot stream the microphone to Gemini.");
+    return {
+      tick: reader.tick,
+      connectedSeconds: () => Math.max(0, (Date.now() - connectedAt) / 1000),
+      close: async () => {
+        closed = true;
+        tap?.release();
+        tap = null;
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+        ws = null;
+        player.close();
+        track.stop();
+      }
+    };
+  } catch (error) {
+    closed = true;
+    tap?.release();
+    try {
+      (ws as WebSocket | null)?.close();
+    } catch {
+      /* ignore */
+    }
+    player.close();
+    track.stop();
+    throw error;
+  }
+}

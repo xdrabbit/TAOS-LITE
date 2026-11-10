@@ -469,7 +469,52 @@ const EN = {
   redoFirst: "First",
   redoSecond: "Redo",
   redoFailed: "Could not redo. Try again.",
-  redoGone: "That turn's clip is not kept yet — try again in a moment."
+  redoGone: "That turn's clip is not kept yet — try again in a moment.",
+
+  // ── Tabletop Interpreter mode — continuous, hands-free ────────────────────
+  // Founders-only spike (2026-11-09), behind TAOS_INTERPRETER_ENABLED: one
+  // tap starts an interpreter that sits between the two people at the table
+  // and speaks each one's words in the other's language — no talk button.
+  // Engine names on the picker are brand names and are not in this table.
+  // The Spanish strings are PLACEHOLDERS marked "pendiente de revisión por
+  // Liz" — an agent wrote them and nobody who reads Spanish has checked them.
+  interpreterMode: "Interpreter",
+  interpreterStart: "Start interpreter",
+  interpreterStop: "Stop",
+  interpreterHint: "Just talk. It interprets for both of you — no button.",
+  interpreterListening: "Listening to both of you…",
+  interpreterBackToTable: "Back to the table",
+  interpreterEngine: "Engine",
+  interpreterContext: "What the interpreter knows",
+  interpreterContextHint:
+    "Names, nicknames, family, your everyday words. It reads this at the start of every session. Kept private — never in the app's code.",
+  interpreterContextSave: "Save",
+  interpreterContextSaved: "Saved",
+  interpreterContextSaveFailed: "Could not save. Try again.",
+  interpreterContextMissing: "Not ready yet: the database table for this has not been created.",
+  interpreterContextNotUsed: "This engine cannot be briefed — it interprets without your notes.",
+  interpreterEndedCap: "Session limit reached ({minutes} min). Start again to keep going.",
+  interpreterEndedIdle: "Stopped after a quiet minute. Start again to keep going.",
+  interpreterEndedError: "The interpreter lost its connection. Start again.",
+  // Follow-up, same day (Tom, after the first table test): an engine whose
+  // key is not on the server says WHICH variable is missing, and the
+  // experimental Mediator style. `interpreterMediatorNote` is also the phrase
+  // the mediator SAYS before a note (lib/interpreter/mediator.ts) — the
+  // captions split on it, so it must stay a short, distinctive phrase.
+  interpreterEngineNoKey: "This engine is not set up yet: {name} is missing on the server.",
+  // Founder diagnostics (lib/interpreter/timeline.ts): event types, times and
+  // sizes of a session — never a word, never audio.
+  interpreterDiag: "Diagnostics",
+  interpreterDiagSave: "Save timeline",
+  interpreterDiagHint: "Event types and timings only — no words, no audio.",
+  interpreterStyle: "Style",
+  interpreterStyleInterpreter: "Interpreter",
+  interpreterStyleMediator: "Mediator (experimental)",
+  interpreterStyleInterpreterHint: "Faithful to what was said, and silent otherwise.",
+  interpreterStyleMediatorHint:
+    "Still interprets everything. May briefly speak up, in both languages, only when the meaning is at risk — and answers if you ask it directly. Never takes sides, never gives advice.",
+  interpreterStyleNotOnEngine: "This engine cannot be briefed, so it is always a plain interpreter.",
+  interpreterMediatorNote: "Mediator note"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -848,7 +893,40 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     reviewIssueInvented: "inventado", // pendiente de revisión por Liz
     reviewIssueWrongWord: "palabra equivocada", // pendiente de revisión por Liz
     reviewIssueWrongRegister: "registro equivocado", // pendiente de revisión por Liz
-    reviewIssueOther: "otro" // pendiente de revisión por Liz
+    reviewIssueOther: "otro", // pendiente de revisión por Liz
+
+    // ── Modo intérprete de la mesa — PLACEHOLDERS escritos por un agente el
+    // 9/11. Cada línea: pendiente de revisión por Liz. ──
+    interpreterMode: "Intérprete", // pendiente de revisión por Liz
+    interpreterStart: "Iniciar intérprete", // pendiente de revisión por Liz
+    interpreterStop: "Detener", // pendiente de revisión por Liz
+    interpreterHint: "Solo hablen. Interpreta para los dos — sin botón.", // pendiente de revisión por Liz
+    interpreterListening: "Escuchando a los dos…", // pendiente de revisión por Liz
+    interpreterBackToTable: "Volver a la mesa", // pendiente de revisión por Liz
+    interpreterEngine: "Motor", // pendiente de revisión por Liz
+    interpreterContext: "Lo que sabe el intérprete", // pendiente de revisión por Liz
+    interpreterContextHint:
+      "Nombres, apodos, familia, sus palabras de todos los días. Lo lee al empezar cada sesión. Se guarda en privado — nunca en el código de la app.", // pendiente de revisión por Liz
+    interpreterContextSave: "Guardar", // pendiente de revisión por Liz
+    interpreterContextSaved: "Guardado", // pendiente de revisión por Liz
+    interpreterContextSaveFailed: "No se pudo guardar. Intenta de nuevo.", // pendiente de revisión por Liz
+    interpreterContextMissing: "Aún no está listo: falta crear la tabla en la base de datos.", // pendiente de revisión por Liz
+    interpreterContextNotUsed: "Este motor no admite instrucciones — interpreta sin sus notas.", // pendiente de revisión por Liz
+    interpreterEndedCap: "Se llegó al límite de la sesión ({minutes} min). Inicia de nuevo para seguir.", // pendiente de revisión por Liz
+    interpreterEndedIdle: "Se detuvo tras un minuto de silencio. Inicia de nuevo para seguir.", // pendiente de revisión por Liz
+    interpreterEndedError: "El intérprete perdió la conexión. Inicia de nuevo.", // pendiente de revisión por Liz
+    interpreterEngineNoKey: "Este motor aún no está configurado: falta {name} en el servidor.", // pendiente de revisión por Liz
+    interpreterDiag: "Diagnóstico", // pendiente de revisión por Liz
+    interpreterDiagSave: "Guardar registro", // pendiente de revisión por Liz
+    interpreterDiagHint: "Solo tipos de evento y tiempos: ni palabras ni audio.", // pendiente de revisión por Liz
+    interpreterStyle: "Estilo", // pendiente de revisión por Liz
+    interpreterStyleInterpreter: "Intérprete", // pendiente de revisión por Liz
+    interpreterStyleMediator: "Mediador (experimental)", // pendiente de revisión por Liz
+    interpreterStyleInterpreterHint: "Fiel a lo que se dijo, y en silencio lo demás.", // pendiente de revisión por Liz
+    interpreterStyleMediatorHint:
+      "Sigue interpretando todo. Puede intervenir brevemente, en los dos idiomas, solo cuando el significado está en riesgo — y responde si le preguntan directamente. Nunca toma partido, nunca da consejos.", // pendiente de revisión por Liz
+    interpreterStyleNotOnEngine: "Este motor no admite instrucciones, así que siempre es un intérprete simple.", // pendiente de revisión por Liz
+    interpreterMediatorNote: "Nota del mediador" // pendiente de revisión por Liz
   },
 
   // ── Written by nobody here since ────────────────────────────────────────
