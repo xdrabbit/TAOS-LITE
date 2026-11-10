@@ -18,7 +18,7 @@ import { createElement, type ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PAIR_STORAGE_KEY } from "@/lib/translate/pair";
 import { emptyInterpreterTally } from "@/lib/interpreter/cost";
-import { ENGINE_STORAGE_KEY, engineTakesBriefing, type InterpreterEngine } from "@/lib/interpreter/engine";
+import { ENGINE_STORAGE_KEY, engineTakesBriefing, INTERPRETER_ENGINES, type InterpreterEngine } from "@/lib/interpreter/engine";
 import { STYLE_STORAGE_KEY, type InterpreterStyle } from "@/lib/interpreter/mediator";
 import type { InterpreterHandlers } from "@/lib/interpreter/client";
 import { createSessionTimeline, DIAG_STORAGE_KEY, type TimelineExport } from "@/lib/interpreter/timeline";
@@ -423,8 +423,31 @@ describe("Interpreter mode", () => {
 });
 
 describe("the founder engine picker", () => {
-  it("offers all six engines and remembers the choice on this device", async () => {
+  // Production default since 2026-11-09 18:04 MT (Tom): Grok and ElevenLabs
+  // are hidden until the deployment names them.
+  it("offers the four stable engines by default — no Grok chip, no ElevenLabs chip", async () => {
     const { container } = await mountMode();
+    const chips = Array.from(container.querySelectorAll("[data-interpreter-engine]"));
+    expect(chips.map((c) => c.getAttribute("data-interpreter-engine"))).toEqual([
+      "openai-realtime",
+      "openai-live",
+      "openai-translate",
+      "gemini-live"
+    ]);
+    expect(container.querySelector('[data-interpreter-engine="openai-realtime"]')!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a device that stored a now-hidden engine opens on the default and starts THAT", async () => {
+    window.localStorage.setItem(ENGINE_STORAGE_KEY, "elevenlabs-realtime");
+    const { container } = await mountMode();
+    expect(container.querySelector('[data-interpreter-engine="elevenlabs-realtime"]')).toBeNull();
+    expect(container.querySelector('[data-interpreter-engine="openai-realtime"]')!.getAttribute("aria-pressed")).toBe("true");
+    await tapStart(container);
+    expect(fake.sessions[0].engine).toBe("openai-realtime");
+  });
+
+  it("offers all six engines where the deployment reveals them, and remembers the choice on this device", async () => {
+    const { container } = await mountMode({ engines: INTERPRETER_ENGINES });
     const chips = Array.from(container.querySelectorAll("[data-interpreter-engine]"));
     expect(chips.map((c) => c.getAttribute("data-interpreter-engine"))).toEqual([
       "openai-realtime",
@@ -479,7 +502,7 @@ describe("the founder Diagnostics chip", () => {
   }
 
   it("is on unless this device turned it off, and the session is started with it", async () => {
-    const { container } = await mountMode({ defaultEngine: "grok-voice" });
+    const { container } = await mountMode({ defaultEngine: "grok-voice", engines: INTERPRETER_ENGINES });
     expect(chip(container).getAttribute("aria-pressed")).toBe("true");
     await tapStart(container);
     expect(fake.sessions[0].diagnostics).toBe(true);
@@ -503,7 +526,7 @@ describe("the founder Diagnostics chip", () => {
 
   it("Stop posts the per-leg digest beside the summary — numbers and tokens, no words — and offers the timeline", async () => {
     fake.timeline = recorded();
-    const { container } = await mountMode({ defaultEngine: "grok-voice" });
+    const { container } = await mountMode({ defaultEngine: "grok-voice", engines: INTERPRETER_ENGINES });
     expect(container.querySelector("[data-interpreter-diag-save]")).toBeNull();
     await tapStart(container);
     await tapStart(container);

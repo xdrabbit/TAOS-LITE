@@ -6,6 +6,7 @@ import {
   interpreterMediatorEnabled
 } from "@/lib/interpreter/flag";
 import {
+  availableEngines,
   ENGINE_KEY_ENV,
   ENGINE_LABEL,
   engineApiKey,
@@ -202,7 +203,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   };
   // The picker's choice, or the deployment default. An unknown engine is a
   // default, never an error — the screen must not strand a dinner on a typo.
-  const engine = parseEngine(body.engine) ?? engineEnvDefault();
+  // An experimental engine this deployment has not switched on
+  // (TAOS_INTERPRETER_EXPERIMENTAL_ENGINES) is treated the same way: it is
+  // never minted, whatever a stale tab or a hand-written request asks for.
+  const requested = parseEngine(body.engine);
+  const engine = requested && availableEngines().includes(requested) ? requested : engineEnvDefault();
   const mine = typeof body.mine === "string" && isSupportedLanguageCode(body.mine) ? body.mine : "en";
   const rawTheirs =
     typeof body.theirs === "string" && isSupportedLanguageCode(body.theirs) ? body.theirs : "es";

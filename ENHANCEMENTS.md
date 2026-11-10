@@ -1206,6 +1206,20 @@ blank.
 
 ## Shipped
 
+- Tabletop Interpreter mode — `/tabletop` gets an **◉ Interpreter** chip:
+  continuous, hands-free, briefed interpreting between the two people at the
+  table, founders only, behind the server-only `TAOS_INTERPRETER_ENABLED`
+  (unset = no chip and every `/api/tabletop/interpreter` route 404s). After
+  Tom and Liz's table A/B on 2026-11-09, Realtime 2.1 (the default) and
+  GPT-Live are the keepers; Translate and Gemini stay selectable. Grok and
+  ElevenLabs are HIDDEN unless the deployment names them in
+  `TAOS_INTERPRETER_EXPERIMENTAL_ENGINES` (comma list; unset in Production) —
+  both degrade into a repeating "folding" sound on our WebSocket playback
+  path, and the mint route will not mint a hidden engine. 30-minute session
+  cap (`TAOS_INTERPRETER_MAX_MIN`), 60 s idle stop, one `[taos-interpreter]`
+  cost line per session. Migration `20261109_interpreter_context.sql` is
+  Tom's to apply (the mode runs without it, on the role alone) — 2026-11-09,
+  PR #124
 - Retired fast model replaced — `/fast`'s OpenAI fallback default moves from
   `gpt-4.1-nano` (shut down 2026-10-23) to `gpt-5.6-luna`;
   `OPENAI_FAST_MODEL` is still the override, and Production has it set to

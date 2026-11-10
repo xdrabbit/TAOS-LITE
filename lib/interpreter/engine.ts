@@ -94,9 +94,52 @@ export function parseEngine(raw: unknown): InterpreterEngine | null {
   return (INTERPRETER_ENGINES as readonly string[]).includes(v) ? (v as InterpreterEngine) : null;
 }
 
+// ── Experimental engines (Tom, 2026-11-09, the day the mode shipped) ────────
+// After an afternoon of A/B at the table: Realtime 2.1 and GPT-Live are the
+// keepers; Grok and ElevenLabs — the two engines on our own WebSocket PCM
+// playback path — degrade into a rapidly repeating "folding" sound. They stay
+// OUT of production until that is fixed: hidden unless the deployment names
+// them, in a SERVER-ONLY comma list:
+//
+//     TAOS_INTERPRETER_EXPERIMENTAL_ENGINES=grok-voice,elevenlabs-realtime
+//
+// Unset (the production default) → neither chip is rendered, a device that
+// stored one of them opens on the deployment default instead, and the mint
+// route will not mint one whatever the request says. Unknown names in the
+// list are ignored; naming a non-experimental engine changes nothing.
+export const EXPERIMENTAL_ENGINES: readonly InterpreterEngine[] = [
+  "grok-voice",
+  "elevenlabs-realtime"
+];
+
+/** The experimental engines this deployment has switched on. */
+export function experimentalEnginesShown(
+  raw: string | undefined = process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES
+): InterpreterEngine[] {
+  const named = new Set(
+    (raw ?? "")
+      .split(",")
+      .map((v) => v.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return EXPERIMENTAL_ENGINES.filter((e) => named.has(e));
+}
+
+/** Every engine this deployment offers, in picker order. */
+export function availableEngines(
+  raw: string | undefined = process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES
+): InterpreterEngine[] {
+  const shown = experimentalEnginesShown(raw);
+  return INTERPRETER_ENGINES.filter((e) => !EXPERIMENTAL_ENGINES.includes(e) || shown.includes(e));
+}
+
+/** What the picker shows when nobody passed it a list: no experimental engine. */
+export const STABLE_ENGINES: readonly InterpreterEngine[] = availableEngines("");
+
 /**
  * The deployment's default: TAOS_INTERPRETER_ENGINE. Anything else — unset, a
- * typo — is the flagship. Tom asked for cutting-edge; that is the default.
+ * typo, an experimental engine the deployment has not switched on — is the
+ * flagship. Tom asked for cutting-edge; that is the default.
  *
  * This is also THE one-variable switch Tom asked for on 2026-11-09 ("keep the
  * flagship as default for now; add gemini-live as a one-env-var switch"):
@@ -108,17 +151,29 @@ export function parseEngine(raw: unknown): InterpreterEngine | null {
  * picked keeps its pick (resolveEngine, below) — that is the table A/B.
  */
 export function engineEnvDefault(
-  raw: string | undefined = process.env.TAOS_INTERPRETER_ENGINE
+  raw: string | undefined = process.env.TAOS_INTERPRETER_ENGINE,
+  experimentalRaw: string | undefined = process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES
 ): InterpreterEngine {
-  return parseEngine(raw) ?? "openai-realtime";
+  const parsed = parseEngine(raw);
+  return parsed && availableEngines(experimentalRaw).includes(parsed) ? parsed : "openai-realtime";
 }
 
-/** THE selection rule: the device's stored choice wins, then the env default. */
+/**
+ * THE selection rule: the device's stored choice wins, then the env default —
+ * and neither may be an engine this deployment does not offer (`available`,
+ * from availableEngines(); omitted = every engine, for callers that have
+ * already filtered).
+ */
 export function resolveEngine(opts: {
   stored: unknown;
   envDefault: InterpreterEngine;
+  available?: readonly InterpreterEngine[];
 }): InterpreterEngine {
-  return parseEngine(opts.stored) ?? opts.envDefault;
+  const offered = opts.available ?? INTERPRETER_ENGINES;
+  const stored = parseEngine(opts.stored);
+  if (stored && offered.includes(stored)) return stored;
+  if (offered.includes(opts.envDefault)) return opts.envDefault;
+  return offered[0] ?? "openai-realtime";
 }
 
 /** Does this engine's session accept the briefing at all? */

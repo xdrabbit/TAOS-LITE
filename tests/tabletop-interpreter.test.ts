@@ -50,7 +50,10 @@ import {
   ENGINE_LABEL,
   engineApiKey,
   engineBillsByTheMinute,
+  availableEngines,
   engineEnvDefault,
+  EXPERIMENTAL_ENGINES,
+  experimentalEnginesShown,
   engineTakesBriefing,
   grokReasoning,
   INTERPRETER_ENGINES,
@@ -198,6 +201,7 @@ const ENV_KEYS = [
   "TAOS_INTERPRETER_ENABLED",
   "TAOS_INTERPRETER_MEDIATOR_ENABLED",
   "TAOS_INTERPRETER_ENGINE",
+  "TAOS_INTERPRETER_EXPERIMENTAL_ENGINES",
   "TAOS_INTERPRETER_MAX_MIN",
   "TAOS_INTERPRETER_IDLE_SEC",
   "TAOS_INTERPRETER_LEGS",
@@ -234,6 +238,9 @@ beforeEach(() => {
     delete process.env[k];
   }
   process.env.TAOS_INTERPRETER_ENABLED = "1";
+  // As on Preview: both experimental engines switched on, so the suites below
+  // can exercise them. "the experimental engines knob" is where it is unset.
+  process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES = "grok-voice,elevenlabs-realtime";
   process.env.OPENAI_API_KEY = "sk-test-openai";
   process.env.GEMINI_API_KEY = "test-gemini-key";
   process.env.XAI_API_KEY = "xai-test-key";
@@ -401,6 +408,92 @@ describe("the gate: flag + session + founder, on every route", () => {
 });
 
 // ── the engine switch ──────────────────────────────────────────────────────
+
+// Tom, 2026-11-09 18:04 MT, shipping the mode to production: "Grok and
+// ElevenLabs: broken … Keep these two OUT of production until fixed", behind
+// "an env knob gating which engines show … Default (unset): grok-voice and
+// elevenlabs-realtime chips are HIDDEN; the OpenAI engines, Translate and
+// Gemini show. Setting the knob (as on Preview) reveals them. Default engine
+// stays the flagship OpenAI realtime."
+describe("the experimental engines knob (TAOS_INTERPRETER_EXPERIMENTAL_ENGINES)", () => {
+  const STABLE = ["openai-realtime", "openai-live", "openai-translate", "gemini-live"];
+
+  it("unset hides Grok and ElevenLabs and nothing else", () => {
+    expect([...EXPERIMENTAL_ENGINES]).toEqual(["grok-voice", "elevenlabs-realtime"]);
+    expect(availableEngines("")).toEqual(STABLE);
+    expect(availableEngines("  ,  ")).toEqual(STABLE);
+    delete process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES;
+    expect(availableEngines()).toEqual(STABLE);
+    expect(experimentalEnginesShown()).toEqual([]);
+  });
+
+  it("a comma list reveals the ones it names, in picker order, and ignores the rest", () => {
+    expect(availableEngines("grok-voice")).toEqual([...STABLE, "grok-voice"]);
+    expect(availableEngines(" ElevenLabs-Realtime , grok-voice ")).toEqual([
+      ...STABLE,
+      "grok-voice",
+      "elevenlabs-realtime"
+    ]);
+    // Not a boolean, and no way to HIDE a stable engine with it.
+    expect(availableEngines("1")).toEqual(STABLE);
+    expect(availableEngines("true,all,*")).toEqual(STABLE);
+    expect(availableEngines("openai-live,typo")).toEqual(STABLE);
+  });
+
+  it("a hidden engine is never the default: env default and stored choice both fall back", () => {
+    expect(engineEnvDefault("grok-voice", "")).toBe("openai-realtime");
+    expect(engineEnvDefault("elevenlabs-realtime", "grok-voice")).toBe("openai-realtime");
+    expect(engineEnvDefault("grok-voice", "grok-voice")).toBe("grok-voice");
+    const available = availableEngines("");
+    expect(resolveEngine({ stored: "elevenlabs-realtime", envDefault: "openai-realtime", available })).toBe(
+      "openai-realtime"
+    );
+    expect(resolveEngine({ stored: "grok-voice", envDefault: "gemini-live", available })).toBe("gemini-live");
+    expect(resolveEngine({ stored: "openai-live", envDefault: "openai-realtime", available })).toBe("openai-live");
+    // Even a default that slipped through cannot be a hidden engine.
+    expect(resolveEngine({ stored: null, envDefault: "grok-voice", available })).toBe("openai-realtime");
+  });
+
+  it("unset: the mint route will not mint a hidden engine — it mints the flagship, and calls neither vendor", async () => {
+    delete process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES;
+    for (const engine of EXPERIMENTAL_ENGINES) {
+      sent.length = 0;
+      const { res, json } = await startSession({ engine });
+      expect(res.status).toBe(200);
+      expect(json.engine).toBe("openai-realtime");
+      expect(sent.length).toBeGreaterThan(0);
+      for (const call of sent) {
+        expect(call.url).not.toMatch(/x\.ai|elevenlabs/i);
+        expect(call.url).toContain("api.openai.com");
+      }
+    }
+  });
+
+  it("unset: TAOS_INTERPRETER_ENGINE cannot bring a hidden engine back", async () => {
+    delete process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES;
+    process.env.TAOS_INTERPRETER_ENGINE = "elevenlabs-realtime";
+    const { json } = await startSession({});
+    expect(json.engine).toBe("openai-realtime");
+  });
+
+  it("naming one reveals only that one to the mint route", async () => {
+    process.env.TAOS_INTERPRETER_EXPERIMENTAL_ENGINES = "grok-voice";
+    expect((await startSession({ engine: "grok-voice" })).json.engine).toBe("grok-voice");
+    expect((await startSession({ engine: "elevenlabs-realtime" })).json.engine).toBe("openai-realtime");
+  });
+
+  it("is server-only, and the page hands the list to the picker", () => {
+    const page = readFileSync("app/tabletop/page.tsx", "utf8");
+    expect(page).toContain("interpreterEngines={availableEngines()}");
+    const mode = readFileSync("components/tabletop/InterpreterMode.tsx", "utf8");
+    // The picker renders the list it was given — never the full catalogue.
+    expect(mode).toContain("{engines.map((e) => (");
+    expect(mode).not.toContain("INTERPRETER_ENGINES");
+    for (const f of ["components/tabletop/InterpreterMode.tsx", "components/TabletopShell.tsx", "lib/interpreter/client.ts"]) {
+      expect(readFileSync(f, "utf8")).not.toContain("NEXT_PUBLIC_");
+    }
+  });
+});
 
 describe("the engine switch", () => {
   // Four until 2026-11-09 07:58 MT, when Tom — having table-tested all four —

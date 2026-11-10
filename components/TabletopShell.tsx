@@ -43,7 +43,7 @@ import { copyFor } from "@/lib/chrome/copy";
 import { JumpToTail, useFollowTail, type FollowTail } from "./FollowTail";
 import { ExitHome } from "./ExitHome";
 import { interpreterVisibleTo } from "@/lib/interpreter/flag";
-import type { InterpreterEngine } from "@/lib/interpreter/engine";
+import { STABLE_ENGINES, type InterpreterEngine } from "@/lib/interpreter/engine";
 import { InterpreterMode } from "./tabletop/InterpreterMode";
 
 // ── /tabletop: the phone lies flat between two people ───────────────────────
@@ -167,8 +167,14 @@ export function TabletopShell({
   autoEnabled = false,
   interpreterEnabled = false,
   interpreterMediatorEnabled = false,
-  interpreterEngine = "openai-realtime"
+  interpreterEngine = "openai-realtime",
+  interpreterEngines = STABLE_ENGINES
 }: {
+  /**
+   * The engines the picker offers, from the server
+   * (TAOS_INTERPRETER_EXPERIMENTAL_ENGINES). Default: no experimental engine.
+   */
+  interpreterEngines?: readonly InterpreterEngine[];
   /**
    * TAOS_INTERPRETER_ENABLED, read on the server. Interpreter mode's chip
    * shows only when this is true AND the user is a founder
@@ -1098,6 +1104,7 @@ export function TabletopShell({
         mine={mine}
         theirs={theirs}
         defaultEngine={interpreterEngine}
+        engines={interpreterEngines}
         mediatorEnabled={interpreterMediatorEnabled}
         onExit={() => setInterpreterOpen(false)}
       />

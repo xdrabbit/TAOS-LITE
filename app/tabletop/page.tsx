@@ -4,7 +4,7 @@ import { TabletopShell } from "@/components/TabletopShell";
 import { brainEnvDefault } from "@/lib/tabletop/brain";
 import { tabletopAutoEnabled } from "@/lib/release";
 import { interpreterEnabled, interpreterMediatorEnabled } from "@/lib/interpreter/flag";
-import { engineEnvDefault } from "@/lib/interpreter/engine";
+import { availableEngines, engineEnvDefault } from "@/lib/interpreter/engine";
 
 // TAOS_INTERPRETER_ENABLED and TAOS_INTERPRETER_ENGINE are SERVER flags read
 // per request — without this the page would be prerendered at build time and
@@ -28,13 +28,16 @@ export default function TabletopPage(): JSX.Element {
           auto-detect toggle only when this is true AND the user is a founder. */}
       {/* TAOS_INTERPRETER_ENABLED / _ENGINE: server-only as well. The shell shows
           the Interpreter chip only when the flag is on AND the user is a
-          founder (lib/interpreter/flag.ts). */}
+          founder (lib/interpreter/flag.ts).
+          TAOS_INTERPRETER_EXPERIMENTAL_ENGINES: which of Grok / ElevenLabs the
+          picker offers — neither, unset (lib/interpreter/engine.ts). */}
       <TabletopShell
         defaultBrain={brainEnvDefault()}
         autoEnabled={tabletopAutoEnabled()}
         interpreterEnabled={interpreterEnabled()}
         interpreterMediatorEnabled={interpreterMediatorEnabled()}
         interpreterEngine={engineEnvDefault()}
+        interpreterEngines={availableEngines()}
       />
     </SessionGate>
   );

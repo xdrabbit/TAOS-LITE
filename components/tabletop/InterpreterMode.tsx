@@ -24,8 +24,8 @@ import {
   ENGINE_LABEL,
   ENGINE_STORAGE_KEY,
   engineTakesBriefing,
-  INTERPRETER_ENGINES,
   resolveEngine,
+  STABLE_ENGINES,
   type InterpreterEngine
 } from "@/lib/interpreter/engine";
 import { formatClock, sessionVerdict, type SessionClock } from "@/lib/interpreter/limits";
@@ -80,6 +80,12 @@ export interface InterpreterModeProps {
   theirs: string;
   /** TAOS_INTERPRETER_ENGINE, read on the server. */
   defaultEngine: InterpreterEngine;
+  /**
+   * The engines this deployment offers (availableEngines(), read on the
+   * server). Default: the stable ones — Grok and ElevenLabs are shown only
+   * where TAOS_INTERPRETER_EXPERIMENTAL_ENGINES names them.
+   */
+  engines?: readonly InterpreterEngine[];
   /** TAOS_INTERPRETER_MEDIATOR_ENABLED, read on the server. Default false. */
   mediatorEnabled?: boolean;
   /** Back to the push-to-talk table. */
@@ -190,12 +196,15 @@ export function InterpreterMode({
   mine,
   theirs,
   defaultEngine,
+  engines = STABLE_ENGINES,
   mediatorEnabled = false,
   onExit,
   start = startInterpreter
 }: InterpreterModeProps): JSX.Element {
   const t = copyFor(mine);
-  const [engine, setEngine] = useState<InterpreterEngine>(defaultEngine);
+  const [engine, setEngine] = useState<InterpreterEngine>(() =>
+    resolveEngine({ stored: null, envDefault: defaultEngine, available: engines })
+  );
   // Interpreter unless this device has explicitly chosen the experiment.
   const [style, setStyle] = useState<InterpreterStyle>(DEFAULT_INTERPRETER_STYLE);
   /** The style the RUNNING (or last) session was actually briefed in. */
@@ -231,7 +240,8 @@ export function InterpreterMode({
     } catch {
       /* private mode */
     }
-    setEngine(resolveEngine({ stored, envDefault: defaultEngine }));
+    // A stored engine this deployment no longer offers is not a choice.
+    setEngine(resolveEngine({ stored, envDefault: defaultEngine, available: engines }));
     if (mediatorEnabled) {
       let storedStyle: string | null = null;
       try {
@@ -253,7 +263,7 @@ export function InterpreterMode({
       /* private mode */
     }
     setDiag(resolveDiagnostics({ stored: storedDiag, query: queryDiag }));
-  }, [defaultEngine, mediatorEnabled]);
+  }, [defaultEngine, engines, mediatorEnabled]);
 
   const toggleDiag = useCallback(() => {
     setDiag((on) => {
@@ -579,7 +589,7 @@ export function InterpreterMode({
             <span className="text-[10px] uppercase tracking-widest text-amber-100/40">
               {t.interpreterEngine}
             </span>
-            {INTERPRETER_ENGINES.map((e) => (
+            {engines.map((e) => (
               <button
                 key={e}
                 type="button"
