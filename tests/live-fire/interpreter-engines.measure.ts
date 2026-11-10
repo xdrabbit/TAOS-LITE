@@ -77,6 +77,9 @@ const PRINT_ROWS = process.env.INTERPRETER_WS_ROWS === "1";
 /** `off` = do not clear the other legs' input when a leg takes a turn. */
 const PEER_CLEAR = (process.env.INTERPRETER_WS_PEER_CLEAR ?? "").trim().toLowerCase() !== "off";
 
+/** Audio frames per reply: arrival time and decoded size. Never the audio. */
+const WIRE = new Map<string, { t: number; bytes: number }[]>();
+
 const XAI_BASE = "https://api.x.ai/v1";
 const XAI_WS_URL = "wss://api.x.ai/v1/realtime";
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
@@ -365,6 +368,13 @@ async function runEngine(engine: InterpreterEngine): Promise<void> {
           if (type === "response.output_audio.delta" || type === "response.audio.delta") {
             if (typeof msg.delta === "string" && msg.delta) gate.play(Buffer.from(msg.delta, "base64"));
             const rid = String(msg.response_id ?? "");
+            // The WIRE, for the playback path: how big each frame is and when
+            // it lands. Sizes and times — never the audio.
+            if (typeof msg.delta === "string") {
+              const wire = WIRE.get(`leg${index} ${rid.slice(-6)}`) ?? [];
+              wire.push({ t: Date.now(), bytes: Buffer.from(msg.delta, "base64").length });
+              WIRE.set(`leg${index} ${rid.slice(-6)}`, wire);
+            }
             if (!audioSeen.has(rid)) {
               audioSeen.add(rid);
               run.firstAudioAt.push(Date.now());
@@ -477,6 +487,26 @@ async function runEngine(engine: InterpreterEngine): Promise<void> {
     console.log(`  counts: ${JSON.stringify(digest.counts)}`);
     console.log(`  turn→audio ms: ${JSON.stringify(digest.turnToAudioMs)}  created→audio ms: ${JSON.stringify(digest.firstAudioMs)}`);
   }
+  // ── The wire, as a PLAYER sees it (fix/interpreter-pcm-playback) ────────
+  // Per reply: how many audio frames, their sizes, whether any is an ODD
+  // number of bytes (half a sample), and how fast they land against the
+  // audio's own length (pace 1.0 = real time; 20 = a burst).
+  console.log("\naudio frames per reply (sizes and times only):");
+  for (const [key, frames] of WIRE) {
+    const bytes = frames.reduce((n, f) => n + f.bytes, 0);
+    const seconds = bytes / (SAMPLE_RATE * 2);
+    const span = (frames[frames.length - 1].t - frames[0].t) / 1000;
+    const sizes = new Map<number, number>();
+    for (const f of frames) sizes.set(f.bytes, (sizes.get(f.bytes) ?? 0) + 1);
+    const gaps = frames.slice(1).map((f, i) => f.t - frames[i].t);
+    const top = [...sizes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([b, n]) => `${b}×${n}`);
+    console.log(
+      `  ${key}: frames=${frames.length} audio=${seconds.toFixed(2)}s landed_in=${span.toFixed(2)}s ` +
+        `pace=${span > 0 ? (seconds / span).toFixed(1) : "burst"} odd_frames=${frames.filter((f) => f.bytes % 2).length} ` +
+        `total_odd=${bytes % 2} max_gap_ms=${gaps.length ? Math.max(...gaps) : 0} sizes=[${top.join(" ")}]${sizes.size > 6 ? ` (+${sizes.size - 6} more)` : ""}`
+    );
+  }
+
   // THE latency number: from the speaker's last audible sample to the first
   // audio frame of whichever leg answers. (A cascade can emit speech_stopped,
   // committed, response.created and the first frame in the same millisecond,

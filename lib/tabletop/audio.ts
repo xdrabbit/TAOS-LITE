@@ -22,6 +22,8 @@ import { createPcmDownsampler, PCM_IN_RATE, peakOfS16 } from "./pcm";
 // it did before the A/B.
 
 let sharedCtx: AudioContext | null = null;
+/** When the shared context was made (wall clock), for the diagnostics line. */
+let sharedBornAt = 0;
 
 function contextCtor(): typeof AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -46,6 +48,7 @@ export function ensureTabletopAudioContext(): AudioContext | null {
   if (!Ctor) return null;
   try {
     sharedCtx = new Ctor();
+    sharedBornAt = Date.now();
   } catch {
     sharedCtx = null;
     return null;
@@ -54,6 +57,77 @@ export function ensureTabletopAudioContext(): AudioContext | null {
     /* created outside a gesture; the next ensure() will try again */
   });
   return sharedCtx;
+}
+
+// ── A context is only as good as the audio session it was born into ────────
+// The shared context above is made once, in the first tap of the page, and
+// then lives for as long as the tab does. On a phone that is a long time and
+// a lot of weather: the microphone opens and closes, a WebRTC engine takes
+// the audio session into voice-processing mode and gives it back, the route
+// moves between the speaker and the earpiece. iOS re-rates the HARDWARE each
+// time and does not re-rate a context that already exists — and a context
+// whose rate no longer matches the hardware under it does not fail, it
+// renders: each hardware buffer gets part of a block and the rest of an old
+// one. That is heard as a fragment repeating very fast.
+//
+// Tom and Liz's table, 2026-11-09 afternoon, is that sequence exactly: an
+// A/B of six engines on one page — the WebRTC ones first, then Grok and
+// ElevenLabs through a context born before any of it — and "a folding
+// waveform that repeats at a rapid rate" on those two only, with every
+// provider event in order. The morning's Grok session, on a fresh page, was
+// clean. This is INFERRED: no desktop engine re-rates its hardware, so no
+// desktop browser reproduces it. What says so is the phone — `ctx_rate`
+// against `ctx_rate_was` on the next [taos-interpreter-diag] line.
+//
+// So a socket session gets a context made AFTER its microphone is live — the
+// audio session it will actually play into — and the old one is closed. A
+// page that is capturing may start a context without a tap (WebKit and
+// Chromium both); if this browser will not, the new one is thrown away and
+// the old one is kept, so the worst case is what shipped before.
+
+export interface ContextRenewal {
+  /** A fresh context is now the shared one. */
+  renewed: boolean;
+  /** The shared context's rate now, and the rate of the one it replaced (0 = there was none). */
+  rate: number;
+  rateWas: number;
+  /** How old the replaced (or kept) context was, in seconds. */
+  ageS: number;
+}
+
+/** How long a fresh context gets to start running before it is given up on. */
+export const CONTEXT_RENEW_WAIT_MS = 500;
+
+export async function renewTabletopAudioContext(
+  waitMs: number = CONTEXT_RENEW_WAIT_MS
+): Promise<ContextRenewal | null> {
+  const Ctor = contextCtor();
+  if (!Ctor) return null;
+  const old = sharedCtx && sharedCtx.state !== "closed" ? sharedCtx : null;
+  const ageS = old && sharedBornAt ? Math.max(0, Math.round((Date.now() - sharedBornAt) / 1000)) : 0;
+  const rateWas = old?.sampleRate ?? 0;
+  let fresh: AudioContext;
+  try {
+    fresh = new Ctor();
+  } catch {
+    return old ? { renewed: false, rate: old.sampleRate, rateWas, ageS } : null;
+  }
+  const bornAt = Date.now();
+  await Promise.race([
+    fresh.resume().catch(() => {
+      /* not allowed to start here: decided by its state, below */
+    }),
+    new Promise<void>((resolve) => setTimeout(resolve, waitMs))
+  ]);
+  if (fresh.state !== "running" && old) {
+    // It would not start outside a tap. Keep the one that was born in one.
+    void fresh.close().catch(() => {});
+    return { renewed: false, rate: old.sampleRate, rateWas, ageS };
+  }
+  sharedCtx = fresh;
+  sharedBornAt = bornAt;
+  if (old) void old.close().catch(() => {});
+  return { renewed: true, rate: fresh.sampleRate, rateWas, ageS };
 }
 
 export interface MicPcmTap {

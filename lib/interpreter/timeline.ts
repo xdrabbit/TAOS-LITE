@@ -133,6 +133,12 @@ export interface LegDigest {
   micMutedMs: number;
   /** The speaker was cut off because the PROVIDER cancelled a reply for a new turn. */
   speakerCuts: number;
+  /**
+   * The socket legs' speaker (lib/interpreter/pcmPlayer.ts) and the
+   * AudioContext under it — numbers from the `audio-ctx` and `pcm-stats`
+   * notes. All zero on a WebRTC leg.
+   */
+  pcm: PcmDigest;
   errors: number;
   /** ms from each response.created to its first audio frame. */
   firstAudioMs: number[];
@@ -182,6 +188,50 @@ export interface LegTimeline {
     type: string,
     detail?: { bytes?: number; reason?: string | number; ms?: number; cfg?: Record<string, unknown> }
   ) => void;
+}
+
+/** What a socket leg's speaker did. Rates in Hz, the rest counts / ms / bytes. */
+export interface PcmDigest {
+  /** A fresh AudioContext was made for the session (1) or the old one played (0). */
+  ctxRenewed: number;
+  /** The playing context's rate, and the rate of the one it replaced. */
+  ctxRate: number;
+  ctxRateWas: number;
+  /** The context's rate when the leg CLOSED — a change mid-session is a finding. */
+  ctxRateEnd: number;
+  /** How old the replaced (or kept) context was, seconds. */
+  ctxAgeS: number;
+  /** 1 = straight to the destination (?pcmout=direct), 0 = through an <audio>. */
+  direct: number;
+  buffers: number;
+  /** Frames that arrived with an odd number of bytes. */
+  oddFrames: number;
+  /** The queue ran dry mid-reply: how often, and the silence it put in. */
+  underruns: number;
+  gapMs: number;
+  /** PCM bytes that arrived within 2 s after the speaker was cut. */
+  afterCutBytes: number;
+}
+
+function emptyPcmDigest(): PcmDigest {
+  return {
+    ctxRenewed: 0,
+    ctxRate: 0,
+    ctxRateWas: 0,
+    ctxRateEnd: 0,
+    ctxAgeS: 0,
+    direct: 0,
+    buffers: 0,
+    oddFrames: 0,
+    underruns: 0,
+    gapMs: 0,
+    afterCutBytes: 0
+  };
+}
+
+function cfgNumber(cfg: Record<string, unknown> | undefined, key: string): number {
+  const v = cfg?.[key];
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0;
 }
 
 export interface SessionTimeline {
@@ -273,6 +323,7 @@ function emptyDigest(leg: number, transport: string): LegDigest {
     heldDroppedBytes: 0,
     micMutedMs: 0,
     speakerCuts: 0,
+    pcm: emptyPcmDigest(),
     errors: 0,
     firstAudioMs: [],
     turnToAudioMs: [],
@@ -548,6 +599,22 @@ export function createSessionTimeline(opts: {
           else if (row.type === "gate-open") digest.gateOpens += 1;
           else if (row.type === "held-dropped") digest.heldDroppedBytes += row.bytes;
           else if (row.type === "socket-close") digest.closeCode = row.reason ?? "?";
+          else if (row.type === "audio-ctx") {
+            digest.pcm.ctxRenewed = cfgNumber(detail?.cfg, "renewed");
+            digest.pcm.ctxRate = cfgNumber(detail?.cfg, "rate");
+            digest.pcm.ctxRateWas = cfgNumber(detail?.cfg, "rate_was");
+            digest.pcm.ctxAgeS = cfgNumber(detail?.cfg, "age_s");
+            digest.pcm.direct = cfgNumber(detail?.cfg, "direct");
+          } else if (row.type === "pcm-stats") {
+            // A leg that reconnected closes more than one player: add them up.
+            digest.pcm.buffers += cfgNumber(detail?.cfg, "buffers");
+            digest.pcm.oddFrames += cfgNumber(detail?.cfg, "odd");
+            digest.pcm.underruns += cfgNumber(detail?.cfg, "underruns");
+            digest.pcm.gapMs += cfgNumber(detail?.cfg, "gap_ms");
+            digest.pcm.afterCutBytes += cfgNumber(detail?.cfg, "after_cut");
+            digest.pcm.ctxRateEnd = cfgNumber(detail?.cfg, "rate_now");
+            if (!digest.pcm.ctxRate) digest.pcm.ctxRate = cfgNumber(detail?.cfg, "rate");
+          }
           push(row);
         }
       };
@@ -632,6 +699,18 @@ export interface LegDigestSummary {
   speech_in_playback: number;
   mic_muted_ms: number;
   speaker_cuts: number;
+  /** Added 2026-11-09 (the socket legs' speaker). Older builds: read as 0. */
+  ctx_renewed: number;
+  ctx_rate: number;
+  ctx_rate_was: number;
+  ctx_rate_end: number;
+  ctx_age_s: number;
+  pcm_direct: number;
+  pcm_buffers: number;
+  pcm_odd_frames: number;
+  pcm_underruns: number;
+  pcm_gap_ms: number;
+  pcm_after_cut_bytes: number;
 }
 
 export function summarizeLegDigest(d: LegDigest): LegDigestSummary {
@@ -674,7 +753,18 @@ export function summarizeLegDigest(d: LegDigest): LegDigestSummary {
     speech_phantom: d.speechPhantom,
     speech_in_playback: d.speechInPlayback,
     mic_muted_ms: d.micMutedMs,
-    speaker_cuts: d.speakerCuts
+    speaker_cuts: d.speakerCuts,
+    ctx_renewed: d.pcm.ctxRenewed,
+    ctx_rate: d.pcm.ctxRate,
+    ctx_rate_was: d.pcm.ctxRateWas,
+    ctx_rate_end: d.pcm.ctxRateEnd,
+    ctx_age_s: d.pcm.ctxAgeS,
+    pcm_direct: d.pcm.direct,
+    pcm_buffers: d.pcm.buffers,
+    pcm_odd_frames: d.pcm.oddFrames,
+    pcm_underruns: d.pcm.underruns,
+    pcm_gap_ms: d.pcm.gapMs,
+    pcm_after_cut_bytes: d.pcm.afterCutBytes
   };
 }
 
@@ -711,7 +801,18 @@ const DIGEST_LATER_NUMBERS = [
   "speech_phantom",
   "speech_in_playback",
   "mic_muted_ms",
-  "speaker_cuts"
+  "speaker_cuts",
+  "ctx_renewed",
+  "ctx_rate",
+  "ctx_rate_was",
+  "ctx_rate_end",
+  "ctx_age_s",
+  "pcm_direct",
+  "pcm_buffers",
+  "pcm_odd_frames",
+  "pcm_underruns",
+  "pcm_gap_ms",
+  "pcm_after_cut_bytes"
 ] as const;
 const DIGEST_TOKENS = ["transport", "last_in", "close", "reasoning", "vad"] as const;
 

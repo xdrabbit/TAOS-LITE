@@ -58,6 +58,45 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   whether `rec_ms` should also feed the review row for Taokie-style timing.
   → Phone test pending: a car turn with Liz, then Redo on /review.
 
+- **Interpreter: Grok and ElevenLabs "folding waveform" — the socket legs'
+  speaker; built 2026-11-09, draft PR open, NOT merged.** Tom and Liz
+  (2026-11-09, after an afternoon of A/B at the table): on Grok and ElevenLabs
+  "the audio degrades into a folding waveform that repeats at a rapid rate" —
+  the only two engines on our own WebSocket PCM player; both stay hidden in
+  production (`TAOS_INTERPRETER_EXPERIMENTAL_ENGINES`) until this is settled.
+  What was found, in order of how sure it is:
+  1. *Certain, reproduced on the real screen, fixed.* The player dropped the
+     last byte of an odd-length frame, after which the rest of the reply was
+     read one byte out of step — near-full-scale noise, five times louder than
+     the voice. Now framed before the gate (`createPcmFramer`). Whether Grok
+     SENDS odd frames is not known (no xAI key on the build machine; its reply
+     totals are irregular); `pcm_odd_frames` on the next Grok
+     `[taos-interpreter-diag]` line says.
+  2. *Certain, reproduced, fixed.* With audio arriving at real-time pace the
+     queue sat a few ms deep and every later-than-before frame cut a few ms of
+     silence into the sound — holes at the frame rate. Now appended end to end
+     while there is margin, and one counted starvation buys a cushion
+     (`createPcmSchedule`; lead 20 → 50 ms).
+  3. *Inferred — only a phone can say.* The AudioContext was made once per
+     page, in the first tap, and reused across every engine switch of the A/B;
+     iOS re-rates the hardware under it and a mismatched context renders
+     repeating fragments. ElevenLabs' broken sessions were otherwise healthy
+     (every reply complete, nothing cut or dropped, ~10 big aligned frames per
+     reply — nothing there CAN repeat fast), which is what points at the
+     context. A socket session now plays on a context made after its mic is
+     live (`renewTabletopAudioContext`). → The next phone test proves or
+     kills it from the log alone: `ctx_rate` ≠ `ctx_rate_was` (with a large
+     `ctx_age_s`) and clean audio = proven; equal rates and still broken =
+     not it — then `/tabletop?pcmout=direct` (skip the `<audio>` element) and
+     `/tabletop?pcmctx=keep` (the old context, as a control) are the two
+     switches that split what is left.
+  Also for Tom: Grok heard its own speaker 25 times in the 8-minute session
+  (`speech_in_playback` 13 + 12) and each one cut the reply — the same thing
+  half-duplex fixed for ElevenLabs. Grok is still full-duplex by his earlier
+  decision; flipping it is one line (`engineIsHalfDuplex`) and his call.
+  `tests/live-fire/interpreter-pcm-playback-browser-check.mjs` plays a known
+  tone through the real screen and measures what comes out (spends nothing).
+
 - **Tabletop "Interpreter mode" — continuous, hands-free, briefed; built
   2026-11-09, draft PR open, founders only.** Tom (2026-11-09): at dinner he
   and Liz used ChatGPT voice to talk back and forth and want that in TAOS — an
