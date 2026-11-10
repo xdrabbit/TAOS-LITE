@@ -514,7 +514,22 @@ const EN = {
   interpreterStyleMediatorHint:
     "Still interprets everything. May briefly speak up, in both languages, only when the meaning is at risk — and answers if you ask it directly. Never takes sides, never gives advice.",
   interpreterStyleNotOnEngine: "This engine cannot be briefed, so it is always a plain interpreter.",
-  interpreterMediatorNote: "Mediator note"
+  interpreterMediatorNote: "Mediator note",
+  // Mediator v2 (Tom, 2026-11-10): two more personas on the Style row, and
+  // the line a mediator opens a session with. The `…Intro…` strings are
+  // SPOKEN, after the marker above, by the model (lib/interpreter/briefing.ts)
+  // — keep each to one breath. Measured 2026-11-10 on gpt-realtime-2.1: the
+  // first draft (three sentences a language) ran 16–19 s; these are HEARD at ~12 s
+  // (of which ~3.5 s is the model's own pauses). Fewer words buys little.
+  interpreterStyleEntendimiento: "Entendimiento · understanding (experimental)",
+  interpreterStyleDeal: "Deal (experimental)",
+  interpreterStyleEntendimientoHint:
+    "A mediator for understanding each other. Also notes — describing, never explaining — when an answer missed the question, when one word means two things to you, or when a request came out as an accusation. Not therapy, never advice.",
+  interpreterStyleDealHint:
+    "A mediator for working something out. Also notes when you seem to want the same thing, or what a disagreement seems to be about — and keeps the list of what you have both agreed. Say “mediator, where are we?” to hear it. Never recommends.",
+  interpreterMediatorIntro: "I interpret everything and rarely interrupt. Say “mediator” to ask me.",
+  interpreterMediatorIntroEntendimiento: "I interpret everything and rarely interrupt. Say “mediator” to ask me.",
+  interpreterMediatorIntroDeal: "I interpret everything and track what you agree. Ask “mediator, where are we?”"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -926,7 +941,16 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     interpreterStyleMediatorHint:
       "Sigue interpretando todo. Puede intervenir brevemente, en los dos idiomas, solo cuando el significado está en riesgo — y responde si le preguntan directamente. Nunca toma partido, nunca da consejos.", // pendiente de revisión por Liz
     interpreterStyleNotOnEngine: "Este motor no admite instrucciones, así que siempre es un intérprete simple.", // pendiente de revisión por Liz
-    interpreterMediatorNote: "Nota del mediador" // pendiente de revisión por Liz
+    interpreterMediatorNote: "Nota del mediador", // pendiente de revisión por Liz
+    interpreterStyleEntendimiento: "Entendimiento (experimental)", // pendiente de revisión por Liz
+    interpreterStyleDeal: "Trato (experimental)", // pendiente de revisión por Liz
+    interpreterStyleEntendimientoHint:
+      "Un mediador para entenderse. También señala — describiendo, nunca explicando — cuando una respuesta no contestó la pregunta, cuando una palabra significa dos cosas para ustedes, o cuando una petición salió como acusación. No es terapia; nunca da consejos.", // pendiente de revisión por Liz
+    interpreterStyleDealHint:
+      "Un mediador para llegar a un acuerdo. También señala cuando parecen querer lo mismo, o de qué parece tratarse un desacuerdo — y lleva la lista de lo que ambos han acordado. Digan «mediador, ¿dónde estamos?» para oírla. Nunca recomienda.", // pendiente de revisión por Liz
+    interpreterMediatorIntro: "Interpreto todo y casi no interrumpo. Digan «mediador» para preguntarme.", // pendiente de revisión por Liz
+    interpreterMediatorIntroEntendimiento: "Interpreto todo y casi no interrumpo. Digan «mediador» para preguntarme.", // pendiente de revisión por Liz
+    interpreterMediatorIntroDeal: "Interpreto todo y anoto lo acordado. Pregunten «mediador, ¿dónde estamos?»" // pendiente de revisión por Liz
   },
 
   // ── Written by nobody here since ────────────────────────────────────────

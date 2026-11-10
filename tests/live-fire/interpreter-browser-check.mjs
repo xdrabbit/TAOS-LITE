@@ -41,7 +41,13 @@ const ENGINES = process.argv.slice(2).length
 const APP_PORT = 3077;
 const FAKE_PORT = 54399;
 const CDP_PORT = 9344;
-const LISTEN_MS = Number(process.env.INTERPRETER_CHECK_LISTEN_MS ?? 42_000);
+// Mediator v2: INTERPRETER_CHECK_STYLE=mediator|entendimiento|deal turns the
+// mediator flag on for the dev server, picks that style on the device, and
+// leaves the table QUIET long enough for the self-introduction to be heard
+// before the first sentence (someone talking over it skips it, by design).
+const STYLE = (process.env.INTERPRETER_CHECK_STYLE ?? "").trim().toLowerCase();
+const LEAD_QUIET_S = STYLE ? 18 : 2;
+const LISTEN_MS = Number(process.env.INTERPRETER_CHECK_LISTEN_MS ?? (STYLE ? 50_000 : 42_000));
 const FOUNDER = "interpreter-probe@example.com";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -79,7 +85,7 @@ async function tts(text, voice) {
 }
 const quiet = (seconds) => Buffer.alloc(24_000 * 2 * seconds);
 const pcm24 = Buffer.concat([
-  quiet(2),
+  quiet(LEAD_QUIET_S),
   await tts("So how was your day? Did you get to rest at all?", "ash"),
   quiet(9),
   await tts("Más o menos. Me dio flojera salir, así que me quedé en casa toda la tarde.", "coral"),
@@ -116,6 +122,7 @@ const app = spawn("node", ["node_modules/next/dist/bin/next", "dev", "--port", S
     ...process.env,
     OPENAI_API_KEY: KEY,
     TAOS_INTERPRETER_ENABLED: "1",
+    ...(STYLE ? { TAOS_INTERPRETER_MEDIATOR_ENABLED: "1" } : {}),
     NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${FAKE_PORT}`,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "fake-anon-key",
     SUPABASE_SERVICE_ROLE_KEY: "fake-service-role-key",
@@ -251,6 +258,7 @@ const session = {
 await evaluate(`
   localStorage.setItem("sb-127-auth-token", ${JSON.stringify(JSON.stringify(session))});
   localStorage.setItem("taos.interpreter.engine", "openai-realtime");
+  ${STYLE ? `localStorage.setItem("taos.interpreter.style", ${JSON.stringify(STYLE)});` : ""}
   true
 `);
 
@@ -321,9 +329,15 @@ for (const engine of ENGINES) {
     engine === "grok-voice" ||
     engine === "elevenlabs-realtime";
   const metered = !!usage && (perMinute ? usage.billed_secs > 0 : usage.audio_out_tokens > 0);
-  const ok =
+  const interpreted =
     snapshot.far.some((l) => l.startsWith("incoming")) && snapshot.near.some((l) => l.startsWith("incoming")) && metered;
-  console.log(`  ${ok ? "PASS" : "FAIL"}: an interpretation reached BOTH panes and Stop posted a non-zero meter`);
+  // A mediator introduces itself: a NOTE on both panes, before anything else,
+  // and the cue frame(s) acknowledged without an error.
+  const introduced =
+    !STYLE || (snapshot.far[0]?.startsWith("note") && snapshot.near[0]?.startsWith("note") && !snapshot.error);
+  const ok = interpreted && introduced;
+  console.log(`  ${interpreted ? "PASS" : "FAIL"}: an interpretation reached BOTH panes and Stop posted a non-zero meter`);
+  if (STYLE) console.log(`  ${introduced ? "PASS" : "FAIL"}: the ${STYLE} introduced itself as a note on BOTH panes, first`);
   if (!ok) failed = true;
   report.push({ engine, ok });
 }
