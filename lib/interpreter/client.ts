@@ -37,9 +37,23 @@
 // stops the mic, and returns the final tally for the cost line.
 
 import { jsonAuthHeaders } from "@/lib/authClient";
-import { ensureTabletopAudioContext, tapMicPcm, type MicPcmTap } from "@/lib/tabletop/audio";
+import {
+  ensureTabletopAudioContext,
+  renewTabletopAudioContext,
+  tapMicPcm,
+  type ContextRenewal,
+  type MicPcmTap
+} from "@/lib/tabletop/audio";
 import { bytesToBase64, PCM_IN_RATE, s16ToLeBytes } from "@/lib/tabletop/pcm";
 import { createAudioGate } from "./audioGate";
+import {
+  createPcmFramer,
+  createPcmPlayerOn,
+  pcmContextRenewalFrom,
+  pcmRouteFrom,
+  type PcmPlayer,
+  type PcmRoute
+} from "./pcmPlayer";
 import type { CaptionUpdate } from "./captions";
 import {
   addGeminiUsage,
@@ -326,10 +340,46 @@ export async function startInterpreter(opts: {
     const appliedStyle = parseStyle(mint.style) ?? DEFAULT_INTERPRETER_STYLE;
     tally = { ...emptyInterpreterTally(engine, mint.model ?? "", Date.now(), tickets.length), style: appliedStyle };
     timeline = opts.diagnostics ? createSessionTimeline({ engine, model: mint.model ?? "" }) : null;
+    // A socket engine plays through the shared AudioContext. Make it a fresh
+    // one, now that the microphone is live — lib/tabletop/audio.ts has why.
+    // (`?pcmctx=keep` is the control arm: the context this page already had.)
+    const socketAudio = tickets.some((t) => t.transport === "realtime-ws" || t.transport === "gemini-ws");
+    let audioCtx: (ContextRenewal & { kept: boolean }) | null = null;
+    if (socketAudio) {
+      const renew = typeof window === "undefined" || pcmContextRenewalFrom(window.location.search);
+      if (renew) {
+        const renewal = await renewTabletopAudioContext();
+        if (renewal) audioCtx = { ...renewal, kept: false };
+      } else {
+        const ctx = ensureTabletopAudioContext();
+        if (ctx) audioCtx = { renewed: false, rate: ctx.sampleRate, rateWas: ctx.sampleRate, ageS: 0, kept: true };
+      }
+    }
+    const pcmRoute = currentPcmRoute();
+    // How far ahead of its clock this context renders, where it says (ms).
+    const ctxLatency = (() => {
+      const ctx = socketAudio ? ensureTabletopAudioContext() : null;
+      const ms = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v * 1000) : 0);
+      return { base: ms(ctx?.baseLatency), out: ms(ctx?.outputLatency) };
+    })();
     const timelineFor = (ticket: LegTicket, index: number): LegTimeline | null => {
       const leg =
         timeline?.leg(index, { source: ticket.source, target: ticket.target, transport: ticket.transport }) ?? null;
       if (micSettings) leg?.note("mic-settings", { cfg: micSettings });
+      if (audioCtx && (ticket.transport === "realtime-ws" || ticket.transport === "gemini-ws")) {
+        leg?.note("audio-ctx", {
+          cfg: {
+            renewed: audioCtx.renewed ? 1 : 0,
+            kept: audioCtx.kept ? 1 : 0,
+            rate: audioCtx.rate,
+            rate_was: audioCtx.rateWas,
+            age_s: audioCtx.ageS,
+            direct: pcmRoute === "direct" ? 1 : 0,
+            base_ms: ctxLatency.base,
+            out_ms: ctxLatency.out
+          }
+        });
+      }
       return leg;
     };
     // One per session: every socket leg reports its playback here, so a leg
@@ -702,60 +752,29 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 /**
- * Plays 24 kHz s16 chunks back to back. Routed through an <audio> element
- * (not straight to the context's destination) so it is page audio like the
- * WebRTC legs' — which is what the echo canceller is listening for.
+ * A socket leg's speaker: lib/interpreter/pcmPlayer.ts on the shared context.
+ * By default routed through an <audio> element (not straight to the context's
+ * destination) so it is page audio like the WebRTC legs' — which is what the
+ * echo canceller is listening for. `?pcmout=direct` is the other path, for
+ * the phone test that tells the two apart.
  */
 function createPcmPlayer(
   rate: number = GEMINI_OUT_RATE,
   /** Told when audio is scheduled (until when, wall clock) and when it is cut. */
-  watch?: { playing: (untilMs: number) => void; cut: () => void }
-): { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void } | null {
+  watch?: { playing: (untilMs: number) => void; cut: () => void },
+  route: PcmRoute = currentPcmRoute()
+): PcmPlayer | null {
   const ctx = ensureTabletopAudioContext();
-  if (!ctx || typeof ctx.createMediaStreamDestination !== "function") return null;
+  if (!ctx) return null;
+  if (route === "direct") return createPcmPlayerOn(ctx, ctx.destination, rate, { watch });
+  if (typeof ctx.createMediaStreamDestination !== "function") return null;
   const out = ctx.createMediaStreamDestination();
   const el = hiddenAudio();
   el.srcObject = out.stream;
   void el.play().catch(() => {});
-  let nextAt = 0;
-  let sources: AudioBufferSourceNode[] = [];
-  return {
-    play: (bytes) => {
-      const samples = Math.floor(bytes.length / 2);
-      if (!samples) return;
-      const buffer = ctx.createBuffer(1, samples, rate);
-      const channel = buffer.getChannelData(0);
-      const view = new DataView(bytes.buffer, bytes.byteOffset, samples * 2);
-      for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 0x8000;
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(out);
-      const at = Math.max(ctx.currentTime + 0.02, nextAt);
-      source.start(at);
-      nextAt = at + buffer.duration;
-      if (watch) {
-        // Until the last sample has left the DEVICE, where the context can say.
-        const latency = typeof ctx.outputLatency === "number" && Number.isFinite(ctx.outputLatency) ? ctx.outputLatency : 0;
-        watch.playing(Date.now() + (nextAt - ctx.currentTime + latency) * 1000);
-      }
-      sources.push(source);
-      source.onended = () => {
-        sources = sources.filter((s) => s !== source);
-      };
-    },
-    flush: () => {
-      for (const s of sources) {
-        try {
-          s.stop();
-        } catch {
-          /* already ended */
-        }
-      }
-      sources = [];
-      nextAt = 0;
-      watch?.cut();
-    },
-    close: () => {
+  return createPcmPlayerOn(ctx, out, rate, {
+    watch,
+    onClose: () => {
       el.srcObject = null;
       el.remove();
       try {
@@ -764,10 +783,32 @@ function createPcmPlayer(
         /* ignore */
       }
     }
-  };
+  });
 }
 
-type PcmPlayer = { play: (bytes: Uint8Array) => void; flush: () => void; close: () => void };
+function currentPcmRoute(): PcmRoute {
+  return typeof window === "undefined" ? "element" : pcmRouteFrom(window.location.search);
+}
+
+/** A player's numbers and the context's, onto the leg's timeline. No audio. */
+function notePcmStats(tl: LegTimeline | null, player: PcmPlayer, oddFrames: number): void {
+  if (!tl) return;
+  const st = player.stats();
+  tl.note("pcm-stats", {
+    cfg: {
+      buffers: st.buffers,
+      odd: oddFrames,
+      underruns: st.underruns,
+      gap_ms: st.gapMs,
+      cuts: st.cuts,
+      after_cut: st.afterCutBytes,
+      queued_ms: st.maxQueuedMs,
+      lead_ms: st.leadMs,
+      rate: st.ctxRate,
+      rate_now: st.ctxRateNow
+    }
+  });
+}
 
 /**
  * A socket leg's speaker with the gate in front of it (lib/interpreter/
@@ -778,10 +819,22 @@ function createGatedPlayer(player: PcmPlayer, startHeld: boolean, timeline: LegT
     onOpen: () => timeline?.note("gate-open"),
     onDropped: (bytes) => timeline?.note("held-dropped", { bytes })
   });
+  // The WIRE is framed before the gate: a frame the gate holds and then drops
+  // must not take half a sample of the stream with it.
+  const framer = createPcmFramer();
+  let closed = false;
   return {
     ...gate,
+    /** One audio frame off the socket, for the reply named `key`. */
+    playFrame: (bytes: Uint8Array, key?: string) => {
+      const whole = framer.push(bytes, key);
+      if (whole) gate.play(whole);
+    },
     close: () => {
+      if (closed) return;
+      closed = true;
       gate.flush();
+      notePcmStats(timeline, player, framer.oddFrames());
       player.close();
     }
   };
@@ -926,7 +979,9 @@ async function connectRealtimeWsLeg(opts: {
         }
         if (type === "response.output_audio.delta" || type === "response.audio.delta") {
           const data = msg.delta;
-          if (typeof data === "string" && data) player.play(base64ToBytes(data));
+          if (typeof data === "string" && data) {
+            player.playFrame(base64ToBytes(data), typeof msg.response_id === "string" ? msg.response_id : undefined);
+          }
         }
         reader.handle(msg);
       };
@@ -1085,7 +1140,8 @@ async function connectGeminiLeg(opts: {
         const content = msg.serverContent as { modelTurn?: { parts?: { inlineData?: { data?: string } }[] } } | undefined;
         for (const part of content?.modelTurn?.parts ?? []) {
           const data = part?.inlineData?.data;
-          if (typeof data === "string" && data) player.play(base64ToBytes(data));
+          // One stream per socket: Gemini's frames carry no reply id.
+          if (typeof data === "string" && data) player.playFrame(base64ToBytes(data));
         }
         reader.handle(msg);
       };

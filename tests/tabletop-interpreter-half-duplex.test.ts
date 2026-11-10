@@ -96,7 +96,11 @@ describe("half-duplex: the microphone while we are speaking", () => {
     expect(client).toContain("echoCancellation: true");
     // One clock for the whole session, fed by the player itself.
     expect(client.match(/createHalfDuplex\(\)/g)).toHaveLength(1);
-    expect(client).toContain("watch.playing(Date.now() + (nextAt - ctx.currentTime + latency) * 1000)");
+    // (The player moved to lib/interpreter/pcmPlayer.ts on 2026-11-09; same rule,
+    // and tests/tabletop-interpreter-pcm-player.test.ts runs it.)
+    const player = readFileSync("lib/interpreter/pcmPlayer.ts", "utf8");
+    expect(player).toContain("watch.playing(now() + (queued + latency) * 1000)");
+    expect(client).toContain("playing: (untilMs) => duplex.playing(legIndex, untilMs)");
   });
 });
 
