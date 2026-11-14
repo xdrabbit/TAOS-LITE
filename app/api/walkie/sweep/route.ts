@@ -5,6 +5,7 @@ import { sweepWalkieMessages } from "@/lib/walkie/store";
 import { sweepReviewTurns } from "@/lib/review/store";
 import { reviewNightlyEnabled } from "@/lib/review/opinion";
 import { runNightlyOpinions } from "@/lib/review/secondOpinion";
+import { reconcileCheckouts } from "@/lib/stripeReconcile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,13 @@ export const maxDuration = 60;
 // Who may reach the spend: the cron, by CRON_SECRET, or a founder session
 // through guardWalkie (guardSpend first, lib/walkie/guard.ts) — and the
 // founder path never runs the batch at all.
+//
+// Since 2026-11-14 the CRON path also runs the Stripe checkout reconciliation
+// (lib/stripeReconcile.ts): paid sessions from the last 48 h whose entitlement
+// never landed get one `[taos-stripe-reconcile]` line each. It reads Stripe and
+// reads the database and writes to neither, it cannot change this route's
+// status, and it is cron-only for the same reason the nightly batch is — a
+// founder poking the sweep is asking about messages, not about money.
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!walkieEnabled()) return walkieNotFound();
@@ -66,6 +74,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       ? await runNightlyOpinions({ apiKey }).catch(() => ({ checked: 0, failed: 0, more: false }))
       : { checked: 0, failed: 0, more: false };
     console.log(`[taos-review] nightly checked=${nightly.checked} failed=${nightly.failed} more=${nightly.more ? 1 : 0} key=${apiKey ? 1 : 0}`);
+  }
+  if (isCron) {
+    // Logs its own lines; swallowed here so a Stripe hiccup cannot fail a sweep.
+    await reconcileCheckouts().catch(() => null);
   }
   return NextResponse.json({ ...result, review }, {
     status: result.error || review.error ? 502 : 200,
