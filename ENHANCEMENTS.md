@@ -16,38 +16,11 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
-- **Checkout stalls on Stripe's Link wallet page ("Processing…") — card-only
-  sessions, a webhook that logs, and a daily reconcile; built 2026-11-14,
-  draft PR open, do-not-merge until Tom reviews (money path).** Stripe
-  forensics 2026-11-14: since 08-18 every NEW checkout by four people stalled
-  on `checkout.link.com` and expired unpaid; Tom's retry at 11:54 MT went
-  through, so the path is flaky, not dead. Renewals were never affected. Both
-  session routes left payment methods to the Dashboard, which resolved to
-  `card, klarna, link, cashapp, amazon_pay` on every session. Three things:
-  1. **Link off the page** (`lib/stripeCheckout.ts`, used by
-     `/api/stripe/checkout` and `/api/stripe/pack`): explicit
-     `payment_method_types` (default `card`) plus
-     `wallet_options.link.display = "never"`. `TAOS_CHECKOUT_PAYMENT_METHODS`
-     (comma list, read per request) re-adds methods without a deploy; listing
-     `link` restores the old behaviour whole. If Stripe rejects either new
-     parameter the session is retried without it, down to the old request, and
-     `[taos-checkout]` says `degraded=1`. Cost: Klarna, Cash App and Amazon Pay
-     leave checkout too.
-  2. **`[taos-stripe-webhook]`**: one fields-only line per event
-     (`type= id= session= outcome=ok|error|ignored`), one per fulfillment write
-     (`action entitlement=premium_granted user=<uuid> … rows= db=`), one per
-     rejected signature. Ids only. `rows=0` is the 08-23 failure made visible:
-     a 200 that changed no profile.
-  3. **`[taos-stripe-reconcile]`** on the daily sweep's cron path
-     (`lib/stripeReconcile.ts`): paid sessions from the last 48 h with no
-     entitlement get one line each. Log only — no auto-granting.
-  → **Not verified on a real session:** that Link is actually gone from the
-  hosted page. No session was created while building this (no Stripe writes);
-  the first preview checkout is the test. **Still open:** stripe-node is 16.12
-  and pins API version `2024-06-20`; the current API renames
-  `payment_method_types` to `allowed_payment_method_types`, so an SDK upgrade
-  must revisit `lib/stripeCheckout.ts` (the fallback keeps checkout working if
-  it is forgotten, with Link back on).
+- **stripe-node upgrade must revisit `lib/stripeCheckout.ts`** — left open by
+  PR #131. stripe-node is 16.12 and pins API version `2024-06-20`; the current
+  API renames `payment_method_types` to `allowed_payment_method_types`. The
+  fallback keeps checkout working if this is forgotten, but with Link back on
+  the page — `[taos-checkout] degraded=1` is the tell. (added 2026-11-14)
 
 - **Transcriber quits early on Spanish in auto mode — auto-retry, Redo,
   quiet normalize; built 2026-11-05, draft PR #122 open, founders see the
@@ -1239,6 +1212,23 @@ blank.
 
 ## Shipped
 
+- Checkout: Link wallet off the page, fulfillment observable — new checkouts
+  had stalled on `checkout.link.com` "Processing…" since 2026-08-18 (four
+  people, every session expired unpaid; renewals never affected). Both session
+  routes (`/api/stripe/checkout`, `/api/stripe/pack`) now go through
+  `lib/stripeCheckout.ts`: explicit `payment_method_types` (default `card`;
+  `TAOS_CHECKOUT_PAYMENT_METHODS` is a comma list read per request, and
+  listing `link` restores the old behaviour whole) plus
+  `wallet_options.link.display = "never"`. If Stripe rejects either parameter
+  the session is retried without it and `[taos-checkout]` says `degraded=1`.
+  Cost: Klarna, Cash App and Amazon Pay leave checkout too.
+  `[taos-stripe-webhook]` logs one fields-only line per event and per
+  fulfillment write (`rows=0` = a 200 that changed no profile), and
+  `[taos-stripe-reconcile]` on the daily sweep's cron path logs paid sessions
+  from the last 48 h with no entitlement — log only, no auto-granting.
+  Verified: Tom walked the branch preview (plain card form, no Link block, no
+  Link email-code intercept), and a production session created after the
+  merge logged `methods=card link=never degraded=0` — 2026-11-14, PR #131
 - Tabletop Interpreter mode — `/tabletop` gets an **◉ Interpreter** chip:
   continuous, hands-free, briefed interpreting between the two people at the
   table, founders only, behind the server-only `TAOS_INTERPRETER_ENABLED`
