@@ -5,6 +5,31 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 
+// ── What this route says out loud ───────────────────────────────────────────
+//
+// Until 2026-11-14 it said nothing: a delivery that 200'd and a delivery that
+// changed a profile row looked the same from the logs, which is to say like
+// no log at all. Three months of stalled checkouts were diagnosed from
+// Stripe's side only.
+//
+// One `[taos-stripe-webhook]` line per event received, one per fulfillment
+// write, one per rejected signature. FIELDS ONLY, and only ids: event, session,
+// subscription, customer, and our own user uuid. Never an email, a name, an
+// address, a card, or an amount — the event body carries all of those and
+// none of it is read into a log line here. Errors are logged by code/name,
+// not message, because a provider's message can quote the row it choked on.
+const TAG = "[taos-stripe-webhook]";
+
+function log(line: string): void {
+  console.log(`${TAG} ${line}`);
+}
+
+function errorCode(error: unknown): string {
+  const e = (error ?? {}) as { code?: unknown; type?: unknown; name?: unknown };
+  const pick = [e.code, e.type, e.name].find((v) => typeof v === "string" && v);
+  return typeof pick === "string" ? pick.replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 60) : "unknown";
+}
+
 function periodEndISO(sub: Stripe.Subscription): string | null {
   // The account's API version (2026-05-27.dahlia) carries the billing window on
   // the subscription *item*; the top-level field is gone, so reading it stored a
@@ -34,11 +59,25 @@ async function syncSubscription(sub: Stripe.Subscription, userId?: string | null
   };
 
   // Prefer the explicit user id from checkout; otherwise match by customer.
-  if (userId) {
-    await supabaseAdmin.from("profiles").update(fields).eq("id", userId);
-  } else {
-    await supabaseAdmin.from("profiles").update(fields).eq("stripe_customer_id", customerId);
-  }
+  // `count: "exact"` asks Postgres how many rows the write touched. It is the
+  // difference between "the update ran" and "a profile changed": an update
+  // that matches nobody is not an error, and on 08-23 a green webhook sat on
+  // top of exactly that kind of nothing.
+  const write = supabaseAdmin.from("profiles").update(fields, { count: "exact" });
+  const result = (await (userId
+    ? write.eq("id", userId)
+    : write.eq("stripe_customer_id", customerId))) as {
+    error?: { code?: string } | null;
+    count?: number | null;
+  } | null;
+
+  const entitlement = active ? `${tier ?? "unknown_tier"}_granted` : "revoked";
+  const rows = typeof result?.count === "number" ? String(result.count) : "?";
+  const db = result?.error ? `error:${errorCode(result.error)}` : "ok";
+  log(
+    `action entitlement=${entitlement} user=${userId ?? "-"} customer=${customerId}` +
+      ` sub=${sub.id} status=${sub.status} matched_by=${userId ? "user" : "customer"} rows=${rows} db=${db}`
+  );
 }
 
 // Stripe delivers events concurrently and with no ordering guarantee, and each
@@ -115,6 +154,7 @@ async function creditPack(
     .from("profiles")
     .update({ pack_seconds: current + seconds, updated_at: new Date().toISOString() })
     .eq("id", userId);
+  log(`action entitlement=pack_credited user=${userId} session=${checkoutSessionId} seconds=${seconds}`);
   // eslint-disable-next-line no-console
   console.log(
     `taos.stripe.pack credit · ${checkoutSessionId} · user=${userId} · +${seconds}s · balance=${current + seconds}s`
@@ -152,6 +192,10 @@ async function handlePackPurchase(snapshot: Stripe.Checkout.Session): Promise<vo
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret || !process.env.STRIPE_SECRET_KEY) {
+    // Presence only — never the values.
+    log(
+      `config=missing webhook_secret=${secret ? 1 : 0} secret_key=${process.env.STRIPE_SECRET_KEY ? 1 : 0}`
+    );
     return NextResponse.json({ error: "Webhook not configured." }, { status: 500 });
   }
 
@@ -161,9 +205,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(body, signature, secret);
-  } catch {
+  } catch (error) {
+    // A wrong STRIPE_WEBHOOK_SECRET looks exactly like this, on every event,
+    // forever — and until now it looked like nothing at all.
+    log(
+      `signature=invalid has_header=${signature ? 1 : 0} body_bytes=${body.length} err=${errorCode(error)}`
+    );
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
+
+  const object = event.data.object as { id?: string; object?: string; subscription?: unknown };
+  const sessionId = object.object === "checkout.session" ? (object.id ?? "-") : "-";
+  const head = `type=${event.type} id=${event.id ?? "-"} session=${sessionId}`;
+  let outcome: "ok" | "ignored" = "ok";
 
   try {
     switch (event.type) {
@@ -181,6 +235,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (subId) {
           const sub = await stripe.subscriptions.retrieve(subId);
           await syncSubscription(sub, session.client_reference_id);
+        } else {
+          outcome = "ignored";
         }
         break;
       }
@@ -193,12 +249,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         break;
       }
       default:
+        outcome = "ignored";
         break;
     }
-  } catch {
+  } catch (error) {
     // Don't 500 on a processing hiccup — Stripe would retry forever. Log-and-ack.
+    log(`${head} outcome=error err=${errorCode(error)}`);
     return NextResponse.json({ received: true, handled: false });
   }
 
+  log(`${head} outcome=${outcome}`);
   return NextResponse.json({ received: true });
 }

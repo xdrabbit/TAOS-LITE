@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe, STRIPE_PACKS } from "@/lib/stripe";
+import { createCheckoutSession } from "@/lib/stripeCheckout";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getUserFromRequest } from "@/lib/authServer";
 import { trustedOrigin } from "@/lib/authRedirect";
@@ -55,7 +56,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // safer branch. `fetch` sends Origin on same-origin POSTs too, which is why
     // dropping it costs nothing on prod, previews or localhost.
     const origin = trustedOrigin(req.headers.get("origin"));
-    const session = await stripe.checkout.sessions.create({
+    // Card only, Link wallet off — lib/stripeCheckout.ts says why and how to undo it.
+    const session = await createCheckoutSession({
       mode: "payment",
       customer: customerId,
       line_items: [{ price: pack.price, quantity: 1 }],
