@@ -6,6 +6,14 @@ import {
   type ActiveAmbientSession,
   type AmbientState
 } from "@/lib/live/ambient";
+import {
+  DEFAULT_LIVE_STYLE,
+  LIVE_STYLES,
+  readStoredLiveStyle,
+  storeLiveStyle,
+  type LiveStyle
+} from "@/lib/live/style";
+import { copyFor } from "@/lib/chrome/copy";
 import { keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
@@ -74,6 +82,8 @@ interface ConceptEntry {
   concept: string;
   isGuess: boolean;
   at: number;
+  /** Not something anyone said: the screen admitting a gap (word-for-word). */
+  note?: boolean;
 }
 
 interface LiveError {
@@ -144,6 +154,13 @@ export function LiveShell(): JSX.Element {
   const [draft, setDraft] = useState("");
   const [lastHeard, setLastHeard] = useState("");
 
+  // Summary (what /live has always done, and the default) or word for word.
+  // Starts on the default at render and is restored from this device after
+  // mount — the server render has no storage, and a stored "verbatim" painted
+  // one frame late is better than a hydration mismatch.
+  const [style, setStyle] = useState<LiveStyle>(DEFAULT_LIVE_STYLE);
+  const styleRef = useRef<LiveStyle>(DEFAULT_LIVE_STYLE);
+
   const engineRef = useRef<Engine>("ambient");
   const ambientRef = useRef<ActiveAmbientSession | null>(null);
 
@@ -206,10 +223,15 @@ export function LiveShell(): JSX.Element {
     if (!getRecognitionCtor()) setSupported(false);
   }, []);
 
-  const pushFeed = useCallback((concept: string, isGuess: boolean) => {
-    setFeed((prev) =>
-      [{ id: (idRef.current += 1), concept, isGuess, at: Date.now() }, ...prev].slice(0, MAX_FEED)
-    );
+  useEffect(() => {
+    const restored = readStoredLiveStyle();
+    styleRef.current = restored;
+    setStyle(restored);
+  }, []);
+
+  const pushFeed = useCallback((concept: string, isGuess: boolean, note = false) => {
+    const entry: ConceptEntry = { id: (idRef.current += 1), concept, isGuess, at: Date.now(), note };
+    setFeed((prev) => [entry, ...prev].slice(0, MAX_FEED));
   }, []);
 
   // ── Voice readout (device engine) ─────────────────────────────────────────
@@ -583,6 +605,7 @@ export function LiveShell(): JSX.Element {
         {
           target: pairRef.current[0],
           source: pairRef.current[1],
+          style: styleRef.current,
           muted: !voiceOnRef.current
         },
         {
@@ -594,6 +617,9 @@ export function LiveShell(): JSX.Element {
             setDraft("");
             pushFeed(t, false);
           },
+          // Word for word fell too far behind and left something out rather
+          // than guess at it. Say so, in the feed, where the gap is.
+          onSkipped: () => pushFeed(copyFor(pairRef.current[0]).liveSkippedAhead, false, true),
           onTick: setElapsed,
           onEndingSoon: (reason, seconds) => setEndingSoon({ reason, seconds }),
           onWarningCleared: () => setEndingSoon(null),
@@ -617,6 +643,9 @@ export function LiveShell(): JSX.Element {
         }
       );
       ambientRef.current = session;
+      // The chip may have been tapped while this was connecting, when there
+      // was no session to tell. A no-op when they already agree.
+      session.setStyle(styleRef.current);
     } catch {
       /* onError already surfaced the message */
     }
@@ -662,6 +691,17 @@ export function LiveShell(): JSX.Element {
     },
     [onDeviceAllowed, stopAmbient, stopListening]
   );
+
+  // No restart: an open session is re-pointed over its data channel and the
+  // next thing anyone says comes out in the new style (lib/live/ambient.ts,
+  // setStyle). Not running, it is simply what the next START mints.
+  const changeStyle = useCallback((next: LiveStyle) => {
+    if (next === styleRef.current) return;
+    styleRef.current = next;
+    setStyle(next);
+    storeLiveStyle(next);
+    ambientRef.current?.setStyle(next);
+  }, []);
 
   const changeSide = useCallback(
     (next: Side) => {
@@ -760,6 +800,9 @@ export function LiveShell(): JSX.Element {
   // moment the summary lands in the feed.
   const draftTail = useFollowTail(!!draft, draft);
   const readLanguage = engine === "ambient" ? mine : spoken.targetLanguage;
+  // The style toggle's words follow the phone's owner, like the rest of the
+  // chrome that has been moved to lib/chrome/copy.ts.
+  const t = copyFor(mine);
 
   return (
     <main className="min-h-screen px-4 pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -821,6 +864,41 @@ export function LiveShell(): JSX.Element {
           {languageNative(heardLanguage)} → {languageNative(readLanguage)}
           {readoutTextOnly ? " · text only · solo texto" : ""}
         </p>
+
+        {/* Style: Summary (the default — what /live has always done) or word
+            for word. Its own row, in the Voice chip's style, and it WRAPS: the
+            Spanish labels are wider, and a row that overflows a 375 makes the
+            page pannable, which is how taps got eaten in #53. Ambient only —
+            the on-device engine has one prompt and no session to re-point.
+            Deliberately up here and not in the pinned Stop/Clear bar. */}
+        {engine === "ambient" ? (
+          <div data-live-style="" className="-mt-1 flex flex-col gap-1.5">
+            <div
+              role="group"
+              aria-label={t.liveStyleLabel}
+              className="flex flex-wrap items-center gap-2"
+            >
+              {LIVE_STYLES.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => changeStyle(key)}
+                  aria-pressed={style === key}
+                  className={`rounded-full border px-3 py-1 text-[11px] transition ${
+                    style === key
+                      ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
+                      : "border-white/10 bg-white/5 text-amber-100/70"
+                  }`}
+                >
+                  {key === "verbatim" ? t.liveStyleVerbatim : t.liveStyleSummary}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-amber-100/50">
+              {style === "verbatim" ? t.liveStyleVerbatimHint : t.liveStyleSummaryHint}
+            </p>
+          </div>
+        ) : null}
 
         {/* On-device only: who is talking. Ambient AI hears the whole room. */}
         {engine === "device" ? (
@@ -956,7 +1034,16 @@ export function LiveShell(): JSX.Element {
               </div>
             ) : (
               <ol className="flex flex-col gap-2">
-                {feed.map((entry) => (
+                {feed.map((entry) =>
+                  entry.note ? (
+                    <li
+                      key={entry.id}
+                      data-live-note=""
+                      className="rounded-2xl border border-dashed border-amber-300/25 px-4 py-2 text-sm text-amber-100/60"
+                    >
+                      {entry.concept}
+                    </li>
+                  ) : (
                   <li
                     key={entry.id}
                     className={`rounded-3xl border p-5 ${
@@ -984,7 +1071,8 @@ export function LiveShell(): JSX.Element {
                       {entry.concept}
                     </p>
                   </li>
-                ))}
+                  )
+                )}
               </ol>
             )}
           </div>

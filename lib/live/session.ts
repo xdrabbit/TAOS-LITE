@@ -8,7 +8,8 @@
 // against a hand-copied session object, and a hand-copied object is one edit
 // away from documenting a configuration nobody ships.
 
-import { buildInterpreterInstructions } from "@/lib/live/instructions";
+import { buildLiveInstructions } from "@/lib/live/instructions";
+import { DEFAULT_LIVE_STYLE, type LiveStyle } from "@/lib/live/style";
 import { contextTokenLimitFromEnv, truncationCap } from "@/lib/realtime/truncation";
 
 /**
@@ -37,6 +38,58 @@ export const LIVE_CONTEXT_TOKEN_LIMIT = contextTokenLimitFromEnv(
 );
 
 /**
+ * The same cap for WORD-FOR-WORD style, and it is a different number for the
+ * reason every surface's number is different: what the client asks for.
+ *
+ * Word-for-word does not ask the model to re-read the conversation at all.
+ * Each response is pointed at ONE heard segment with an `item_reference`
+ * (lib/live/respond.ts), and it is billed for that segment and nothing else —
+ * measured 2026-11-15, per-response input audio 38 → 22 → 66 → 116 → 77 → 38
+ * → 40 → 58 → 71 tokens, each one the length of its own remark, flat, with
+ * the conversation growing underneath it the whole time. So the re-read this
+ * cap exists to stop is already not happening, and the cap's job here is the
+ * opposite one: to NOT throw away audio that has not been rendered yet.
+ *
+ * That is a real failure and not a theoretical one. Truncation prunes oldest
+ * first, this style runs behind by design, and at a deliberately tiny cap (50)
+ * a queued segment was pruned before its turn came: the response got no audio
+ * (`in_audio: 0`) and the model invented a sentence. At 150 — summary's number
+ * — fifteen seconds of backlog would do the same.
+ *
+ * 8,000, with the client refusing to render anything older than 90 seconds
+ * (LIVE_VERBATIM_MAX_LAG_MS). The room adds at most 10 tokens a second and the
+ * model's voice 20, so a segment that has waited 90 seconds has at most ~3,000
+ * tokens stacked after it; the server prunes to 80% of the cap, 6,400, which
+ * leaves that segment in with more than 2x to spare. It is still a ceiling: if
+ * a client ever did send a bare `response.create` in this style, the most it
+ * could re-read is 8,000 tokens (about 26¢), not an entire dinner.
+ *
+ *     OPENAI_LIVE_VERBATIM_CONTEXT_TOKENS=8000      ("off" = uncapped; do not)
+ */
+export const LIVE_VERBATIM_CONTEXT_TOKEN_LIMIT = contextTokenLimitFromEnv(
+  process.env.OPENAI_LIVE_VERBATIM_CONTEXT_TOKENS,
+  8000
+);
+
+/**
+ * One response's ceiling, per style.
+ *
+ * 120 has clipped every micro-summary since /live shipped — "a long response
+ * is a stale response". Applied to a word-for-word rendering it is six seconds
+ * of speech (audio out is 20 tokens a second) and then a sentence cut off in
+ * the middle. 1,200 is a full minute of continuous rendering in ONE response:
+ * past any single stretch of talk VAD will hand over, and still a hard stop
+ * on a runaway.
+ */
+export const LIVE_SUMMARY_MAX_OUTPUT_TOKENS = 120;
+export const LIVE_VERBATIM_MAX_OUTPUT_TOKENS = 1200;
+
+/** The context cap a style runs under. `null` = uncapped (env said "off"). */
+export function liveContextTokenLimit(style: LiveStyle): number | null {
+  return style === "verbatim" ? LIVE_VERBATIM_CONTEXT_TOKEN_LIMIT : LIVE_CONTEXT_TOKEN_LIMIT;
+}
+
+/**
  * A minted secret is good for two minutes. The client mints and connects in
  * one breath, so a longer window is only useful to somebody who lifted the
  * secret out of a log or a proxy. Matches /call.
@@ -52,6 +105,12 @@ export interface LiveSessionOptions {
   voice: string;
   transcribeModel: string;
   /**
+   * Summary (the default — what /live has always done) or word-for-word.
+   * Moves exactly three fields: the instructions, the per-response ceiling
+   * and the context cap. See buildLiveStylePatch.
+   */
+  style?: LiveStyle;
+  /**
    * Override the context cap. `null` means no `truncation` block at all — the
    * API's "auto" default, which is the expensive setting. Only the measurement
    * harness passes null; it is how the "before" column gets measured.
@@ -59,20 +118,52 @@ export interface LiveSessionOptions {
   contextTokenLimit?: number | null;
 }
 
-export function buildLiveSession(opts: LiveSessionOptions): Record<string, unknown> {
-  const cap = opts.contextTokenLimit === undefined ? LIVE_CONTEXT_TOKEN_LIMIT : opts.contextTokenLimit;
-
+/**
+ * The part of the session that changes with the style — and nothing else.
+ *
+ * It is its own function because it is used twice. buildLiveSession spreads
+ * it into the session it mints, and the mint route hands the browser one of
+ * these per style, so flipping the toggle mid-dinner is a `session.update`
+ * with this object rather than a hang-up and a redial (lib/live/ambient.ts,
+ * setStyle). Built on the server either way: the caps follow the server's env
+ * and the browser never assembles a prompt or a spend limit of its own.
+ *
+ * Every style states all three fields, so a patch always fully replaces the
+ * other style's and switching back restores exactly what was minted.
+ */
+export function buildLiveStylePatch(opts: {
+  style: LiveStyle;
+  target: string;
+  source: string;
+  contextTokenLimit?: number | null;
+}): Record<string, unknown> {
+  const cap =
+    opts.contextTokenLimit === undefined ? liveContextTokenLimit(opts.style) : opts.contextTokenLimit;
   return {
     type: "realtime",
-    model: opts.model,
-    instructions: buildInterpreterInstructions(opts.target, opts.source),
-    output_modalities: ["audio"],
+    instructions: buildLiveInstructions(opts.style, opts.target, opts.source),
     // Keep every summary clipped even if the prompt is ignored — a long
-    // response is a stale response.
-    max_output_tokens: 120,
+    // response is a stale response. Word-for-word gets a minute instead.
+    max_output_tokens:
+      opts.style === "verbatim" ? LIVE_VERBATIM_MAX_OUTPUT_TOKENS : LIVE_SUMMARY_MAX_OUTPUT_TOKENS,
     // THE cost guard. See LIVE_CONTEXT_TOKEN_LIMIT above, and
     // lib/realtime/truncation.ts for what it stops.
-    ...(cap === null ? {} : { truncation: truncationCap(cap) }),
+    ...(cap === null ? {} : { truncation: truncationCap(cap) })
+  };
+}
+
+export function buildLiveSession(opts: LiveSessionOptions): Record<string, unknown> {
+  const style = opts.style ?? DEFAULT_LIVE_STYLE;
+
+  return {
+    ...buildLiveStylePatch({
+      style,
+      target: opts.target,
+      source: opts.source,
+      contextTokenLimit: opts.contextTokenLimit
+    }),
+    model: opts.model,
+    output_modalities: ["audio"],
     audio: {
       input: {
         // NO noise_reduction here, unlike /call and /tabletop. Both of those

@@ -2,6 +2,8 @@
 
 import type { LanguageCode } from "@/lib/languages/catalog";
 import { jsonAuthHeaders } from "@/lib/authClient";
+import { nextResponse, type PendingTurn } from "@/lib/live/respond";
+import { audioDrainTimeoutMs, DEFAULT_LIVE_STYLE, type LiveStyle } from "@/lib/live/style";
 
 // WebRTC client for /live "Ambient AI" mode. Streams the mic continuously to a
 // GA Realtime session (minted by POST /api/live/realtime) whose only job is to
@@ -33,6 +35,8 @@ export interface AmbientConfig {
   target: AmbientTarget;
   /** What is being spoken around them, so the prompt can name it. */
   source: AmbientTarget;
+  /** Summary (the default) or word-for-word. Changeable while live: setStyle. */
+  style?: LiveStyle;
   /** Start with output audio muted (text-only). */
   muted?: boolean;
   /** Hard session cap; default 2 h — a long dinner. */
@@ -50,6 +54,13 @@ export interface AmbientEvents {
   onSummaryDelta?: (delta: string) => void;
   /** The micro-summary finished; `text` is the full transcript of it. */
   onSummaryDone?: (text: string) => void;
+  /**
+   * Word-for-word fell too far behind and left `count` heard segments
+   * unrendered rather than guess at them (lib/live/respond.ts). The screen
+   * says so; a gap nobody was told about is the thing this style promises
+   * not to have.
+   */
+  onSkipped?: (count: number) => void;
   onTick?: (elapsedSec: number) => void;
   /**
    * The session is about to close itself. `secondsLeft` counts down; null
@@ -68,6 +79,13 @@ export interface AmbientEvents {
 export interface ActiveAmbientSession {
   stop: (reason?: AmbientStopReason) => Promise<void>;
   setMuted: (muted: boolean) => void;
+  /**
+   * Switch style on the open session. No restart: the other style's settings
+   * go down the data channel as a `session.update`, and the next response —
+   * the next thing anyone says — comes out in the new style. A response
+   * already being spoken finishes in the old one.
+   */
+  setStyle: (style: LiveStyle) => void;
 }
 
 const DEFAULT_MAX_MS = 2 * 60 * 60 * 1000;
@@ -87,6 +105,12 @@ interface MintResponse {
   callUrl: string;
   model: string;
   voice: string;
+  /**
+   * What each style changes about the session, built by the server
+   * (buildLiveStylePatch) so the prompt and the two spend limits are never
+   * assembled in the browser.
+   */
+  styles?: Partial<Record<LiveStyle, Record<string, unknown>>>;
   error?: string;
   details?: string;
 }
@@ -117,7 +141,19 @@ export async function startAmbientLive(
   // has finished BOTH generating (response.done) and playing
   // (output_audio_buffer.stopped). Everything pending is coalesced into one
   // fresh summary.
-  let pendingTurns = 0;
+  //
+  // In word-for-word style nothing is coalesced: each pending segment gets a
+  // response of its own, oldest first. Which of the two happens is decided in
+  // one place, lib/live/respond.ts — read its header before changing this.
+  let pending: PendingTurn[] = [];
+  // Commit order and time per conversation item, kept from
+  // `input_audio_buffer.committed` until that item's transcription arrives.
+  const committed = new Map<string, { seq: number; at: number }>();
+  let commitSeq = 0;
+  // The style the listener wants, and the one the open session is running.
+  let style: LiveStyle = config.style ?? DEFAULT_LIVE_STYLE;
+  let sessionStyle: LiveStyle = style;
+  let stylePatches: MintResponse["styles"] = undefined;
   let responseActive = false;
   let audioPlaying = false;
   let audioStuckTimer: number | null = null;
@@ -202,11 +238,36 @@ export async function startAmbientLive(
   // Fire the next micro-summary if there is committed speech waiting and the
   // previous summary is fully finished. Called from every gate-state change.
   const maybeRespond = () => {
-    if (stopped || pendingTurns === 0 || responseActive || audioPlaying) return;
+    if (stopped || pending.length === 0 || responseActive || audioPlaying) return;
     if (!dc || dc.readyState !== "open") return;
-    pendingTurns = 0; // everything committed so far is covered by this response
+    // Ask in the style the SESSION is in, not the one the toggle shows: the
+    // two only differ for the instant before the patch below is sent.
+    const next = nextResponse(sessionStyle, pending, Date.now());
+    pending = next.remaining;
+    if (next.skipped > 0) events.onSkipped?.(next.skipped);
+    if (!next.event) return;
     responseActive = true;
-    dc.send(JSON.stringify({ type: "response.create" }));
+    dc.send(JSON.stringify(next.event));
+  };
+
+  // Bring the open session into line with the chosen style. A no-op until the
+  // data channel is open (dc.onopen calls it again) and whenever they already
+  // agree. Data-channel messages are ordered, so a `response.create` sent
+  // after this is answered under the new settings.
+  const syncStyle = () => {
+    if (stopped || style === sessionStyle) return;
+    if (!dc || dc.readyState !== "open") return;
+    const patch = stylePatches?.[style];
+    if (!patch) return;
+    dc.send(JSON.stringify({ type: "session.update", session: patch }));
+    sessionStyle = style;
+  };
+
+  const setStyle = (next: LiveStyle) => {
+    style = next;
+    syncStyle();
+    // Anything already waiting is answered the new way, now.
+    maybeRespond();
   };
 
   try {
@@ -236,15 +297,22 @@ export async function startAmbientLive(
     });
 
     setState("minting");
+    // Read at the moment of asking, not from `config`: the toggle may have
+    // moved while the mic prompt was up.
+    const mintedStyle = style;
     const mintRes = await fetch("/api/live/realtime", {
       method: "POST",
       headers: await jsonAuthHeaders(),
-      body: JSON.stringify({ target: config.target, source: config.source })
+      body: JSON.stringify({ target: config.target, source: config.source, style: mintedStyle })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
       throw new Error(mint.details || mint.error || "Could not start the live session.");
     }
+    stylePatches = mint.styles;
+    // What the server actually minted. A toggle flipped during the round trip
+    // is caught up by syncStyle the moment the channel opens.
+    sessionStyle = mintedStyle;
 
     pc = new RTCPeerConnection();
 
@@ -312,6 +380,9 @@ export async function startAmbientLive(
       // transcript comes back empty, and summarizing those made the model
       // hallucinate content into the silence.
       if (type === "input_audio_buffer.committed") {
+        if (typeof ev.item_id === "string") {
+          committed.set(ev.item_id, { seq: (commitSeq += 1), at: Date.now() });
+        }
         bumpIdle();
         return;
       }
@@ -320,13 +391,14 @@ export async function startAmbientLive(
         // Over WebRTC the audio can still be draining; output_audio_buffer
         // events release that side of the gate. Belt-and-braces: if the
         // "stopped" event never arrives, unstick after 12s (summaries are
-        // capped well below that).
+        // capped well below that; a word-for-word rendering gets longer —
+        // audioDrainTimeoutMs).
         if (audioPlaying) {
           clearAudioStuckTimer();
           audioStuckTimer = window.setTimeout(() => {
             audioPlaying = false;
             maybeRespond();
-          }, 12_000);
+          }, audioDrainTimeoutMs(sessionStyle));
         }
         maybeRespond();
         return;
@@ -348,9 +420,16 @@ export async function startAmbientLive(
         // Only turns with real words become pending summaries. Requiring some
         // letters/digits filters the "…"/"[inaudible]"-style junk transcripts
         // that noise-triggered turns produce.
+        const itemId = typeof ev.item_id === "string" ? ev.item_id : "";
+        const commit = committed.get(itemId);
+        committed.delete(itemId);
         if (t && /[\p{L}\p{N}]{2,}/u.test(t)) {
           events.onHeard?.(t);
-          pendingTurns += 1;
+          pending.push({
+            itemId,
+            seq: commit?.seq ?? (commitSeq += 1),
+            at: commit?.at ?? Date.now()
+          });
           maybeRespond();
         }
         bumpIdle();
@@ -386,6 +465,8 @@ export async function startAmbientLive(
       }
     };
     dc.onerror = () => events.onError?.("Live data channel error.");
+    // The toggle can move between the mint and the channel opening.
+    dc.onopen = () => syncStyle();
 
     setState("connecting");
     const offer = await pc.createOffer();
@@ -402,7 +483,7 @@ export async function startAmbientLive(
     }
     await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
 
-    return { stop, setMuted };
+    return { stop, setMuted, setStyle };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start live mode.";
     setState("error");
