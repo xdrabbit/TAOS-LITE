@@ -135,6 +135,45 @@ from 75 is a fabricated sentence put in a guest's mouth at a dinner party.
 > does the per-turn `session.update` now (`beforeUtterance`). **A cliff found by
 > a rig that does not do what the client does is not a cliff.**
 
+### The cap is also a ceiling on ONE segment (found 2026-11-15)
+
+The six turns above average 3.7 s each. That is why 100 measured clean, and it
+hid the other thing a cap does: **a segment bigger than the cap is pruned out
+from under its own response.** The response is created anyway, with
+`input_token_details.audio_tokens: 0`, and the model — handed nothing — writes
+nothing, or invents. Tom and Liz met it at a quiet table on 11/15 as "it holds
+its breath … and we don't get the translation": someone who talks straight
+through never gives VAD its 550 ms pause, so the whole thought is one segment.
+
+Measured on the shipped /tabletop session
+(`tests/live-fire/tabletop-flush.measure.ts`), unbroken Spanish, cap 100:
+
+| one unbroken segment | first of a session | fourth of a session |
+|---|---|---|
+| 4 s (≈ 47 tokens) | read | read |
+| 6 s (≈ 68) | read | read |
+| 7 s (≈ 76) | read | **`audio_tokens: 0` — invented** |
+| 9 s (≈ 96) | read | — |
+| 12 s, 25 s | **`audio_tokens: 0` — invented** | — |
+
+The cliff is lower mid-session than in a fresh one because the server prunes to
+`retention_ratio` (0.8) of the cap and the previous response's text is in there
+too. With the cap at 400 or off, the same 25 s translates whole in under 2 s.
+
+So the cap stays where it is and the client stops any segment from reaching it:
+`lib/tabletop/turnFlush.ts` commits by hand at 55 % of the cap
+(`tabletopMaxSegmentMs`, 5.5 s at 100) while the voice is still open, and asks
+for that response itself. Same audio, same cap, after: six segments, every one
+fed (`audio_in` 56, 56, 55, 56, 54, 30), none dropped. The price is a seam every
+5.5 s of unbroken speech — softened by telling each cut-off response where its
+sentence had got to — and roughly one extra response's text tokens per cut.
+Raising `OPENAI_TABLETOP_CONTEXT_TOKENS` lengthens the budget with it (400 → a
+cut every 22 s) at the per-response cost in the table above.
+
+**/live (cap 150) and /call (cap 100) have not been measured for this and are
+built the same way.** Until they are, assume an unbroken stretch longer than
+about 60 % of their cap is at risk there too.
+
 ### /call — unchanged, and the surface the other two were measured against
 
 | `truncation` | input audio billed | per-turn `in_audio` | model cost, 5 turns |

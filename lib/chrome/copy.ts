@@ -145,6 +145,15 @@ const EN = {
   tapToTalk: "TAP TO TALK",
   tapDone: "TAP WHEN DONE",
   tableListening: "Listening to the other side…",
+  // The end-of-turn flush (2026-11-15). `tableFinishing` replaces
+  // "Translating…" on the talk button once a turn's last words have taken a
+  // few seconds, so the table knows it is still alive. `tablePartial` marks a
+  // turn that did not all arrive; `tableNotHeard` is a turn the microphone
+  // never picked a voice out of — both instead of the silence there used to
+  // be. Spanish: pendiente de revisión por Liz.
+  tableFinishing: "Still finishing…",
+  tablePartial: "Part of this didn't come through — say it again.",
+  tableNotHeard: "Didn't catch that — a little closer, then try again.",
   connecting: "Connecting…",
   theySaid: "They said",
   youSaid: "You said",
@@ -619,6 +628,10 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     tapToTalk: "TOCA PARA HABLAR",
     tapDone: "TOCA AL TERMINAR",
     tableListening: "Escuchando al otro lado…",
+    // Pendiente de revisión por Liz (2026-11-15).
+    tableFinishing: "Terminando…",
+    tablePartial: "Una parte no llegó — dilo otra vez.",
+    tableNotHeard: "No se oyó — acércate un poco e intenta otra vez.",
     connecting: "Conectando…",
     theySaid: "Dijo",
     youSaid: "Dijiste",

@@ -32,6 +32,21 @@
 /** One brain's half of the A/B. */
 export type TabletopBrainKind = "openai" | "gemini";
 
+/** How one turn's wait for its translations ended (lib/tabletop/turnFlush.ts). */
+export type TabletopDrainOutcome = "ok" | "flushed" | "timeout";
+/** The VAD profile a session was minted with; "na" = the brain has no VAD. */
+export type TabletopVadProfileLabel = "party" | "quiet" | "na";
+
+/** One turn's end, as the openai brain reports it. Numbers and enums only. */
+export interface TurnDrainNumbers {
+  ms: number;
+  outcome: TabletopDrainOutcome;
+  committedSegments: number;
+  forcedCommits: number;
+  droppedSegments: number;
+  silent: boolean;
+}
+
 /** One finished segment's timing, as the brain measured it. */
 export interface SegmentTiming {
   firstPartialMs: number;
@@ -53,6 +68,24 @@ export interface TabletopSessionTally {
   detectMiss: number;
   /** Turns forced to one side (a long-press) while auto-detect was on. */
   forcedTurns: number;
+  // ── The end-of-turn flush (2026-11-15) ──
+  /** Turns that reported how they ended. */
+  turns: number;
+  /** Segments committed, by VAD or by hand, across those turns. */
+  committedSegments: number;
+  /** The longest any turn waited from mic-closed to resolved. */
+  drainMsMax: number;
+  /** Turns whose end needed a commit or a response asked for by hand. */
+  flushedTurns: number;
+  /** Turns whose drain gave up — what had arrived was kept and marked. */
+  timeoutTurns: number;
+  /** Segments the segment budget committed mid-speech. */
+  forcedCommits: number;
+  /** Responses that read no audio or were cut short — left out, marked. */
+  droppedSegments: number;
+  /** Turns the mic was open for and VAD committed nothing from. */
+  silentTurns: number;
+  vadProfile: TabletopVadProfileLabel;
 }
 
 /** The numbers on the log line and the lobby card. No text, ever. */
@@ -75,6 +108,24 @@ export interface TabletopSessionSummary {
   detect_miss: number;
   /** Long-pressed (forced-direction) turns while auto-detect was on. */
   forced_turns: number;
+  // ── The end-of-turn flush (2026-11-15) ──
+  /** Segments committed across the session's turns, by VAD or by hand. */
+  committed_segments: number;
+  /** The longest drain of the session: mic closed → turn resolved, ms. */
+  drain_ms: number;
+  /** The WORST way any turn ended: timeout > flushed > ok. */
+  drain_outcome: TabletopDrainOutcome;
+  vad_profile: TabletopVadProfileLabel;
+  /** Turns that reported a drain — the denominator for the three below. */
+  turns: number;
+  flushed_turns: number;
+  timeout_turns: number;
+  /** Mid-speech commits by the segment budget. */
+  forced_commits: number;
+  /** Responses that read no audio (or were cut short) and were left out. */
+  dropped_segments: number;
+  /** Turns VAD committed nothing from — speech it never heard. */
+  silent_turns: number;
 }
 
 export function emptyTally(brain: TabletopBrainKind, startedAt: number): TabletopSessionTally {
@@ -88,8 +139,36 @@ export function emptyTally(brain: TabletopBrainKind, startedAt: number): Tableto
     estUsd: 0,
     auto: false,
     detectMiss: 0,
-    forcedTurns: 0
+    forcedTurns: 0,
+    turns: 0,
+    committedSegments: 0,
+    drainMsMax: 0,
+    flushedTurns: 0,
+    timeoutTurns: 0,
+    forcedCommits: 0,
+    droppedSegments: 0,
+    silentTurns: 0,
+    vadProfile: "na"
   };
+}
+
+/** One turn ended; fold how it ended into the session. */
+export function noteDrain(tally: TabletopSessionTally, d: TurnDrainNumbers): TabletopSessionTally {
+  return {
+    ...tally,
+    turns: tally.turns + 1,
+    committedSegments: tally.committedSegments + clampMs(d.committedSegments),
+    drainMsMax: Math.max(tally.drainMsMax, clampMs(d.ms)),
+    flushedTurns: tally.flushedTurns + (d.outcome === "flushed" ? 1 : 0),
+    timeoutTurns: tally.timeoutTurns + (d.outcome === "timeout" ? 1 : 0),
+    forcedCommits: tally.forcedCommits + clampMs(d.forcedCommits),
+    droppedSegments: tally.droppedSegments + clampMs(d.droppedSegments),
+    silentTurns: tally.silentTurns + (d.silent ? 1 : 0)
+  };
+}
+
+export function parseVadProfile(raw: unknown): TabletopVadProfileLabel {
+  return raw === "party" || raw === "quiet" ? raw : "na";
 }
 
 export function addSegment(tally: TabletopSessionTally, timing: SegmentTiming): TabletopSessionTally {
@@ -147,7 +226,17 @@ export function summarize(tally: TabletopSessionTally, endedAt: number): Tableto
     ended_at: endedAt,
     auto: tally.auto ? 1 : 0,
     detect_miss: tally.detectMiss,
-    forced_turns: tally.forcedTurns
+    forced_turns: tally.forcedTurns,
+    committed_segments: tally.committedSegments,
+    drain_ms: tally.drainMsMax,
+    drain_outcome: tally.timeoutTurns > 0 ? "timeout" : tally.flushedTurns > 0 ? "flushed" : "ok",
+    vad_profile: tally.vadProfile,
+    turns: tally.turns,
+    flushed_turns: tally.flushedTurns,
+    timeout_turns: tally.timeoutTurns,
+    forced_commits: tally.forcedCommits,
+    dropped_segments: tally.droppedSegments,
+    silent_turns: tally.silentTurns
   };
 }
 
@@ -173,7 +262,20 @@ export function tabletopLogLine(s: TabletopSessionSummary): string {
     `auto=${s.auto}`,
     `detect_miss=${s.detect_miss}`,
     // Side tap → auto turn (2026-10-28); a long-press shows up here.
-    `forced_turns=${s.forced_turns}`
+    `forced_turns=${s.forced_turns}`,
+    // The end-of-turn flush (2026-11-15), appended again. drain_ms is the
+    // session's longest drain and drain_outcome its worst; the counts after
+    // vad_profile say how many turns each one was.
+    `committed_segments=${s.committed_segments}`,
+    `drain_ms=${s.drain_ms}`,
+    `drain_outcome=${s.drain_outcome}`,
+    `vad_profile=${s.vad_profile}`,
+    `turns=${s.turns}`,
+    `flushed_turns=${s.flushed_turns}`,
+    `timeout_turns=${s.timeout_turns}`,
+    `forced_commits=${s.forced_commits}`,
+    `dropped_segments=${s.dropped_segments}`,
+    `silent_turns=${s.silent_turns}`
   ].join(" ");
 }
 
@@ -215,6 +317,25 @@ export function parseSummary(raw: unknown): TabletopSessionSummary | null {
   const detectMiss = optional("detect_miss", 100_000);
   const forcedTurns = optional("forced_turns", 100_000);
   if (auto === null || detectMiss === null || forcedTurns === null) return null;
+  // The flush fields are newer still, and optional the same way. The two that
+  // are words are ENUMS: anything outside the list is refused, so they are no
+  // more a way to smuggle text into the log than a number is.
+  const flush = {
+    committed_segments: optional("committed_segments", 1_000_000),
+    drain_ms: optional("drain_ms", MAX_MS),
+    turns: optional("turns", 100_000),
+    flushed_turns: optional("flushed_turns", 100_000),
+    timeout_turns: optional("timeout_turns", 100_000),
+    forced_commits: optional("forced_commits", 1_000_000),
+    dropped_segments: optional("dropped_segments", 1_000_000),
+    silent_turns: optional("silent_turns", 100_000)
+  };
+  for (const v of Object.values(flush)) if (v === null) return null;
+  const fl = flush as Record<keyof typeof flush, number>;
+  const outcome = o.drain_outcome === undefined ? "ok" : o.drain_outcome;
+  if (outcome !== "ok" && outcome !== "flushed" && outcome !== "timeout") return null;
+  const vadProfile = o.vad_profile === undefined ? "na" : o.vad_profile;
+  if (vadProfile !== "party" && vadProfile !== "quiet" && vadProfile !== "na") return null;
   return {
     brain: o.brain,
     seconds: Math.round(f.seconds),
@@ -229,7 +350,17 @@ export function parseSummary(raw: unknown): TabletopSessionSummary | null {
     ended_at: Math.round(f.ended_at),
     auto: auto >= 1 ? 1 : 0,
     detect_miss: Math.round(detectMiss),
-    forced_turns: Math.round(forcedTurns)
+    forced_turns: Math.round(forcedTurns),
+    committed_segments: Math.round(fl.committed_segments),
+    drain_ms: Math.round(fl.drain_ms),
+    drain_outcome: outcome,
+    vad_profile: vadProfile,
+    turns: Math.round(fl.turns),
+    flushed_turns: Math.round(fl.flushed_turns),
+    timeout_turns: Math.round(fl.timeout_turns),
+    forced_commits: Math.round(fl.forced_commits),
+    dropped_segments: Math.round(fl.dropped_segments),
+    silent_turns: Math.round(fl.silent_turns)
   };
 }
 

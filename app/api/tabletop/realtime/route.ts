@@ -3,7 +3,9 @@ import { type TabletopDirection } from "@/lib/tabletop/instructions";
 import {
   buildTabletopSession,
   TABLETOP_CONTEXT_TOKEN_LIMIT,
-  TABLETOP_SECRET_TTL_SECONDS
+  TABLETOP_SECRET_TTL_SECONDS,
+  tabletopMaxSegmentMs,
+  tabletopVadProfile
 } from "@/lib/tabletop/session";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
 import { guardSpend } from "@/lib/spendGuard";
@@ -83,7 +85,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const session = buildTabletopSession({ direction, model, transcribeModel, auto });
+  // Deployment-wide VAD sensitivity; "party" (today's) unless TAOS_TABLETOP_VAD
+  // says quiet. And the longest one segment may run before the client commits
+  // it by hand — past that the context cap prunes it out from under its own
+  // response (lib/tabletop/turnFlush.ts).
+  const vad = tabletopVadProfile();
+  const maxSegmentMs = tabletopMaxSegmentMs();
+
+  const session = buildTabletopSession({ direction, model, transcribeModel, auto, vad });
 
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
@@ -122,14 +131,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // per table, not per turn — the session outlives every turn it serves.
     console.info(
       `[taos-tabletop-mint] pair=${source}->${target} auto=${auto ? 1 : 0} model=${model} ` +
-        `context_tokens=${TABLETOP_CONTEXT_TOKEN_LIMIT ?? "off"} ttl=${TABLETOP_SECRET_TTL_SECONDS}s`
+        `context_tokens=${TABLETOP_CONTEXT_TOKEN_LIMIT ?? "off"} ttl=${TABLETOP_SECRET_TTL_SECONDS}s ` +
+        `vad_profile=${vad} max_segment_ms=${maxSegmentMs ?? "off"}`
     );
 
     return NextResponse.json({
       clientSecret,
       callUrl: `${CALLS_URL}?model=${encodeURIComponent(model)}`,
       model,
-      direction
+      direction,
+      vadProfile: vad,
+      maxSegmentMs
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error.";

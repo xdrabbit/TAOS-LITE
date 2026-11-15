@@ -72,3 +72,25 @@ export function buildAutoInstructions(pair: TabletopAutoPair): string {
     `REMINDER: start every response with [${pair.a}] or [${pair.b}] — the language you are writing — then the translation, and only the translation.`
   ].join(" ");
 }
+
+/**
+ * Instructions for ONE response to a segment the client cut by hand in the
+ * middle of somebody's sentence (lib/tabletop/turnFlush.ts — the segment
+ * budget). The session keeps almost no context on purpose, so without this the
+ * model meets the second half of a sentence cold and translates it as if it
+ * were a whole one. It is handed the last words it wrote and asked to carry
+ * on from them.
+ *
+ * `base` is the turn's own instructions, unchanged and first — this only ever
+ * ADDS a paragraph, for that one response. No text so far → `base` as it is.
+ */
+export function withContinuation(base: string, translationSoFar: string): string {
+  const tail = translationSoFar.replace(/\s+/g, " ").trim().slice(-160);
+  if (!tail) return base;
+  return [
+    base,
+    `CONTINUATION: the speaker has not paused. This audio carries straight on, mid-sentence, from audio you have already translated.`,
+    `Your translation so far ends with: "${tail}".`,
+    `Write ONLY what comes next, so that it reads on from those words. Do not repeat them. Do not finish a sentence the audio leaves unfinished.`
+  ].join(" ");
+}

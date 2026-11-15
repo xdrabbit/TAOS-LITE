@@ -162,7 +162,10 @@ describe("[taos-tabletop] gains auto= and detect_miss=, keeps every field", () =
     expect(line).toBe(
       "[taos-tabletop] brain=openai seconds=60 segments=0 first_partial_ms_p50=0 first_partial_ms_p95=0 " +
         "segment_done_ms_p50=0 segment_done_ms_p95=0 errors=0 reconnects=0 est_usd=0.0000 auto=1 detect_miss=3 " +
-        "forced_turns=0"
+        // The 2026-11-15 flush fields were appended after these; every field
+        // above keeps its place.
+        "forced_turns=0 committed_segments=0 drain_ms=0 drain_outcome=ok vad_profile=na turns=0 " +
+        "flushed_turns=0 timeout_turns=0 forced_commits=0 dropped_segments=0 silent_turns=0"
     );
   });
 
@@ -429,7 +432,8 @@ describe("[taos-tabletop] auto= means an auto turn ran; forced_turns= counts lon
     let t = emptyTally("openai", 0);
     for (let i = 0; i < 3; i++) t = noteTurn(t, { auto: false, autoActive: true });
     const line = tabletopLogLine(summarize(t, 1000));
-    expect(line).toMatch(/ auto=0 detect_miss=0 forced_turns=3$/);
+    // (Followed, since 2026-11-15, by the flush fields.)
+    expect(line).toMatch(/ auto=0 detect_miss=0 forced_turns=3 committed_segments=/);
   });
 
   it("one auto turn → auto=1; a long-press after it adds to forced_turns", () => {
