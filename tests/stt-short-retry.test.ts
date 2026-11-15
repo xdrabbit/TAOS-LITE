@@ -347,7 +347,7 @@ describe("/api/translate retry", () => {
     expect(out).not.toContain("beat");
     expect(out).not.toContain("gano");
     expect(out).not.toContain(TRANSLATION);
-    expect(line).toMatch(/ norm_gain_db=\? norm_ms=\?$/);
+    expect(line).toMatch(/ norm_gain_db=\? norm_ms=\? chunks=1 chunk_fail=0 stitch_ms=0$/);
   });
 
   it("the review copy carries rec_ms and the response names the row for Redo", async () => {

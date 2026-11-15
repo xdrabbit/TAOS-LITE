@@ -332,7 +332,8 @@ export async function flagReviewTurn(
   return (data as ReviewTurnRow | null) ?? null;
 }
 
-const MAX_REDO_TEXT_CHARS = 4000;
+// Room for a ten-minute turn (lib/translate/longTurn.ts): ~1,800 words.
+const MAX_REDO_TEXT_CHARS = 16000;
 
 /**
  * Store a Redo on a turn. Only the two redo columns: this path cannot touch

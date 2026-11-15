@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guardReview } from "@/lib/review/guard";
 import { sweepReviewTurns } from "@/lib/review/store";
+import { sweepReviewParts } from "@/lib/review/chunks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +30,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     `[taos-review] sweep by=${isCron ? "cron" : "founder"} scanned=${result.scanned}` +
       ` objects_removed=${result.objectsRemoved} rows_deleted=${result.rowsDeleted} err=${result.error ?? "?"}`
   );
+  // Staged chunks of long turns that never finished (lib/review/chunks.ts).
+  const parts = await sweepReviewParts();
+  console.log(`[taos-review] parts_sweep scanned=${parts.scanned} removed=${parts.removed} err=${parts.error ?? "?"}`);
   return NextResponse.json(result, {
     status: result.error ? 502 : 200,
     headers: { "Cache-Control": "no-store" }

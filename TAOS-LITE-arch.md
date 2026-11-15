@@ -80,9 +80,14 @@ Labels come from `lib/chrome/copy.ts` in the phone owner's language. Fenced by
 
 ### Spoken home (`/`)
 
-`TranslatorShell`: MediaRecorder at a capped bitrate with a 5-minute hard stop,
-to `POST /api/translate` (transcribe + concept paraphrase; tone is always
-`detailed`), then optional `POST /api/tts`. Auto-detect chooses between the two
+`TranslatorShell`: MediaRecorder at a capped bitrate with a 10-minute hard stop
+(`TAOS_HOME_MAX_TURN_MS`), to `POST /api/translate` (transcribe + concept
+paraphrase; tone is always `detailed`), then optional `POST /api/tts`. A turn
+longer than 4.5 minutes is recorded in chunks — sequential recorders on one
+stream, each chunk transcribed by its own request while the speaker goes on,
+then ONE translation over the stitched text; a chunk that fails becomes an
+`[audio lost m:ss]` marker instead of a failed turn
+(`lib/translate/longTurn.ts`). Auto-detect chooses between the two
 languages in the active pair only. Wake lock via `lib/wakeLock.ts`. Free tier
 gets 25 translations a month (`FREE_TRANSLATIONS`, `lib/guide.ts`);
 subscribers are unlimited. History in `taos_lite_translations`.
