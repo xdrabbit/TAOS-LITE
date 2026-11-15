@@ -49,7 +49,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   cap is also a ceiling on ONE segment" in `docs/realtime-cost-model.md`.
 
 - **Home turn: ten minutes, recorded in chunks — built 2026-11-15, draft PR
-  open, awaiting Tom's phone test.** Field data 2026-11-15: Tom and Liz hit
+  #134 open, awaiting Tom's phone test.** Field data 2026-11-15: Tom and Liz hit
   the five-minute cap seven-plus times in one day of deep conversation (the
   average turn is 88 s, so most people never see it). Tom's decision the same
   day: ten minutes on the HOME page, chunked, with a hard stop — "we don't
