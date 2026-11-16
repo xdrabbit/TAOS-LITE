@@ -77,6 +77,11 @@ export interface TabletopBrainEvents {
   onHeard?: (text: string) => void;
   /** Streaming chunk of translated text for the current turn. */
   onPartial?: (delta: string) => void;
+  /**
+   * The turn's streamed translation so far, whole — sent when something that
+   * already streamed had to come back out (lib/tabletop/turnFlush.ts).
+   */
+  onPartialReplace?: (text: string) => void;
   /** One segment's translation finished, with how long it took. */
   onSegmentDone?: (text: string, meta: SegmentTiming | null) => void;
   /** The brain had to reopen its connection mid-session, unplanned. */
@@ -102,6 +107,8 @@ export interface ActiveTabletopBrain {
   /** Close the mic, wait for in-flight phrases, resolve the whole turn. */
   endTurn: () => Promise<TurnResult>;
   stop: () => void;
+  /** The VAD profile the session was minted with; absent = no VAD (gemini). */
+  vadProfile?: string;
 }
 
 export type StartTabletopBrain = (

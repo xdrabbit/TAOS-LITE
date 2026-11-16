@@ -17,7 +17,9 @@ import { ensureTabletopAudioContext } from "@/lib/tabletop/audio";
 import {
   addSegment,
   emptyTally,
+  noteDrain,
   noteTurn,
+  parseVadProfile,
   summarize,
   type TabletopSessionSummary,
   type TabletopSessionTally
@@ -92,7 +94,26 @@ interface Exchange {
    * detected one (lib/tabletop/autoDetect.ts).
    */
   detect?: "hit" | "miss";
+  /**
+   * Not all of this turn arrived (lib/tabletop/turnFlush.ts): the wait for
+   * its last words gave up, or a piece came back unread. What is here is what
+   * arrived; both panes say the rest is missing.
+   */
+  partial?: boolean;
 }
+
+/**
+ * A turn that left nothing to show, said in the pane of whoever spoke it:
+ * "partial" = it was lost on the way, "notHeard" = the microphone never
+ * picked a voice out. Both used to be silence.
+ */
+interface TurnNotice {
+  side: Lang;
+  kind: "partial" | "notHeard";
+}
+
+/** How long a turn's last words may take before the button says so. */
+const FINISHING_AFTER_MS = 2500;
 
 /** One open auto-detect turn: the tag reader and the run being written. */
 interface AutoTurn {
@@ -227,6 +248,9 @@ export function TabletopShell({
   const [liveHeard, setLiveHeard] = useState("");
   const [liveTranslation, setLiveTranslation] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [turnNotice, setTurnNotice] = useState<TurnNotice | null>(null);
+  // The live turn has been waiting on its last words for a while.
+  const [finishing, setFinishing] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -518,6 +542,7 @@ export function TabletopShell({
   const startLiveTurn = useCallback(
     async (side: Lang, auto = false) => {
       setError(null);
+      setTurnNotice(null);
       speakGenRef.current += 1;
       playerRef.current?.pause();
       playerRef.current = null;
@@ -582,6 +607,12 @@ export function TabletopShell({
                 const r = a.stream.push(d);
                 applyAutoText(r.text, r.verdict);
               },
+              // A response that read no audio had its text taken back out.
+              // (A tapped turn only: an auto turn's text has already been
+              // sorted into runs by its tags, and is marked partial instead.)
+              onPartialReplace: (text) => {
+                if (!autoRef.current) setLiveTranslation(text);
+              },
               onSegmentStart: () => {
                 const a = autoRef.current;
                 if (!a) return;
@@ -608,6 +639,7 @@ export function TabletopShell({
             direction,
             { auto: autoActive }
           );
+          m.tally = { ...m.tally, vadProfile: parseVadProfile(liveRef.current.vadProfile) };
         }
         // auto=1 only once an auto turn really runs; a forced turn while auto
         // is on is a long-press, counted as forced_turns (lib/tabletop/metrics.ts).
@@ -646,8 +678,14 @@ export function TabletopShell({
       const a = autoRef.current;
       setTurn({ kind: "processing", side, auto: !!a });
       stopTimer();
+      // The drain waits as long as words keep arriving (up to 45 s for a long
+      // turn). Past a couple of seconds, say so rather than look frozen.
+      const finishingTimer = window.setTimeout(() => setFinishing(true), FINISHING_AFTER_MS);
       try {
         const result = await session.endTurn();
+        const m = meteredRef.current;
+        if (m && result.drain) m.tally = noteDrain(m.tally, result.drain);
+        const partial = result.truncated === true;
         if (a) {
           // Whatever the drain left open (a response cut off by the timeout)
           // ends here, then the last run closes and every exchange the turn
@@ -660,6 +698,15 @@ export function TabletopShell({
           a.heardAll = result.heard || a.heardAll;
           closeAutoRun(a);
           autoRef.current = null;
+          if (partial && a.closed.length) {
+            // Mark the last exchange the turn closed (on screen already).
+            const last = a.closed[a.closed.length - 1];
+            setExchanges((prev) => prev.map((ex) => (ex.at === last.at && ex.from === last.from ? { ...ex, partial: true } : ex)));
+          } else if (partial) {
+            setTurnNotice({ side, kind: "partial" });
+          } else if (!a.closed.length && result.drain?.silent) {
+            setTurnNotice({ side, kind: "notHeard" });
+          }
           void speakInOrder(a.closed, a.pair);
         } else if (result.translation || result.heard) {
           pushExchange(
@@ -667,12 +714,21 @@ export function TabletopShell({
               from: side,
               original: result.heard,
               translation: result.translation,
-              at: Date.now()
+              at: Date.now(),
+              ...(partial ? { partial: true } : {})
             },
             pair
           );
+        } else if (partial) {
+          // Lost on the way, and nothing to show for it. Say so.
+          setTurnNotice({ side, kind: "partial" });
+        } else if (result.drain?.silent) {
+          // The mic was open and no voice was picked out of it.
+          setTurnNotice({ side, kind: "notHeard" });
         }
       } finally {
+        window.clearTimeout(finishingTimer);
+        setFinishing(false);
         autoRef.current = null;
         setLiveHeard("");
         setLiveTranslation("");
@@ -1025,6 +1081,11 @@ export function TabletopShell({
                 <div className="mt-1 text-2xl font-medium leading-snug text-amber-50">
                   {theirs.translation}
                 </div>
+                {theirs.partial ? (
+                  <div data-tabletop-partial="" className="mt-1 text-xs text-amber-300/80">
+                    {t.tablePartial}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="flex h-full items-center justify-center text-center text-sm text-amber-100/30">
@@ -1044,6 +1105,20 @@ export function TabletopShell({
                   {t.youSaid}
                 </div>
                 <div className="text-sm text-amber-100/60">{mine.original}</div>
+                {mine.partial ? (
+                  <div data-tabletop-partial="" className="mt-1 text-xs text-amber-300/80">
+                    {t.tablePartial}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {turnNotice && turnNotice.side === lang && turn.kind === "idle" ? (
+              <div
+                data-tabletop-notice={turnNotice.kind}
+                role="status"
+                className="mt-3 rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm text-amber-100"
+              >
+                {turnNotice.kind === "partial" ? t.tablePartial : t.tableNotHeard}
               </div>
             ) : null}
           </div>
@@ -1053,6 +1128,7 @@ export function TabletopShell({
         <button
           type="button"
           data-tabletop-talk=""
+          data-tabletop-finishing={isProcessing && finishing ? "" : undefined}
           onPointerDown={(e) => press.down(e.clientX, e.clientY)}
           onPointerMove={(e) => press.move(e.clientX, e.clientY)}
           onPointerUp={() => press.up()}
@@ -1080,7 +1156,9 @@ export function TabletopShell({
             : isRecording
               ? t.tapDone
               : isProcessing
-                ? t.translating
+                ? finishing
+                  ? t.tableFinishing
+                  : t.translating
                 : otherBusy
                   ? t.tableListening
                   : t.tapToTalk}

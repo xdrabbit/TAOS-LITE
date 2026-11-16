@@ -108,6 +108,7 @@ export async function startOpenAIBrain(
       onError: events.onError,
       onHeard: events.onHeard,
       onTranslationDelta: events.onPartial,
+      onTranslationReplace: events.onPartialReplace,
       onRealtimeEvent: (ev) => {
         // Response boundaries for auto-detect's tag reader. This tap runs
         // BEFORE live.ts handles the event, so a start always precedes the

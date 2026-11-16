@@ -3,9 +3,11 @@
 import {
   buildAutoInstructions,
   buildTurnInstructions,
+  withContinuation,
   type TabletopAutoPair,
   type TabletopDirection
 } from "./instructions";
+import { createTurnFlush, type TurnDrain, type TurnFlush } from "./turnFlush";
 import { jsonAuthHeaders } from "@/lib/authClient";
 
 // WebRTC client for /tabletop "live" mode. One persistent GA Realtime session
@@ -14,9 +16,10 @@ import { jsonAuthHeaders } from "@/lib/authClient";
 // the sender entirely (replaceTrack(null)) so idle table time streams — and
 // bills — nothing. Each turn: session.update flips the direction, the mic
 // reattaches, VAD chunks the speech into phrases, and each phrase's
-// translation streams to the listener's pane. Turn end: a short grace keeps
-// silence flowing so VAD closes the last phrase, then the mic detaches and
-// the caller gets the assembled turn once in-flight responses drain.
+// translation streams to the listener's pane. Turn end: the mic mutes, and
+// lib/tabletop/turnFlush.ts decides when the turn has everything it is going
+// to get — it also cuts a segment that is running too long to be read at all,
+// and flushes by hand what VAD never closed (2026-11-15; the why is there).
 
 export type TabletopLiveState =
   | "idle"
@@ -34,6 +37,12 @@ export interface TabletopLiveEvents {
   /** Streaming chunk of translated text for the current turn. */
   onTranslationDelta?: (delta: string) => void;
   /**
+   * The turn's streamed translation, whole, after something already streamed
+   * had to be taken back: a response that turned out to have read no audio is
+   * not a translation (lib/tabletop/turnFlush.ts), so its text comes out.
+   */
+  onTranslationReplace?: (text: string) => void;
+  /**
    * Every server event, read-only, before it is handled — the brain A/B's
    * measurement tap (lib/tabletop/openaiBrain.ts). It may only LOOK: nothing
    * sent to the session depends on it, so the control arm stays what it was.
@@ -44,6 +53,15 @@ export interface TabletopLiveEvents {
 export interface TurnResult {
   heard: string;
   translation: string;
+  /**
+   * Part of this turn did not make it: the drain gave up waiting, or a
+   * segment came back unread or cut short. What did arrive is in
+   * `translation`; the table is told the rest is missing rather than left to
+   * assume the turn was whole.
+   */
+  truncated?: boolean;
+  /** How the turn ended, in numbers — for the [taos-tabletop] line. */
+  drain?: TurnDrain;
 }
 
 export interface ActiveTabletopLive {
@@ -57,20 +75,20 @@ export interface ActiveTabletopLive {
   /** Close the mic, wait for in-flight phrases, resolve the whole turn. */
   endTurn: () => Promise<TurnResult>;
   stop: () => void;
+  /** Which VAD profile the session was minted with (TAOS_TABLETOP_VAD). */
+  vadProfile?: string;
 }
 
 interface MintResponse {
   clientSecret: string;
   callUrl: string;
+  /** Longest one segment may run before the client commits it; null = never. */
+  maxSegmentMs?: number | null;
+  vadProfile?: string;
   error?: string;
   details?: string;
 }
 
-// After the button ends a turn, keep streaming (silent) audio briefly so
-// server VAD sees the pause and closes the final phrase.
-const ENDTURN_VAD_GRACE_MS = 900;
-// Hard ceiling on waiting for the last translations after a turn ends.
-const ENDTURN_DRAIN_TIMEOUT_MS = 8000;
 // Auto-disconnect after this long with no turn — caps cost if the phone is
 // left on the table. The next tap reconnects transparently.
 const IDLE_DISCONNECT_MS = 5 * 60 * 1000;
@@ -104,14 +122,25 @@ export async function startTabletopLive(
   let capReached = false;
   const startMs = Date.now();
 
-  // Per-turn accumulators.
+  // Per-turn accumulators. One entry per response, in order, so a response
+  // that has to be taken back out can be.
   let heardParts: string[] = [];
-  let translationParts: string[] = [];
-  let currentDelta = "";
+  let segments: { id: string | null; text: string }[] = [];
   let streamedAnyThisTurn = false;
-  let activeResponses = 0;
+  let lostPart = false;
+  // The mic is open.
   let turnOpen = false;
-  let drainResolve: (() => void) | null = null;
+  // The turn still owns what arrives: open, or closed and draining.
+  let turnLive = false;
+  let turnInstructions = "";
+  let turnIsAuto = false;
+  let flush: TurnFlush | null = null;
+
+  const assembled = () =>
+    segments
+      .map((seg) => seg.text.trim())
+      .filter(Boolean)
+      .join(" ");
 
   const setState = (s: TabletopLiveState) => events.onState?.(s);
 
@@ -128,6 +157,7 @@ export async function startTabletopLive(
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    flush?.dispose();
     clearIdle();
     clearCap();
     try {
@@ -163,14 +193,6 @@ export async function startTabletopLive(
         },
         Math.max(0, MAX_SESSION_MS - (Date.now() - startMs))
       );
-    }
-  };
-
-  const maybeResolveDrain = () => {
-    if (drainResolve && activeResponses === 0) {
-      const r = drainResolve;
-      drainResolve = null;
-      r();
     }
   };
 
@@ -251,39 +273,57 @@ export async function startTabletopLive(
         /* a measuring hook must never break the table */
       }
       const type = typeof ev.type === "string" ? ev.type : "";
+      // Every event goes through the turn's bookkeeping first: it knows which
+      // turn a response belongs to, and which errors are its own doing.
+      const verdict = flush?.handle(ev);
 
       if (type === "conversation.item.input_audio_transcription.completed") {
         const t = typeof ev.transcript === "string" ? ev.transcript.trim() : "";
-        if (t && /[\p{L}\p{N}]{2,}/u.test(t) && turnOpen) {
+        // `turnLive`, not `turnOpen`: the last phrase is always transcribed
+        // after the button closed the mic, and it is still this turn's.
+        if (t && /[\p{L}\p{N}]{2,}/u.test(t) && turnLive) {
           heardParts.push(t);
           events.onHeard?.(heardParts.join(" "));
         }
         return;
       }
       if (type === "response.created") {
-        activeResponses += 1;
+        // A response that starts between turns (or belongs to a turn that
+        // gave up on it) is nobody's: it must not write into the next pane.
+        if (!verdict?.forTurn) return;
+        segments.push({ id: verdict.responseId, text: "" });
         // Phrase responses arrive back-to-back with no separator; keep the
         // streamed pane readable ("love. I'm", not "love.I'm").
         if (streamedAnyThisTurn) events.onTranslationDelta?.(" ");
         return;
       }
       if (type === "response.output_text.delta" || type === "response.text.delta") {
+        if (!verdict?.forTurn) return;
         const d = typeof ev.delta === "string" ? ev.delta : "";
-        if (d) {
-          currentDelta += d;
+        const seg =
+          segments.find((x) => x.id !== null && x.id === verdict.responseId) ??
+          segments[segments.length - 1];
+        if (d && seg) {
+          seg.text += d;
           streamedAnyThisTurn = true;
           events.onTranslationDelta?.(d);
         }
         return;
       }
       if (type === "response.done") {
-        activeResponses = Math.max(0, activeResponses - 1);
-        if (currentDelta.trim()) translationParts.push(currentDelta.trim());
-        currentDelta = "";
-        maybeResolveDrain();
+        if (!verdict?.forTurn) return;
+        if (verdict.dropped) {
+          // It was handed no audio: whatever it wrote is not what was said.
+          segments = segments.filter((x) => x.id === null || x.id !== verdict.responseId);
+          lostPart = true;
+          events.onTranslationReplace?.(assembled());
+        } else if (verdict.incomplete) {
+          lostPart = true;
+        }
         return;
       }
       if (type === "error") {
+        if (verdict?.swallow) return;
         const err = ev.error as Record<string, unknown> | undefined;
         const msg = (err && typeof err.message === "string" && err.message) || "Realtime error.";
         events.onError?.(msg);
@@ -340,6 +380,18 @@ export async function startTabletopLive(
 
     const micTrack = micStream.getAudioTracks()[0] ?? null;
 
+    flush = createTurnFlush({
+      send: (ev) => {
+        if (dc && dc.readyState === "open") dc.send(JSON.stringify(ev));
+      },
+      maxSegmentMs: typeof mint.maxSegmentMs === "number" ? mint.maxSegmentMs : null,
+      // A segment cut mid-sentence is told where its sentence had got to. Not
+      // on an auto turn: its responses must open with a language tag, and
+      // "carry on from these words" is the wrong thing to say to that.
+      responseInstructions: (continuing) =>
+        continuing && !turnIsAuto ? withContinuation(turnInstructions, assembled()) : undefined
+    });
+
     const beginTurn = (direction: TabletopDirection, auto?: TabletopAutoPair): boolean => {
       if (stopped || !dc || dc.readyState !== "open" || !micTrack) {
         // Never fail silently: the UI shows "recording" the moment this is
@@ -349,19 +401,20 @@ export async function startTabletopLive(
       }
       clearIdle();
       turnOpen = true;
+      turnLive = true;
       heardParts = [];
-      translationParts = [];
-      currentDelta = "";
+      segments = [];
       streamedAnyThisTurn = false;
+      lostPart = false;
+      turnIsAuto = !!auto;
+      turnInstructions = auto ? buildAutoInstructions(auto) : buildTurnInstructions(direction);
       dc.send(
         JSON.stringify({
           type: "session.update",
-          session: {
-            type: "realtime",
-            instructions: auto ? buildAutoInstructions(auto) : buildTurnInstructions(direction)
-          }
+          session: { type: "realtime", instructions: turnInstructions }
         })
       );
+      flush?.beginTurn();
       micTrack.enabled = true;
       return true;
     };
@@ -371,44 +424,29 @@ export async function startTabletopLive(
       // Mute — silence frames keep flowing so VAD closes the last phrase, and
       // the track stays attached (detaching is what broke audio flow).
       if (micTrack) micTrack.enabled = false;
-      await new Promise((r) => setTimeout(r, ENDTURN_VAD_GRACE_MS));
-      // Wait for in-flight phrase translations to finish.
-      if (activeResponses > 0) {
-        await Promise.race([
-          new Promise<void>((r) => {
-            drainResolve = r;
-          }),
-          new Promise<void>((r) => setTimeout(r, ENDTURN_DRAIN_TIMEOUT_MS))
-        ]);
-        drainResolve = null;
-      }
+      // Wait for what the turn is owed: VAD's own close, a flush by hand if
+      // it never comes, and every response still being written — for as long
+      // as they keep arriving (lib/tabletop/turnFlush.ts).
+      const drain = flush ? await flush.endTurn() : undefined;
+      turnLive = false;
+      const result: TurnResult = {
+        heard: heardParts.join(" "),
+        // Whatever arrived, including a response the drain gave up on halfway.
+        translation: assembled(),
+        truncated: lostPart || drain?.outcome === "timeout",
+        drain
+      };
       // A cap that landed while this turn was open takes effect now that it
       // is closed — the sentence finishes, the session does not linger.
       if (capReached) {
-        const result: TurnResult = {
-          heard: heardParts.join(" "),
-          translation: (currentDelta.trim()
-            ? [...translationParts, currentDelta.trim()]
-            : translationParts
-          ).join(" ")
-        };
-        currentDelta = "";
         stop();
         return result;
       }
       bumpIdle();
-      const result: TurnResult = {
-        heard: heardParts.join(" "),
-        translation: (currentDelta.trim()
-          ? [...translationParts, currentDelta.trim()]
-          : translationParts
-        ).join(" ")
-      };
-      currentDelta = "";
       return result;
     };
 
-    return { beginTurn, endTurn, stop };
+    return { beginTurn, endTurn, stop, vadProfile: mint.vadProfile };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start live mode.";
     setState("error");

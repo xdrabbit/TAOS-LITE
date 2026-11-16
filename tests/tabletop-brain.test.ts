@@ -230,7 +230,10 @@ describe("metrics aggregation", () => {
     expect(tabletopLogLine(s)).toBe(
       "[taos-tabletop] brain=gemini seconds=184 segments=4 first_partial_ms_p50=400 " +
         "first_partial_ms_p95=600 segment_done_ms_p50=1200 segment_done_ms_p95=2000 " +
-        "errors=1 reconnects=2 est_usd=0.0123 auto=0 detect_miss=0 forced_turns=0"
+        "errors=1 reconnects=2 est_usd=0.0123 auto=0 detect_miss=0 forced_turns=0 " +
+        // Appended 2026-11-15 (the end-of-turn flush); nothing before moved.
+        "committed_segments=0 drain_ms=0 drain_outcome=ok vad_profile=na turns=0 " +
+        "flushed_turns=0 timeout_turns=0 forced_commits=0 dropped_segments=0 silent_turns=0"
     );
   });
 

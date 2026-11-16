@@ -95,6 +95,13 @@ OpenAI over WebRTC. Neither screen writes to Postgres. Context truncation caps
 live in `lib/realtime/truncation.ts`, with session builders in `lib/live/` and
 `lib/tabletop/`.
 
+`/tabletop`'s turn end is owned by `lib/tabletop/turnFlush.ts`: it commits a
+segment by hand before it outgrows the context cap (a pruned segment reaches
+the model with no audio), flushes what VAD never closed, waits for responses
+for as long as they keep arriving, and reports a response that read no audio
+so its text is left out. `TAOS_TABLETOP_VAD=party|quiet` picks the VAD
+threshold server-side.
+
 `/tabletop` also carries **Interpreter mode** (founders only,
 `TAOS_INTERPRETER_ENABLED`): a continuous, hands-free speech-to-speech session
 — no talk button — on one of four engines (`lib/interpreter/engine.ts`), one

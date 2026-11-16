@@ -16,6 +16,39 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **/tabletop live "holds its breath, then no translation" — root cause is
+  the context cap, not the drain; fix built 2026-11-15, draft PR open, phone
+  test at a quiet table pending.** Tom + Liz, a day of real use on a pro
+  account: nothing streams while one of them talks, and at the end the
+  translation never arrives. Measured on the shipped session
+  (`tests/live-fire/tabletop-flush.measure.ts`): someone who talks straight
+  through gives server VAD no 550 ms pause, so the thought is ONE segment; a
+  segment past ~6.5 s (mid-session) is bigger than the 100-token cap, the
+  server prunes it, and the response is created with `audio_tokens: 0` — the
+  model writes nothing or INVENTS ("This is all the material I have. Are you
+  sure it's enough?"). Nothing timed out. `lib/tabletop/turnFlush.ts` now
+  (1) commits by hand every 5.5 s while a voice is open and asks for that
+  response, so text streams mid-speech and nothing outgrows the cap;
+  (2) flushes a voice VAD never closed at turn end, and a committed segment
+  nobody answered; (3) waits while events keep arriving — 6 s of nothing or
+  45 s in all — with "Still finishing…" on the button; (4) keeps what arrived
+  from a timed-out turn and marks it in both panes; (5) leaves out any response
+  that read no audio. `TAOS_TABLETOP_VAD=quiet` (threshold 0.4) is there for a
+  soft voice VAD never hears at all — that one cannot be flushed, the audio is
+  not kept — and such turns now say "Didn't catch that" and are counted
+  (`silent_turns=`). STILL OPEN: Spanish for the three new lines is pendiente
+  de revisión por Liz; the `[taos-tabletop]` line is founders-only, so a
+  customer's table (the account this was found on) still writes no numbers;
+  the Gemini brain keeps its flat 8 s drain. (added 2026-11-15)
+
+- **/live and /call may drop long unbroken speech the same way** — same cap
+  mechanism (`lib/realtime/truncation.ts`), /live at 150 tokens and /call at
+  100, neither measured for a single segment longer than the cap. /live is the
+  surface built for monologues. Measure with the tabletop probe's `seg-` and
+  `steady-` cases pointed at those builders before changing anything; see "The
+  cap is also a ceiling on ONE segment" in `docs/realtime-cost-model.md`.
+  (added 2026-11-15)
+
 - **stripe-node upgrade must revisit `lib/stripeCheckout.ts`** — left open by
   PR #131. stripe-node is 16.12 and pins API version `2024-06-20`; the current
   API renames `payment_method_types` to `allowed_payment_method_types`. The
