@@ -16,30 +16,13 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
-- **/tabletop live "holds its breath, then no translation" — root cause is
-  the context cap, not the drain; fix built 2026-11-15, draft PR open, phone
-  test at a quiet table pending.** Tom + Liz, a day of real use on a pro
-  account: nothing streams while one of them talks, and at the end the
-  translation never arrives. Measured on the shipped session
-  (`tests/live-fire/tabletop-flush.measure.ts`): someone who talks straight
-  through gives server VAD no 550 ms pause, so the thought is ONE segment; a
-  segment past ~6.5 s (mid-session) is bigger than the 100-token cap, the
-  server prunes it, and the response is created with `audio_tokens: 0` — the
-  model writes nothing or INVENTS ("This is all the material I have. Are you
-  sure it's enough?"). Nothing timed out. `lib/tabletop/turnFlush.ts` now
-  (1) commits by hand every 5.5 s while a voice is open and asks for that
-  response, so text streams mid-speech and nothing outgrows the cap;
-  (2) flushes a voice VAD never closed at turn end, and a committed segment
-  nobody answered; (3) waits while events keep arriving — 6 s of nothing or
-  45 s in all — with "Still finishing…" on the button; (4) keeps what arrived
-  from a timed-out turn and marks it in both panes; (5) leaves out any response
-  that read no audio. `TAOS_TABLETOP_VAD=quiet` (threshold 0.4) is there for a
-  soft voice VAD never hears at all — that one cannot be flushed, the audio is
-  not kept — and such turns now say "Didn't catch that" and are counted
-  (`silent_turns=`). STILL OPEN: Spanish for the three new lines is pendiente
-  de revisión por Liz; the `[taos-tabletop]` line is founders-only, so a
-  customer's table (the account this was found on) still writes no numbers;
-  the Gemini brain keeps its flat 8 s drain. (added 2026-11-15)
+- **/tabletop flush — what PR #135 left open.** Spanish for the three new
+  lines is pendiente de revisión por Liz (shipped as written on Tom's say-so,
+  2026-11-16; reword if she objects). The `[taos-tabletop]` line is
+  founders-only, so a customer's table — the account this was found on — still
+  writes no numbers. The Gemini brain keeps its flat 8 s drain.
+  `TAOS_TABLETOP_VAD=quiet` exists for a soft voice VAD never hears; nobody
+  has tried it at a table yet. (added 2026-11-16)
 
 - **/live and /call may drop long unbroken speech the same way** — same cap
   mechanism (`lib/realtime/truncation.ts`), /live at 150 tokens and /call at
@@ -48,48 +31,17 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   `steady-` cases pointed at those builders before changing anything; see "The
   cap is also a ceiling on ONE segment" in `docs/realtime-cost-model.md`.
 
-- **Home turn: ten minutes, recorded in chunks — built 2026-11-15, draft PR
-  #134 open, awaiting Tom's phone test.** Field data 2026-11-15: Tom and Liz hit
-  the five-minute cap seven-plus times in one day of deep conversation (the
-  average turn is 88 s, so most people never see it). Tom's decision the same
-  day: ten minutes on the HOME page, chunked, with a hard stop — "we don't
-  want to go 13 minutes and lose 13 minutes of a side". What was built
-  (`lib/translate/longTurn.ts` has the design):
-  1. **Chunked recording** — at 4.5 minutes the recorder is stopped and a new
-     one started on the same mic stream in the same task
-     (`lib/translate/chunkedRecorder.ts`). Measured seam in Chrome: 32 ms
-     mean, 60 ms worst (`tests/live-fire/chunk-boundary-browser-check.mjs`).
-  2. **Pipeline** — each closed chunk goes to `/api/translate` as a PART
-     (transcription only) while the speaker keeps talking; the last chunk
-     carries the earlier transcripts and the server runs ONE translation over
-     the stitched text. A turn that fits one chunk is sent exactly as before.
-  3. **Bounded loss** — a chunk whose transcription fails becomes
-     `[audio lost 4:30]` / `[audio perdido 4:30]` where it was lost, and the
-     rest of the turn goes through. (Spanish pendiente de revisión por Liz.)
-  4. **Review** — the kept copy is ONE file for the whole turn (parts staged,
-     then joined with ffmpeg), so the player, Redo, the second opinion, the
-     export and the 14-day sweep are unchanged; `rec_ms` is the whole turn.
-  5. **Cap** — ten minutes is a PAID benefit (Tom and Liz, 2026-11-15 20:32
-     MT): paying subscribers, comped accounts and founders get
-     `TAOS_HOME_MAX_TURN_MS` (ten minutes unset, bounded 1–12); free and trial
-     users keep five, `TAOS_HOME_MAX_TURN_FREE_MS` (never above the paid cap).
-     The tier is `isSubscriber(profile)` — the fields the Stripe webhook
-     writes — or `isFounder(email)`. The wrap-up glow follows the user's own
-     cap (4:30 free, 9:30 paid). Enforced on the phone, like the monthly
-     allowance; `/api/translate` does not re-check it.
-  6. **The runaway-cap bug** — a 11/10 turn recorded 2,236 s because the cap
-     was one `setTimeout` that never fired. The cap is now asked every
-     second, every frame, and on `visibilitychange`/`pageshow`/`focus`,
-     against two clocks.
-  7. `[taos-translate-timing]` gains `chunks= chunk_fail= stitch_ms=`; parts
-     log `[taos-translate-chunk]`.
-  Quota: unchanged — one finished turn is one translation (one saved row),
-  however many chunks it had; anonymous `/try` cannot chunk.
-  **Open:** iOS Safari's seam and its second-recorder behaviour are unmeasured
-  (no desktop engine stands in for it) — the phone test is that leg; and a
-  ten-minute translation is spoken in sentence-aligned pieces joined
-  client-side, which no real engine has been asked to do at that length yet.
-  (added 2026-11-15)
+- **Home ten-minute turn — what PR #134 left open.** The kept copy of a
+  chunked turn needs ffmpeg in the `/api/translate` function. Production builds
+  with `TAOS_STT_NORMALIZE=0`, which leaves ffmpeg out of that route's own
+  trace; it is there today only because Vercel packs `/api/translate` into the
+  same function as `/api/video/process` (one 32 MB function on the 2026-11-16
+  deployment, every other function under 1.2 MB). That grouping is not a
+  promise: if it changes, long turns stop being kept for /review and show no
+  Redo, and the tell is `[taos-review] keep_skipped surface=home
+  code=no_ffmpeg`. Also open: Spanish `[audio perdido m:ss]` is pendiente de
+  revisión por Liz; a ten-minute translation spoken as joined pieces has had
+  one day of phone use. (added 2026-11-16)
 
 - **stripe-node upgrade must revisit `lib/stripeCheckout.ts`** — left open by
   PR #131. stripe-node is 16.12 and pins API version `2024-06-20`; the current
@@ -1287,6 +1239,38 @@ blank.
 
 ## Shipped
 
+- Home turn: ten minutes, recorded in chunks — ten minutes for paid
+  subscribers and founders (`TAOS_HOME_MAX_TURN_MS`), five for free / trial
+  (`TAOS_HOME_MAX_TURN_FREE_MS`), with a hard stop. At 4.5 minutes the recorder
+  is swapped on the same mic stream (`lib/translate/chunkedRecorder.ts`); each
+  closed chunk is transcribed while the speaker keeps talking and the last one
+  triggers ONE translation over the stitched text (`lib/translate/longTurn.ts`).
+  A chunk that fails becomes `[audio lost m:ss]` where it was lost and the rest
+  goes through. /review keeps one joined file per turn. One finished turn is
+  still one translation against the quota. Also fixes the runaway cap (a
+  2026-11-10 turn ran 2,236 s on a `setTimeout` that never fired): the cap is
+  now asked every second, every frame and on visibility/focus, against two
+  clocks. `[taos-translate-timing]` gains `chunks= chunk_fail= stitch_ms=`.
+  Phone-tested by Tom and Liz on the preview — 2026-11-16, PR #134
+- /live: Summary / Word for word — two chips under the language line, open to
+  everyone, remembered per device (`taos.live.style`), switchable while live
+  without a restart. Summary is /live exactly as it was (the default). Word
+  for word renders every sentence, one response per heard segment, oldest
+  first; past 90 s behind it skips a segment and says so in the feed rather
+  than inventing. `[taos-live-mint]` gains `style=`. Spanish labels pendiente
+  de revisión por Liz, shipped as written on Tom's say-so. Phone-tested by Tom
+  and Liz on the preview — 2026-11-16, PR #133
+- /tabletop: long unbroken phrases no longer vanish — the "holds its breath,
+  then no translation" report was the 100-token context cap pruning a segment
+  longer than ~6.5 s, so the response was created with `audio_tokens: 0` and
+  the model wrote nothing or invented. `lib/tabletop/turnFlush.ts` now commits
+  by hand every 5.5 s while a voice is open (`TAOS_TABLETOP_MAX_SEGMENT_MS`),
+  flushes what VAD never closed at turn end, waits while events keep arriving
+  (6 s of nothing or 45 s in all, "Still finishing…" on the button), keeps and
+  marks what arrived from a timed-out turn, and leaves out any response that
+  read no audio. `TAOS_TABLETOP_VAD` (default `party`, unchanged) adds a
+  `quiet` setting. Phone-tested by Tom and Liz on the preview — 2026-11-16,
+  PR #135
 - Checkout: Link wallet off the page, fulfillment observable — new checkouts
   had stalled on `checkout.link.com` "Processing…" since 2026-08-18 (four
   people, every session expired unpaid; renewals never affected). Both session
