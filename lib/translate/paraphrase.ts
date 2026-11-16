@@ -27,7 +27,10 @@ export async function paraphrase(
   sourceLabel: string,
   targetLabel: string,
   tone: Tone,
-  context: ContextTurn[] | null
+  context: ContextTurn[] | null,
+  // Only a long home turn passes this (lib/translate/longTurn.ts,
+  // translateTimeoutFor); everyone else gets the 60 s it has always been.
+  timeoutMs: number = PARAPHRASE_TIMEOUT_MS
 ): Promise<string> {
   // Full gpt-4.1, not mini: field reports (7/23, Yellowstone) had casual-mode
   // translations drifting to a different meaning entirely — mini paraphrases
@@ -58,7 +61,7 @@ export async function paraphrase(
       ]
     }),
     cache: "no-store",
-    signal: AbortSignal.timeout(PARAPHRASE_TIMEOUT_MS)
+    signal: AbortSignal.timeout(timeoutMs)
   });
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -88,7 +91,8 @@ export async function paraphraseAuto(
   tone: Tone,
   a: { code: SupportedLanguageCode; label: string },
   b: { code: SupportedLanguageCode; label: string },
-  context: ContextTurn[] | null
+  context: ContextTurn[] | null,
+  timeoutMs: number = PARAPHRASE_TIMEOUT_MS
 ): Promise<TranslatedSegment<SupportedLanguageCode>[]> {
   const model = getTranslateModel(); // full, see paraphrase()
 
@@ -105,7 +109,7 @@ export async function paraphraseAuto(
       ]
     }),
     cache: "no-store",
-    signal: AbortSignal.timeout(PARAPHRASE_TIMEOUT_MS)
+    signal: AbortSignal.timeout(timeoutMs)
   });
 
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;

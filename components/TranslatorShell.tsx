@@ -50,6 +50,23 @@ import {
   type TranslatedSegment
 } from "@/lib/translate/segments";
 import {
+  createChunkedRecorder,
+  type ChunkedRecorder,
+  type RecordedChunk
+} from "@/lib/translate/chunkedRecorder";
+import {
+  HOME_MAX_TURN_FREE_MS_DEFAULT,
+  HOME_MAX_TURN_MS_DEFAULT,
+  homeTurnCapMs,
+  longTurnKnobs,
+  serializePrior,
+  splitForSpeech,
+  turnCapReached,
+  turnElapsedMs,
+  type ChunkResult,
+  type TurnClock
+} from "@/lib/translate/longTurn";
+import {
   contextForNextTurn,
   EMPTY_CONTEXT,
   rememberTurn,
@@ -156,14 +173,43 @@ function speakPrompt(pair: readonly [LangCode, LangCode]): string {
 const TONE = "detailed" as const;
 
 // ── Per-turn safety cap ──────────────────────────────────────────────────
-// Hard limit on a single recording. On reaching it we auto-stop and run the
-// normal transcribe → translate → speak flow on whatever audio was captured
-// (the audio is NEVER discarded). Keep this <= the /api/translate route's
-// `maxDuration` (300s) — a longer turn can't be transcribed + paraphrased in
-// time and the turn fails silently. Change to 150000 for a 2.5-minute cap.
-const MAX_TURN_DURATION_MS = 300000; // 5 minutes
-// T-30s / T-10s for a five-minute turn (lib/translate/recorder.ts).
-const RAMP_WINDOWS = rampWindows(MAX_TURN_DURATION_MS);
+// Hard limit on a single turn: ten minutes for a paying subscriber or a
+// founder (TAOS_HOME_MAX_TURN_MS, the `maxTurnMs` prop), five for a free or
+// trial user (TAOS_HOME_MAX_TURN_FREE_MS, the `maxTurnFreeMs` prop) — Tom and
+// Liz's call, 2026-11-15. On reaching it we auto-stop and run the normal
+// transcribe → translate → speak flow on whatever audio was captured (the
+// audio is NEVER discarded).
+//
+// It used to be five minutes, because one recording longer than
+// /api/translate's `maxDuration` (300s) cannot be processed in time. A turn
+// is now recorded in chunks of at most 4.5 minutes, each its own request —
+// lib/translate/longTurn.ts has the whole design, and the cap is enforced by
+// a recurring check there (`turnCapReached`), never a single timer.
+
+// One chunk of a long turn that closed while the speaker was still talking:
+// its audio (kept so Flip can re-run it) and its transcript, already on its
+// way back from the server.
+interface TurnPart {
+  blob: Blob;
+  ms: number;
+  result: Promise<ChunkResult>;
+}
+
+// The turn being recorded. Direction and pair are fixed at the first tap —
+// every chunk of one turn is transcribed the same way.
+interface RecordingTurn {
+  id: string;
+  parts: TurnPart[];
+  src: string;
+  tgt: string;
+  pair: readonly [LangCode, LangCode];
+  /** Founder test knob: the chunk to treat as failed, or null. */
+  failIndex: number | null;
+}
+
+function nowClock(): TurnClock {
+  return { perf: performance.now(), wall: Date.now() };
+}
 
 // The recorder's constants and helpers — MIN_TURN_DURATION_MS, the bitrate
 // cap, pickMimeType/fileNameFor and the wrap-up ramp maths — live in
@@ -233,14 +279,28 @@ export function TranslatorShell({
   email,
   profile,
   onSignOut,
-  googleTtsEnabled = false
+  googleTtsEnabled = false,
+  maxTurnMs = HOME_MAX_TURN_MS_DEFAULT,
+  maxTurnFreeMs = HOME_MAX_TURN_FREE_MS_DEFAULT
 }: {
   email: string;
   profile: Profile | null;
   onSignOut: () => void;
   googleTtsEnabled?: boolean;
+  /** The PAID turn cap, ms — app/page.tsx reads TAOS_HOME_MAX_TURN_MS. */
+  maxTurnMs?: number;
+  /** The FREE turn cap, ms — app/page.tsx reads TAOS_HOME_MAX_TURN_FREE_MS. */
+  maxTurnFreeMs?: number;
 }): JSX.Element {
   const subscriber = isSubscriber(profile);
+  // This user's cap. The long turn is a paid benefit: a subscriber (the
+  // profile fields the Stripe webhook writes — active or comp) or a founder
+  // gets `maxTurnMs`; a free or trial user, and anyone whose profile did not
+  // load, gets `maxTurnFreeMs`.
+  const turnCapMs = homeTurnCapMs(subscriber || isFounder(email), maxTurnMs, maxTurnFreeMs);
+  // T-30s / T-10s before THIS user's cap, of the WHOLE turn, not of a chunk
+  // (lib/translate/recorder.ts): a free turn glows at 4:30, a paid one at 9:30.
+  const rampWin = rampWindows(turnCapMs);
   const [usage, setUsage] = useState<MonthlyUsage | null>(null);
   const [showPaywall, setShowPaywall] = useState(false);
   const transLeft = translationsLeft(profile, usage);
@@ -305,9 +365,15 @@ export function TranslatorShell({
   const gridMenuRef = useRef<HTMLDivElement | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderRef = useRef<ChunkedRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  // The turn being recorded, and — once it ended — the earlier chunks of the
+  // last turn when it had more than one (null for an ordinary turn), kept so
+  // Flip can re-run all of it the other way.
+  const turnRef = useRef<RecordingTurn | null>(null);
+  const lastLongTurnRef = useRef<{ id: string; parts: TurnPart[]; finalMs: number; failIndex: number | null } | null>(
+    null
+  );
   const mimeRef = useRef<string>("");
   const lastBlobRef = useRef<Blob | null>(null);
   const lastMimeRef = useRef<string>("");
@@ -322,7 +388,11 @@ export function TranslatorShell({
   const signoffOfferRef = useRef<{ generation: number; available: boolean } | null>(null);
   const shareCoverRef = useRef<Uint8Array | null>(null);
   const wakeStopRef = useRef<(() => void) | null>(null);
-  const maxStopTimerRef = useRef<number | null>(null);
+  // The cap's recurring check (an interval, not a one-shot timer) and the
+  // turn's start by two clocks — see turnCapReached in lib/translate/longTurn.ts.
+  const capTickRef = useRef<number | null>(null);
+  const turnStartRef = useRef<TurnClock>({ perf: 0, wall: 0 });
+  const checkTurnRef = useRef<() => void>(() => {});
   // Visual ramp state (drives the record button directly, no re-render per frame).
   const recordBtnRef = useRef<HTMLButtonElement | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -526,25 +596,24 @@ export function TranslatorShell({
   // frame, and respect prefers-reduced-motion by using a steady glow instead.
   function tickRamp() {
     const now = performance.now();
-    const elapsed = now - recordStartRef.current;
-    const remaining = MAX_TURN_DURATION_MS - elapsed;
+    const remaining = turnCapMs - turnElapsedMs(turnStartRef.current, nowClock());
     const btn = recordBtnRef.current;
 
     // Surface the textual heads-up once we enter the ramp window.
-    setWrappingUp(remaining <= RAMP_WINDOWS.early);
+    setWrappingUp(remaining <= rampWin.early);
 
     if (btn) {
       const reduceMotion =
         typeof window !== "undefined" &&
         window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-      if (remaining > RAMP_WINDOWS.early) {
+      if (remaining > rampWin.early) {
         resetRecordButtonStyle();
       } else {
-        const urgent = remaining <= RAMP_WINDOWS.fast;
+        const urgent = remaining <= rampWin.fast;
         // Pulse period: constant & gentle in the early window, then shrinking
         // (faster and faster) through the final window.
-        const period = pulsePeriod(remaining, RAMP_WINDOWS);
+        const period = pulsePeriod(remaining, rampWin);
 
         let wave: number;
         if (reduceMotion) {
@@ -556,20 +625,54 @@ export function TranslatorShell({
           wave = (Math.sin(pulsePhaseRef.current) + 1) / 2; // 0..1
         }
 
-        const style = rampStyle(remaining, wave, RAMP_WINDOWS, reduceMotion);
+        const style = rampStyle(remaining, wave, rampWin, reduceMotion);
         btn.style.transform = style.transform;
         btn.style.boxShadow = style.boxShadow;
       }
     }
 
     lastTickRef.current = now;
-    if (remaining <= 0) {
-      // Hard cap reached — the maxStopTimer backstop also fires stopRecording().
+    // The frame is one of three places the cap is asked about (checkTurn).
+    checkTurn();
+    if (recorderRef.current?.state !== "recording") return;
+    rafRef.current = requestAnimationFrame(tickRamp);
+  }
+
+  // The turn's one clock question, asked every second, every frame, and
+  // whenever the page comes back: is the turn at its cap, and is the current
+  // chunk at its length? 2026-11-10: a single setTimeout was the cap, it was
+  // lost while the tab was away, and a turn ran 37 minutes. A question asked
+  // again cannot be lost the same way.
+  function checkTurn() {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+    if (turnCapReached(turnStartRef.current, nowClock(), turnCapMs)) {
+      // Hard stop — and the normal flow on everything captured.
       stopRecording();
       return;
     }
-    rafRef.current = requestAnimationFrame(tickRamp);
+    if (recorder.shouldRoll() && !recorder.roll()) {
+      // This phone would not start another recorder. The chunk that just
+      // closed arrives as the turn's last; finish exactly as a stop would.
+      console.warn("[translate] could not start the next chunk — finishing the turn");
+      finishRecordingUi();
+    }
   }
+  checkTurnRef.current = checkTurn;
+
+  useEffect(() => {
+    // rAF stops in a hidden tab and an interval is throttled there; the
+    // moment the page is back is the moment to ask again.
+    const ask = () => checkTurnRef.current();
+    document.addEventListener("visibilitychange", ask);
+    window.addEventListener("pageshow", ask);
+    window.addEventListener("focus", ask);
+    return () => {
+      document.removeEventListener("visibilitychange", ask);
+      window.removeEventListener("pageshow", ask);
+      window.removeEventListener("focus", ask);
+    };
+  }, []);
 
   function stopRamp() {
     if (rafRef.current !== null) {
@@ -580,9 +683,9 @@ export function TranslatorShell({
   }
 
   function clearRecordingTimers() {
-    if (maxStopTimerRef.current !== null) {
-      window.clearTimeout(maxStopTimerRef.current);
-      maxStopTimerRef.current = null;
+    if (capTickRef.current !== null) {
+      window.clearInterval(capTickRef.current);
+      capTickRef.current = null;
     }
     stopRamp();
   }
@@ -638,6 +741,11 @@ export function TranslatorShell({
     // the one mp3 that Play and Share both use. No sign-off is offered for it —
     // the server can only append one to a single line it synthesized itself.
     const mixed = segmentsRef.current;
+    // A long turn's translation is spoken in sentence-aligned pieces and
+    // joined the same way (lib/translate/longTurn.ts, splitForSpeech): one
+    // /api/tts call cannot return nine thousand characters in its 45 s.
+    // Anything a five-minute turn usually produces is still one call.
+    const pieces = mixed ? [] : splitForSpeech(text);
     const speech = mixed
       ? speechForSegments(mixed, (seg) =>
           requestSpeech(
@@ -653,18 +761,30 @@ export function TranslatorShell({
           signoffOfferRef.current = { generation, available: false };
           return blob;
         })
-      : requestSpeech(
-          { text, engine, sourceLanguage: src, targetLanguage: tgt },
-          {
-            ...ttsOptions,
-            onResponse: (res) => {
-              signoffOfferRef.current = {
-                generation,
-                available: res.headers.get(SIGNOFF_AVAILABLE_HEADER) === "1"
-              };
+      : pieces.length > 1
+        ? speechForSegments(
+            pieces.map((piece) => ({ sourceLanguage: src, targetLanguage: tgt, original: "", translation: piece })),
+            (seg) =>
+              requestSpeech(
+                { text: seg.translation, engine, sourceLanguage: src, targetLanguage: tgt },
+                ttsOptions
+              )
+          ).then((blob) => {
+            signoffOfferRef.current = { generation, available: false };
+            return blob;
+          })
+        : requestSpeech(
+            { text, engine, sourceLanguage: src, targetLanguage: tgt },
+            {
+              ...ttsOptions,
+              onResponse: (res) => {
+                signoffOfferRef.current = {
+                  generation,
+                  available: res.headers.get(SIGNOFF_AVAILABLE_HEADER) === "1"
+                };
+              }
             }
-          }
-        );
+          );
     const request = speech.then((blob) => {
       // A pair change or a new translation can finish while TTS is in flight.
       // Never attach that older line's audio to the new result card.
@@ -743,6 +863,13 @@ export function TranslatorShell({
     const offered = offer?.generation === generation && offer.available;
     if (existing && (subscriber || !offered)) return { blob: existing, signed: false };
     if (!existing && (subscriber || segmentsRef.current)) {
+      const blob = await audioForResult(text, src, tgt, "home-share");
+      return blob ? { blob, signed: false } : null;
+    }
+    // A long line is spoken in pieces and joined (audioForResult), and like a
+    // mixed turn's joined audio it carries no sign-off: the server can only
+    // append one to a single line it synthesized itself.
+    if (!existing && splitForSpeech(text).length > 1) {
       const blob = await audioForResult(text, src, tgt, "home-share");
       return blob ? { blob, signed: false } : null;
     }
@@ -830,54 +957,79 @@ export function TranslatorShell({
       streamRef.current = stream;
       const mime = pickMimeType();
       mimeRef.current = mime;
-      // Constrain the bitrate so even a full-length turn stays a small upload
-      // (see AUDIO_BITS_PER_SECOND) — guards against unbounded buffer growth
-      // and Vercel's ~4.5 MB request-body limit.
-      const opts: MediaRecorderOptions = { audioBitsPerSecond: AUDIO_BITS_PER_SECOND };
-      if (mime) opts.mimeType = mime;
-      const recorder = new MediaRecorder(stream, opts);
-      chunksRef.current = [];
-      recorder.ondataavailable = (ev) => {
-        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
+      const knobs = longTurnKnobs(typeof window === "undefined" ? "" : window.location.search, founder);
+      const turn: RecordingTurn = {
+        id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : "",
+        parts: [],
+        src: autoDetect ? "auto" : source,
+        tgt: autoDetect ? "auto" : target,
+        pair: [pair[0], pair[1]],
+        failIndex: knobs.failIndex
       };
-      recorder.onstop = () => void handleRecordingStopped();
-      // iOS Safari ends the mic track SILENTLY when the audio session is
-      // interrupted (incoming call, Siri, another app taking the mic, some
-      // screen-lock states). Without these handlers the turn dies with the
-      // button still lit and the captured audio is lost (Liz, 7/27: "a veces
-      // simplemente deja de transmitirse… y se apaga"). Route both through the
-      // normal stop path so whatever was heard before the interruption still
-      // gets translated.
-      recorder.onerror = (ev) => {
-        console.error("[translate] recorder error — finishing the turn early", ev);
-        stopRecording();
-      };
+      turnRef.current = turn;
+      // One turn, one or more recordings on this stream
+      // (lib/translate/chunkedRecorder.ts). The bitrate is constrained so
+      // even a full chunk stays a small upload (see AUDIO_BITS_PER_SECOND) —
+      // guards against unbounded buffer growth and Vercel's ~4.5 MB
+      // request-body limit — and each recorder flushes every second so a
+      // long chunk is never one fragile buffer a suspended page could lose.
+      const recorder = createChunkedRecorder({
+        stream,
+        mime,
+        bitsPerSecond: AUDIO_BITS_PER_SECOND,
+        chunkMs: knobs.chunkMs,
+        onChunk: (chunk) => {
+          if (chunk.final) void handleRecordingStopped(turn, chunk);
+          else startPart(turn, chunk);
+        },
+        // iOS Safari ends the mic track SILENTLY when the audio session is
+        // interrupted (incoming call, Siri, another app taking the mic, some
+        // screen-lock states). Without these handlers the turn dies with the
+        // button still lit and the captured audio is lost (Liz, 7/27: "a veces
+        // simplemente deja de transmitirse… y se apaga"). Route both through the
+        // normal stop path so whatever was heard before the interruption still
+        // gets translated.
+        onError: (ev) => {
+          console.error("[translate] recorder error — finishing the turn early", ev);
+          stopRecording();
+        }
+      });
       for (const track of stream.getAudioTracks()) {
         track.onended = () => {
           console.warn("[translate] mic track ended mid-turn — finishing the turn early");
           stopRecording();
         };
       }
-      // Flush audio into chunks every second so a long turn is never held in one
-      // fragile buffer that could be lost if the page is suspended.
-      recorder.start(1000);
+      recorder.start();
       recorderRef.current = recorder;
       setStatus("recording");
       setWrappingUp(false);
 
-      // Start the per-turn cap: a setTimeout is the authoritative hard stop
-      // (fires even if the rAF ramp is throttled in a background tab); the
-      // rAF loop drives the visual wrap-up ramp.
+      // Start the per-turn cap: checkTurn on a one-second interval is the
+      // hard stop (it still runs, throttled, in a background tab, and the
+      // visibility listeners above ask again the moment the page is back);
+      // the rAF loop drives the visual wrap-up ramp and asks too.
       clearRecordingTimers();
-      recordStartRef.current = performance.now();
+      turnStartRef.current = nowClock();
+      recordStartRef.current = turnStartRef.current.perf;
       pulsePhaseRef.current = 0;
       lastTickRef.current = 0;
-      maxStopTimerRef.current = window.setTimeout(stopRecording, MAX_TURN_DURATION_MS);
+      capTickRef.current = window.setInterval(() => checkTurnRef.current(), 1000);
       rafRef.current = requestAnimationFrame(tickRamp);
     } catch {
       setStatus("error");
       setError(s.micDenied);
     }
+  }
+
+  // Everything a stop does to the screen and the mic, without touching the
+  // recorder — shared by a stop and by a roll that could not continue.
+  function finishRecordingUi() {
+    clearRecordingTimers();
+    setWrappingUp(false);
+    setStatus("processing");
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
   }
 
   function stopRecording() {
@@ -892,18 +1044,71 @@ export function TranslatorShell({
     streamRef.current = null;
   }
 
-  async function handleRecordingStopped() {
+  // One chunk of a long turn → its transcript. Never rejects: a chunk that
+  // cannot be transcribed is a LOST chunk (text null), which the server
+  // turns into a marker in the transcript — the rest of the turn goes on.
+  async function transcribePart(
+    turn: { id: string; pair: readonly [LangCode, LangCode]; failIndex: number | null },
+    index: number,
+    blob: Blob,
+    ms: number,
+    src: string,
+    tgt: string
+  ): Promise<ChunkResult> {
+    try {
+      if (turn.failIndex === index) throw new Error("forced by ?failchunk");
+      if (blob.size === 0) throw new Error("empty chunk");
+      const mime = mimeRef.current || "audio/webm";
+      const form = new FormData();
+      form.append("audio", blob, fileNameFor(mime));
+      form.append("sourceLanguage", src);
+      form.append("targetLanguage", tgt);
+      form.append("tone", TONE);
+      form.append("chunk_part", "1");
+      form.append("chunk_index", String(index));
+      form.append("chunk_ms", String(Math.round(ms)));
+      if (turn.id) form.append("turn_id", turn.id);
+      if (src === "auto") {
+        form.append("pairA", turn.pair[0]);
+        form.append("pairB", turn.pair[1]);
+      }
+      const res = await fetchWithRetry(
+        "/api/translate",
+        { method: "POST", headers: await authHeaders(), body: form },
+        { retries: 1, timeoutMs: 210000 }
+      );
+      const payload = (await res.json().catch(() => ({}))) as { chunk?: { text?: unknown } };
+      if (!res.ok || typeof payload.chunk?.text !== "string") throw new Error(`chunk ${index}: HTTP ${res.status}`);
+      return { text: payload.chunk.text, ms };
+    } catch (e) {
+      console.error("[translate] a chunk of this turn could not be transcribed", index, e);
+      return { text: null, ms };
+    }
+  }
+
+  // A chunk closed and the speaker is still talking: send it now, so by the
+  // time they stop only the last chunk is left to wait for.
+  function startPart(turn: RecordingTurn, chunk: RecordedChunk) {
+    turn.parts[chunk.index] = {
+      blob: chunk.blob,
+      ms: chunk.ms,
+      result: transcribePart(turn, chunk.index, chunk.blob, chunk.ms, turn.src, turn.tgt)
+    };
+  }
+
+  async function handleRecordingStopped(turn: RecordingTurn, last: RecordedChunk) {
     const mime = mimeRef.current || "audio/webm";
-    const blob = new Blob(chunksRef.current, { type: mime });
+    const blob = last.blob;
     recorderRef.current = null;
-    chunksRef.current = [];
+    turnRef.current = null;
+    const parts = turn.parts.filter(Boolean);
     const turnMs = performance.now() - recordStartRef.current;
     if (turnMs < MIN_TURN_DURATION_MS) {
       setStatus("error");
       setError(s.tooShort);
       return;
     }
-    if (blob.size === 0) {
+    if (blob.size === 0 && parts.length === 0) {
       // Previously this returned to idle silently — a long turn that lost its
       // audio (e.g. the page was suspended) produced no translation and no
       // error. Surface it instead so the turn never fails invisibly.
@@ -912,12 +1117,15 @@ export function TranslatorShell({
       setError(s.noAudio);
       return;
     }
-    // Keep the clip so "Flip" can re-run it the other way without re-recording.
+    // Keep the clip so "Flip" can re-run it the other way without re-recording
+    // — and, for a long turn, the earlier chunks with it.
     lastBlobRef.current = blob;
     lastMimeRef.current = mime;
     lastTurnMsRef.current = turnMs;
+    lastLongTurnRef.current =
+      parts.length > 0 ? { id: turn.id, parts, finalMs: last.ms, failIndex: turn.failIndex } : null;
     preTurnContextRef.current = contextRef.current;
-    await translateBlob(blob, mime, autoDetect ? "auto" : source, autoDetect ? "auto" : target);
+    await translateBlob(blob, mime, turn.src, turn.tgt);
   }
 
   // Shared translate routine — used by a normal turn and by Flip (same audio,
@@ -940,14 +1148,37 @@ export function TranslatorShell({
     setStatus("processing");
     try {
       const form = new FormData();
-      form.append("audio", blob, fileNameFor(mime));
+      if (blob.size > 0) form.append("audio", blob, fileNameFor(mime));
+      else form.append("audio_mime", mime);
       form.append("sourceLanguage", src);
       form.append("targetLanguage", tgt);
       form.append("tone", TONE);
+      // A long turn: `blob` is its LAST chunk. The earlier chunks' transcripts
+      // (already back, nearly always — they were sent as each chunk closed)
+      // ride along, and the server stitches them in order and translates the
+      // whole text once. Flip re-transcribes the earlier chunks first: they
+      // were heard under the other direction's language hint.
+      const long = lastLongTurnRef.current;
+      if (long) {
+        const waitStarted = performance.now();
+        const prior = await Promise.all(
+          long.parts.map((part, i) =>
+            flip ? transcribePart({ id: long.id, pair, failIndex: long.failIndex }, i, part.blob, part.ms, src, tgt) : part.result
+          )
+        );
+        form.append("prior", serializePrior(prior));
+        form.append("chunk_index", String(long.parts.length));
+        form.append("chunk_ms", String(Math.round(long.finalMs)));
+        if (long.id) form.append("turn_id", long.id);
+        // The lost marker on the transcript is in the phone owner's language.
+        form.append("marker_lang", mine);
+        form.append("stitch_ms", String(Math.round(performance.now() - waitStarted)));
+      }
       // How long this clip is, by the phone's clock: the server's
       // short-transcript check (lib/translate/shortTranscript.ts) needs the
       // length and a MediaRecorder WebM does not carry one. Flip re-sends
-      // the same clip, so the same number.
+      // the same clip, so the same number. On a long turn this is the WHOLE
+      // turn; the last chunk's own length is chunk_ms above.
       if (lastTurnMsRef.current > 0) form.append("rec_ms", String(Math.round(lastTurnMsRef.current)));
       if (src === "auto") {
         // Auto-detect is scoped to the active pair — the server decides which
@@ -963,11 +1194,12 @@ export function TranslatorShell({
       // Retry + a client-side timeout: a mid-flight connection drop (Safari's
       // "Load failed") gets one silent re-send before anyone sees an error.
       // One retry only — each attempt re-runs the whole transcribe+translate
-      // pipeline. The timeout comfortably exceeds the server's upstream caps.
+      // pipeline. The timeout comfortably exceeds the server's upstream caps
+      // (a long turn's one translation is allowed more — translateTimeoutFor).
       const res = await fetchWithRetry(
         "/api/translate",
         { method: "POST", headers: await authHeaders(), body: form },
-        { retries: 1, timeoutMs: 210000 }
+        { retries: 1, timeoutMs: long ? 280000 : 210000 }
       );
       const payload = (await res.json().catch(() => ({}))) as {
         original?: string;
@@ -1068,7 +1300,9 @@ export function TranslatorShell({
   // Redo · Rehacer: the kept clip through the fallback transcriber and the
   // same translation (POST /api/review/redo). The copy lands behind the
   // response (waitUntil), so a tap within a second of the result can meet a
-  // row that is not there yet — one quiet retry after a short wait.
+  // row that is not there yet — one quiet retry after a short wait. A long
+  // turn's copy is joined from its chunks first and lands a few seconds
+  // later still, so it gets two more.
   async function redoLast(attempt = 1): Promise<void> {
     if (!reviewId) return;
     setRedoState("busy");
@@ -1078,9 +1312,9 @@ export function TranslatorShell({
         headers: { ...(await authHeaders()), "Content-Type": "application/json" },
         body: JSON.stringify({ id: reviewId })
       });
-      if (res.status === 404 && attempt === 1) {
-        await new Promise((r) => setTimeout(r, 1500));
-        return redoLast(2);
+      if (res.status === 404 && attempt < (lastLongTurnRef.current ? 4 : 2)) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+        return redoLast(attempt + 1);
       }
       const payload = (await res.json().catch(() => ({}))) as {
         turn?: { redo?: { original_text?: string; translation_text?: string; model?: string } | null };

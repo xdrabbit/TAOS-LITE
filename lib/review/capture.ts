@@ -71,7 +71,8 @@ export interface KeepTurnInput {
   timings: ReviewTimings;
 }
 
-const MAX_TEXT_CHARS = 4000;
+// Room for a ten-minute turn (lib/translate/longTurn.ts): ~1,800 words.
+const MAX_TEXT_CHARS = 16000;
 
 /** Copy the clip and write the row. Resolves to the new row id, or null. */
 export async function keepTurnForReview(input: KeepTurnInput): Promise<string | null> {

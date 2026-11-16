@@ -47,6 +47,48 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   surface built for monologues. Measure with the tabletop probe's `seg-` and
   `steady-` cases pointed at those builders before changing anything; see "The
   cap is also a ceiling on ONE segment" in `docs/realtime-cost-model.md`.
+
+- **Home turn: ten minutes, recorded in chunks — built 2026-11-15, draft PR
+  #134 open, awaiting Tom's phone test.** Field data 2026-11-15: Tom and Liz hit
+  the five-minute cap seven-plus times in one day of deep conversation (the
+  average turn is 88 s, so most people never see it). Tom's decision the same
+  day: ten minutes on the HOME page, chunked, with a hard stop — "we don't
+  want to go 13 minutes and lose 13 minutes of a side". What was built
+  (`lib/translate/longTurn.ts` has the design):
+  1. **Chunked recording** — at 4.5 minutes the recorder is stopped and a new
+     one started on the same mic stream in the same task
+     (`lib/translate/chunkedRecorder.ts`). Measured seam in Chrome: 32 ms
+     mean, 60 ms worst (`tests/live-fire/chunk-boundary-browser-check.mjs`).
+  2. **Pipeline** — each closed chunk goes to `/api/translate` as a PART
+     (transcription only) while the speaker keeps talking; the last chunk
+     carries the earlier transcripts and the server runs ONE translation over
+     the stitched text. A turn that fits one chunk is sent exactly as before.
+  3. **Bounded loss** — a chunk whose transcription fails becomes
+     `[audio lost 4:30]` / `[audio perdido 4:30]` where it was lost, and the
+     rest of the turn goes through. (Spanish pendiente de revisión por Liz.)
+  4. **Review** — the kept copy is ONE file for the whole turn (parts staged,
+     then joined with ffmpeg), so the player, Redo, the second opinion, the
+     export and the 14-day sweep are unchanged; `rec_ms` is the whole turn.
+  5. **Cap** — ten minutes is a PAID benefit (Tom and Liz, 2026-11-15 20:32
+     MT): paying subscribers, comped accounts and founders get
+     `TAOS_HOME_MAX_TURN_MS` (ten minutes unset, bounded 1–12); free and trial
+     users keep five, `TAOS_HOME_MAX_TURN_FREE_MS` (never above the paid cap).
+     The tier is `isSubscriber(profile)` — the fields the Stripe webhook
+     writes — or `isFounder(email)`. The wrap-up glow follows the user's own
+     cap (4:30 free, 9:30 paid). Enforced on the phone, like the monthly
+     allowance; `/api/translate` does not re-check it.
+  6. **The runaway-cap bug** — a 11/10 turn recorded 2,236 s because the cap
+     was one `setTimeout` that never fired. The cap is now asked every
+     second, every frame, and on `visibilitychange`/`pageshow`/`focus`,
+     against two clocks.
+  7. `[taos-translate-timing]` gains `chunks= chunk_fail= stitch_ms=`; parts
+     log `[taos-translate-chunk]`.
+  Quota: unchanged — one finished turn is one translation (one saved row),
+  however many chunks it had; anonymous `/try` cannot chunk.
+  **Open:** iOS Safari's seam and its second-recorder behaviour are unmeasured
+  (no desktop engine stands in for it) — the phone test is that leg; and a
+  ten-minute translation is spoken in sentence-aligned pieces joined
+  client-side, which no real engine has been asked to do at that length yet.
   (added 2026-11-15)
 
 - **stripe-node upgrade must revisit `lib/stripeCheckout.ts`** — left open by

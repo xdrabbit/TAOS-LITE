@@ -3,6 +3,7 @@ import { walkieEnabled } from "@/lib/walkie/flag";
 import { guardWalkie, walkieNotFound } from "@/lib/walkie/guard";
 import { sweepWalkieMessages } from "@/lib/walkie/store";
 import { sweepReviewTurns } from "@/lib/review/store";
+import { sweepReviewParts } from "@/lib/review/chunks";
 import { reviewNightlyEnabled } from "@/lib/review/opinion";
 import { runNightlyOpinions } from "@/lib/review/secondOpinion";
 import { reconcileCheckouts } from "@/lib/stripeReconcile";
@@ -68,6 +69,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     `[taos-review] sweep by=${isCron ? "cron" : "founder"} scanned=${review.scanned}` +
       ` objects_removed=${review.objectsRemoved} rows_deleted=${review.rowsDeleted} err=${review.error ?? "?"}`
   );
+  // Staged chunks of long home turns that never finished (lib/review/chunks.ts).
+  const parts = await sweepReviewParts().catch(() => ({ scanned: 0, removed: 0, error: "threw" }));
+  console.log(`[taos-review] parts_sweep scanned=${parts.scanned} removed=${parts.removed} err=${parts.error ?? "?"}`);
   if (isCron && reviewNightlyEnabled()) {
     const apiKey = process.env.OPENAI_API_KEY;
     const nightly = apiKey

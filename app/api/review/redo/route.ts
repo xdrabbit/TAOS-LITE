@@ -10,7 +10,13 @@ import {
 } from "@/lib/review/store";
 import { getLanguageLabel, isSupportedLanguageCode } from "@/lib/realtime/languages";
 import { transcribeAudio } from "@/lib/translate/transcribe";
-import { getTranslateModel, paraphrase, paraphraseAuto } from "@/lib/translate/paraphrase";
+import {
+  getTranslateModel,
+  paraphrase,
+  paraphraseAuto,
+  PARAPHRASE_TIMEOUT_MS
+} from "@/lib/translate/paraphrase";
+import { translateTimeoutFor } from "@/lib/translate/longTurn";
 import { normalizeForStt, sttNormalizeEnabled } from "@/lib/translate/normalize";
 import { fallbackTranscribeModel, redoHintFor, retryTranscribeOptions, wordCount } from "@/lib/translate/shortTranscript";
 import { parseTone } from "@/lib/translate/prompts";
@@ -18,7 +24,12 @@ import { topLevelFromSegments } from "@/lib/translate/segments";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+// 300, not the 120 it was: a kept home turn can now be ten minutes
+// (lib/translate/longTurn.ts), stored as one file, and Redo re-reads all of it.
+export const maxDuration = 300;
+
+/** The fallback transcriber's allowance on a clip that may be ten minutes long. */
+const REDO_TRANSCRIBE_TIMEOUT_MS = 200000;
 
 // POST /api/review/redo { id } → { turn }
 //
@@ -79,7 +90,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const model = fallbackTranscribeModel();
     const hint = redoHintFor(turn);
     const t0 = performance.now();
-    const original = await transcribeAudio(apiKey, audio, retryTranscribeOptions(model, hint));
+    const original = await transcribeAudio(apiKey, audio, {
+      ...retryTranscribeOptions(model, hint),
+      timeoutMs: REDO_TRANSCRIBE_TIMEOUT_MS
+    });
     const transcribeMs = Math.round(performance.now() - t0);
 
     const tone = parseTone("detailed");
@@ -90,6 +104,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let translateMs = 0;
     if (original) {
       const t1 = performance.now();
+      const translateTimeout = translateTimeoutFor(original.length, PARAPHRASE_TIMEOUT_MS);
       if (turn.mode === "auto" && isSupportedLanguageCode(turn.source_lang) && isSupportedLanguageCode(turn.target_lang)) {
         const segs = await paraphraseAuto(
           apiKey,
@@ -97,7 +112,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           tone,
           { code: turn.source_lang, label: getLanguageLabel(turn.source_lang) },
           { code: turn.target_lang, label: getLanguageLabel(turn.target_lang) },
-          null
+          null,
+          translateTimeout
         );
         const top = topLevelFromSegments(segs);
         translation = top.translation;
@@ -111,7 +127,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           getLanguageLabel(turn.source_lang),
           getLanguageLabel(turn.target_lang),
           tone,
-          null
+          null,
+          translateTimeout
         );
       }
       translateMs = Math.round(performance.now() - t1);
