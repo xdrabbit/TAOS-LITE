@@ -792,11 +792,26 @@ describe("review: a long turn is kept as one file", () => {
   // These tests are about what is staged and kept when the build CAN join
   // chunks; whether this machine has an ffmpeg binary is not their subject
   // (the no-ffmpeg case has its own test below).
+  //
+  // ONE registration per test, and a test that needs something else sets
+  // `chunksOverride` rather than calling vi.doMock again: two pending mocks of
+  // the same module are resolved in parallel (vitest groups consecutive
+  // registrations and Promise.all()s them), so whichever resolves last wins —
+  // under a loaded machine the describe's mock beat the test's about one run
+  // in four.
+  type Chunks = typeof import("@/lib/review/chunks");
+  let chunksOverride: Partial<Chunks> = {};
   beforeEach(() => {
-    vi.doMock("@/lib/review/chunks", async (original) => ({
-      ...(await original<typeof import("@/lib/review/chunks")>()),
-      canKeepChunkedTurns: () => true
-    }));
+    chunksOverride = {};
+    vi.doMock("@/lib/review/chunks", async (original) => {
+      const real = await original<Chunks>();
+      return {
+        ...real,
+        canKeepChunkedTurns: () => (chunksOverride.canKeepChunkedTurns ?? (() => true))(),
+        assembleReviewAudio: (...a: Parameters<Chunks["assembleReviewAudio"]>) =>
+          (chunksOverride.assembleReviewAudio ?? real.assembleReviewAudio)(...a)
+      };
+    });
   });
   afterEach(() => {
     vi.doUnmock("@/lib/review/chunks");
@@ -850,15 +865,13 @@ describe("review: a long turn is kept as one file", () => {
 
   it("the kept row is the whole turn: joined audio, rec_ms of the turn, the stitched transcript", async () => {
     speakerKeepsAudio.mockResolvedValue(true);
-    vi.doMock("@/lib/review/chunks", async (original) => ({
-      ...(await original<typeof import("@/lib/review/chunks")>()),
-      canKeepChunkedTurns: () => true,
+    chunksOverride = {
       assembleReviewAudio: vi.fn(async (input: { priorCount: number; turnId: string }) => {
         expect(input).toMatchObject({ userId: "u1", turnId: TURN_ID, priorCount: 2, mime: "audio/webm" });
         return { bytes: new Uint8Array(4321), chunks: 3 };
-      })
-    }));
-    try {
+      }) as unknown as Chunks["assembleReviewAudio"]
+    };
+    {
       const { POST } = await loadRoute();
       const res = await POST(
         request({
@@ -882,18 +895,13 @@ describe("review: a long turn is kept as one file", () => {
       expect(kept.recMs).toBe(600000);
       expect(kept.originalText).toBe("one two and that is where the story ends");
       expect(kept.surface).toBe("home");
-    } finally {
-      vi.doUnmock("@/lib/review/chunks");
     }
   });
 
   it("no ffmpeg in the build: nothing staged, no row promised, and the log says why", async () => {
     speakerKeepsAudio.mockResolvedValue(true);
-    vi.doMock("@/lib/review/chunks", async (original) => ({
-      ...(await original<typeof import("@/lib/review/chunks")>()),
-      canKeepChunkedTurns: () => false
-    }));
-    try {
+    chunksOverride = { canKeepChunkedTurns: () => false };
+    {
       const { POST } = await loadRoute();
       await POST(request(part));
       const res = await POST(
@@ -906,8 +914,6 @@ describe("review: a long turn is kept as one file", () => {
       expect(bucket.size).toBe(0);
       expect(keepTurnForReview).not.toHaveBeenCalled();
       expect(lines("[taos-review]")).toEqual(["[taos-review] keep_skipped surface=home code=no_ffmpeg"]);
-    } finally {
-      vi.doUnmock("@/lib/review/chunks");
     }
   });
 
