@@ -9,10 +9,12 @@ import { TranslatorShell } from "./TranslatorShell";
 
 export function AppShell({
   googleTtsEnabled = false,
-  maxTurnMs
+  maxTurnMs,
+  maxTurnFreeMs
 }: {
   googleTtsEnabled?: boolean;
   maxTurnMs?: number;
+  maxTurnFreeMs?: number;
 }): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -94,6 +96,7 @@ export function AppShell({
       onSignOut={signOut}
       googleTtsEnabled={googleTtsEnabled}
       maxTurnMs={maxTurnMs}
+      maxTurnFreeMs={maxTurnFreeMs}
     />
   );
 }

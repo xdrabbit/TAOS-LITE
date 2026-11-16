@@ -5,8 +5,9 @@
 // "we don't want to go 13 minutes and lose 13 minutes of a side".
 // lib/translate/longTurn.ts has the design. This file pins it:
 //
-//   * the cap: ten minutes by default, TAOS_HOME_MAX_TURN_MS to change it,
-//     and enforced by a question asked again and again — never one timer
+//   * the cap: ten minutes by default, TAOS_HOME_MAX_TURN_MS to change it —
+//     for PAYING users and founders; free users keep five (Tom and Liz,
+//     2026-11-15 20:32 MT: the ten-minute turn is a paid benefit) — and enforced by a question asked again and again — never one timer
 //     (2026-11-10: a lost setTimeout let a turn run 37 minutes);
 //   * the recorder: sequential MediaRecorders on one stream, stop-then-start;
 //   * the pipeline: each chunk transcribed on its own, ONE translation over
@@ -27,8 +28,11 @@ import {
   HOME_CHUNK_MS,
   HOME_MAX_CHUNKS,
   HOME_MAX_TURN_MS_CEILING,
+  HOME_MAX_TURN_FREE_MS_DEFAULT,
   HOME_MAX_TURN_MS_DEFAULT,
+  homeMaxTurnFreeMs,
   homeMaxTurnMs,
+  homeTurnCapMs,
   LONG_SPEECH_FROM_CHARS,
   longTurnKnobs,
   lostMarker,
@@ -45,6 +49,9 @@ import {
   weaveTranslations
 } from "@/lib/translate/longTurn";
 import { createChunkedRecorder, type RecordedChunk } from "@/lib/translate/chunkedRecorder";
+import { rampWindows } from "@/lib/translate/recorder";
+import { isSubscriber, type Profile } from "@/lib/supabase";
+import { isFounder } from "@/lib/release";
 import { ffmpegPath } from "@/lib/translate/normalize";
 
 // ── Mocks for the route ────────────────────────────────────────────────────
@@ -225,7 +232,7 @@ describe("the cap", () => {
     expect(shell).toContain("capTickRef.current = window.setInterval(() => checkTurnRef.current(), 1000);");
     expect(shell).toContain('document.addEventListener("visibilitychange", ask);');
     expect(shell).toContain('window.addEventListener("pageshow", ask);');
-    expect(shell).toContain("if (turnCapReached(turnStartRef.current, nowClock(), maxTurnMs)) {");
+    expect(shell).toContain("if (turnCapReached(turnStartRef.current, nowClock(), turnCapMs)) {");
     // The frame loop asks too.
     const ramp = shell.slice(shell.indexOf("function tickRamp()"), shell.indexOf("function stopRamp()"));
     expect(ramp).toContain("checkTurn();");
@@ -233,8 +240,8 @@ describe("the cap", () => {
 
   it("the wrap-up ramp counts down to the WHOLE turn's cap, not a chunk's", () => {
     const shell = readFileSync("components/TranslatorShell.tsx", "utf8");
-    expect(shell).toContain("const rampWin = rampWindows(maxTurnMs);");
-    expect(shell).toContain("const remaining = maxTurnMs - turnElapsedMs(turnStartRef.current, nowClock());");
+    expect(shell).toContain("const rampWin = rampWindows(turnCapMs);");
+    expect(shell).toContain("const remaining = turnCapMs - turnElapsedMs(turnStartRef.current, nowClock());");
     expect(shell).toContain("maxTurnMs = HOME_MAX_TURN_MS_DEFAULT");
     expect(readFileSync("app/page.tsx", "utf8")).toContain("homeMaxTurnMs(process.env.TAOS_HOME_MAX_TURN_MS)");
   });
@@ -244,7 +251,7 @@ describe("the cap", () => {
     const check = shell.slice(shell.indexOf("function checkTurn()"), shell.indexOf("checkTurnRef.current = checkTurn;"));
     // stopRecording() is the same function the Stop button calls.
     expect(check).toContain(
-      "if (turnCapReached(turnStartRef.current, nowClock(), maxTurnMs)) {\n" +
+      "if (turnCapReached(turnStartRef.current, nowClock(), turnCapMs)) {\n" +
         "      // Hard stop — and the normal flow on everything captured.\n" +
         "      stopRecording();"
     );
@@ -253,6 +260,82 @@ describe("the cap", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// Tom and Liz, 2026-11-15 20:32 MT, on PR #134: "the 10-minute cap is a paid
+// benefit. Free-tier users keep today's 5-minute cap." Do not flip either
+// side of this without their say-so.
+describe("the cap is tiered: ten minutes is a paid benefit", () => {
+  const profile = (over: Partial<Profile>): Profile =>
+    ({ id: "u", email: "someone@example.com", subscription_status: "free", tier: null, ...over }) as unknown as Profile;
+  // Exactly what TranslatorShell computes, with the defaults app/page.tsx hands down.
+  const capFor = (p: Profile | null, email = "someone@example.com") =>
+    homeTurnCapMs(isSubscriber(p) || isFounder(email), homeMaxTurnMs(undefined), homeMaxTurnFreeMs(undefined));
+
+  it("a free user keeps five minutes; a paying one gets ten", () => {
+    expect(HOME_MAX_TURN_FREE_MS_DEFAULT).toBe(300000);
+    expect(capFor(profile({}))).toBe(300000);
+    expect(capFor(profile({ subscription_status: "active", tier: "basic" }))).toBe(600000);
+    expect(capFor(profile({ subscription_status: "active", tier: "premium" }))).toBe(600000);
+    expect(capFor(profile({ subscription_status: "comp" }))).toBe(600000);
+  });
+
+  it("anything that is not a live subscription is free: trial, canceled, past due, no profile", () => {
+    for (const status of ["trialing", "canceled", "past_due", "incomplete", "unpaid", ""]) {
+      expect(capFor(profile({ subscription_status: status, tier: "premium" } as Partial<Profile>))).toBe(300000);
+    }
+    expect(capFor(null)).toBe(300000);
+  });
+
+  it("a founder gets ten whatever their profile says", () => {
+    expect(capFor(profile({}), "xdrabbit@gmail.com")).toBe(600000);
+    expect(capFor(null, "lizmariett@gmail.com")).toBe(600000);
+  });
+
+  it("the home screen reads the tier from the profile the Stripe webhook writes — no new entitlement", () => {
+    const shell = readFileSync("components/TranslatorShell.tsx", "utf8");
+    expect(shell).toContain("const subscriber = isSubscriber(profile);");
+    expect(shell).toContain(
+      "const turnCapMs = homeTurnCapMs(subscriber || isFounder(email), maxTurnMs, maxTurnFreeMs);"
+    );
+    expect(shell).toContain("maxTurnFreeMs = HOME_MAX_TURN_FREE_MS_DEFAULT");
+    // Nothing in the shell still counts down to the paid cap directly.
+    expect(shell).not.toContain("rampWindows(maxTurnMs)");
+    expect(shell).not.toContain("nowClock(), maxTurnMs)");
+    expect(shell).not.toContain("maxTurnMs - turnElapsedMs");
+    const page = readFileSync("app/page.tsx", "utf8");
+    expect(page).toContain("homeMaxTurnFreeMs(process.env.TAOS_HOME_MAX_TURN_FREE_MS, maxTurnMs)");
+    const app = readFileSync("components/AppShell.tsx", "utf8");
+    expect(app).toContain("maxTurnMs={maxTurnMs}");
+    expect(app).toContain("maxTurnFreeMs={maxTurnFreeMs}");
+  });
+
+  it("the wrap-up glow follows the user's own cap: 4:30 free, 9:30 paid", () => {
+    expect(300000 - rampWindows(capFor(profile({}))).early).toBe(270000);
+    expect(600000 - rampWindows(capFor(profile({ subscription_status: "comp" }))).early).toBe(570000);
+  });
+
+  it("TAOS_HOME_MAX_TURN_MS stays the paid knob; TAOS_HOME_MAX_TURN_FREE_MS is the free one", () => {
+    expect(homeMaxTurnFreeMs(undefined)).toBe(300000);
+    expect(homeMaxTurnFreeMs("")).toBe(300000);
+    expect(homeMaxTurnFreeMs("nonsense")).toBe(300000);
+    expect(homeMaxTurnFreeMs("180000")).toBe(180000);
+    expect(homeMaxTurnFreeMs("1000")).toBe(60000);
+    // The paid override does not move a free user...
+    expect(homeTurnCapMs(false, homeMaxTurnMs("720000"), homeMaxTurnFreeMs(undefined, homeMaxTurnMs("720000")))).toBe(300000);
+    expect(homeTurnCapMs(true, homeMaxTurnMs("720000"), homeMaxTurnFreeMs(undefined, homeMaxTurnMs("720000")))).toBe(720000);
+  });
+
+  it("free is never longer than paid, whatever the knobs say", () => {
+    expect(homeMaxTurnFreeMs("900000")).toBe(600000);
+    expect(homeMaxTurnFreeMs(undefined, 120000)).toBe(120000);
+    expect(homeTurnCapMs(false, 120000, 300000)).toBe(120000);
+  });
+
+  it("a free turn at its cap is at most two chunks — and under 4.5 minutes it is one recording, as before", () => {
+    expect(Math.ceil(HOME_MAX_TURN_FREE_MS_DEFAULT / HOME_CHUNK_MS)).toBe(2);
+    expect(HOME_CHUNK_MS).toBeLessThan(HOME_MAX_TURN_FREE_MS_DEFAULT);
+  });
+});
+
 describe("the chunked recorder", () => {
   class FakeRecorder {
     static log: string[] = [];

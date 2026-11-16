@@ -29,7 +29,7 @@
 //
 // Pure: no React, no DOM, no network. Shared by the phone and the route.
 
-/** The home turn's cap when TAOS_HOME_MAX_TURN_MS is unset: ten minutes. */
+/** The PAID home turn's cap when TAOS_HOME_MAX_TURN_MS is unset: ten minutes. */
 export const HOME_MAX_TURN_MS_DEFAULT = 600000;
 /**
  * The override's floor and ceiling. The ceiling is not a preference: a kept
@@ -55,6 +55,38 @@ export function homeMaxTurnMs(raw: string | undefined | null): number {
   const n = Number.parseInt((raw ?? "").trim(), 10);
   if (!Number.isFinite(n) || n <= 0) return HOME_MAX_TURN_MS_DEFAULT;
   return Math.min(HOME_MAX_TURN_MS_CEILING, Math.max(HOME_MAX_TURN_MS_FLOOR, n));
+}
+
+// ── Who gets the ten minutes ───────────────────────────────────────────────
+// Tom and Liz, 2026-11-15 (20:32 MT), on this PR: the ten-minute turn is a
+// PAID benefit. A free or trial user keeps the five-minute cap the home
+// screen has always had; a paying subscriber, a comped account and a founder
+// get ten. Nothing else about a turn differs by tier — a free turn past 4.5
+// minutes rolls into a second chunk like anyone's.
+//
+// "Paying" is not decided here. The home screen asks lib/supabase.ts's
+// isSubscriber() — the profile's subscription_status/tier, the fields the
+// Stripe webhook writes — and lib/release.ts's isFounder(), and hands the
+// answer to homeTurnCapMs() below.
+
+/** A free user's cap when TAOS_HOME_MAX_TURN_FREE_MS is unset: five minutes. */
+export const HOME_MAX_TURN_FREE_MS_DEFAULT = 300000;
+
+/**
+ * TAOS_HOME_MAX_TURN_FREE_MS → a usable free cap. Anything unreadable is the
+ * default, the floor is the paid cap's floor, and it is never ABOVE the paid
+ * cap: lowering TAOS_HOME_MAX_TURN_MS under five minutes lowers this too, so
+ * a knob cannot make paying the worse deal.
+ */
+export function homeMaxTurnFreeMs(raw: string | undefined | null, paidCapMs: number = HOME_MAX_TURN_MS_DEFAULT): number {
+  const n = Number.parseInt((raw ?? "").trim(), 10);
+  const wanted = !Number.isFinite(n) || n <= 0 ? HOME_MAX_TURN_FREE_MS_DEFAULT : Math.max(HOME_MAX_TURN_MS_FLOOR, n);
+  return Math.min(wanted, paidCapMs);
+}
+
+/** This user's cap: the paid one for a subscriber or founder, the free one otherwise. */
+export function homeTurnCapMs(paid: boolean, paidCapMs: number, freeCapMs: number): number {
+  return paid ? paidCapMs : Math.min(freeCapMs, paidCapMs);
 }
 
 // ── The cap, robustly ──────────────────────────────────────────────────────

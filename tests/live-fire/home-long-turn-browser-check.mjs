@@ -1,6 +1,7 @@
 // A long home turn on the REAL home screen, in a real browser, with a fake mic.
 //
 //   node tests/live-fire/home-long-turn-browser-check.mjs
+//   TIER=free node tests/live-fire/home-long-turn-browser-check.mjs
 //
 // Needs google-chrome on PATH. Starts its own Next dev server and its own
 // throwaway probe page; /api/translate, /api/tts and Supabase are answered
@@ -25,6 +26,15 @@
 // final request carries [text, lost, text] plus the last chunk's audio and
 // the whole turn's rec_ms.
 //
+// ── TIER=free: the cap is tiered ───────────────────────────────────────────
+// The ten-minute turn is a paid benefit (Tom and Liz, 2026-11-15). The same
+// screen is mounted with the same two caps — paid 17 s, free 8 s — but for a
+// FREE profile on an address that is not a founder's. Expected, and
+// asserted: the turn stops itself at 8 s, not 17; the wrap-up line appears a
+// third of the free cap before it; and, the founder knobs being nobody
+// else's, the turn is ONE ordinary request with no chunk fields at all.
+// The default (paid) run asserts the other side: 17 s, wrap-up before THAT.
+//
 // ── What it cannot say ─────────────────────────────────────────────────────
 // Desktop Chrome. Android Chrome is the same engine; iOS Safari is not.
 import { spawn } from "node:child_process";
@@ -34,7 +44,12 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const APP_PORT = process.env.PORT ?? "3053";
-const CAP_MS = 17000;
+const FREE = process.env.TIER === "free";
+const PAID_CAP_MS = 17000;
+const FREE_CAP_MS = 8000;
+const CAP_MS = FREE ? FREE_CAP_MS : PAID_CAP_MS;
+// lib/translate/recorder.ts: a cap under 90 s glows from a third of it out.
+const WRAP_AT_MS = CAP_MS - Math.round(CAP_MS / 3);
 const CHUNK_S = 5;
 const FOUNDER = "long-turn-probe@example.com";
 const ROOT = new URL("../../", import.meta.url);
@@ -91,7 +106,7 @@ if (typeof window !== "undefined") {
       setTimeout(() => {
         void real("/api/long-turn-probe", {
           method: "POST",
-          body: JSON.stringify({ calls, heard: document.body.innerText.includes("stitched transcript") })
+          body: JSON.stringify({ calls, wrapAtMs, heard: document.body.innerText.includes("stitched transcript") })
         });
       }, 500);
       return json({ original: "the stitched transcript", translation: "la traducción", sourceLanguage: "en", targetLanguage: "es" });
@@ -101,7 +116,13 @@ if (typeof window !== "undefined") {
   };
 }
 
-const profile = { id: "probe", email: ${JSON.stringify(FOUNDER)}, plan: "comp", subscription_status: "comp", tier: null } as unknown as Profile;
+const EMAIL = ${JSON.stringify(FREE ? "free-probe@example.com" : FOUNDER)};
+const profile = ${
+    FREE
+      ? '{ id: "probe", email: EMAIL, plan: "free", subscription_status: "free", tier: null }'
+      : '{ id: "probe", email: EMAIL, plan: "comp", subscription_status: "comp", tier: null }'
+  } as unknown as Profile;
+let wrapAtMs: number | null = null;
 
 export default function LongTurnProbe() {
   useEffect(() => {
@@ -110,9 +131,26 @@ export default function LongTurnProbe() {
       tappedAt = performance.now();
       (document.querySelector("button.h-20") as HTMLButtonElement | null)?.click();
     }, 1500);
-    return () => clearTimeout(t);
+    // When the wrap-up line first shows, measured from the tap.
+    const w = setInterval(() => {
+      if (wrapAtMs === null && tappedAt && document.body.innerText.includes("Wrapping up")) {
+        wrapAtMs = Math.round(performance.now() - tappedAt);
+      }
+    }, 50);
+    return () => {
+      clearTimeout(t);
+      clearInterval(w);
+    };
   }, []);
-  return <TranslatorShell email={${JSON.stringify(FOUNDER)}} profile={profile} onSignOut={() => {}} maxTurnMs={${CAP_MS}} />;
+  return (
+    <TranslatorShell
+      email={EMAIL}
+      profile={profile}
+      onSignOut={() => {}}
+      maxTurnMs={${PAID_CAP_MS}}
+      maxTurnFreeMs={${FREE_CAP_MS}}
+    />
+  );
 }
 `
 );
@@ -205,28 +243,44 @@ for (const c of report.calls) {
   );
 }
 
-check("parts 0 and 2 were sent; the forced-fail part 1 never left the phone", parts.map((p) => p.fields.chunk_index).join(",") === "0,2");
 check(
-  "each part went up while the turn was still recording (the button still said Stop)",
-  parts.length === 2 && parts.every((p) => /stop/i.test(p.button) && p.sinceTapMs < CAP_MS),
-  parts.map((p) => `${p.sinceTapMs} ms "${p.button.trim()}"`).join(", ")
+  `the wrap-up line appeared for THIS tier's cap (${FREE ? "free" : "paid"}: about ${WRAP_AT_MS} ms in)`,
+  typeof report.wrapAtMs === "number" && report.wrapAtMs >= WRAP_AT_MS - 500 && report.wrapAtMs < WRAP_AT_MS + 1500,
+  `first seen at ${report.wrapAtMs} ms`
 );
-check("each part carried real audio of about one chunk", parts.every((p) => p.fields.audio?.bytes > 5000 && Math.abs(Number(p.fields.chunk_ms) - CHUNK_S * 1000) < 1500));
-check("exactly one final request", finals.length === 1);
-check(
-  "nobody tapped Stop: the cap stopped the turn, and at the cap — not a chunk late",
-  !!final && final.sinceTapMs >= CAP_MS - 500 && final.sinceTapMs < CAP_MS + 3000,
-  `final at ${final?.sinceTapMs} ms, cap ${CAP_MS} ms`
-);
-check("the final carries [text, lost, text] in order", !!prior && prior.length === 3 && prior[0].text === "words of chunk 0" && prior[1].lost === true && prior[2].text === "words of chunk 2", JSON.stringify(prior));
-check("the lost chunk reports its own length for the marker", !!prior && Math.abs(prior[1].ms - CHUNK_S * 1000) < 1500);
-check("the final carries the last chunk's own audio and index", final?.fields.chunk_index === "3" && final?.fields.audio?.bytes > 1000);
-check(
-  "rec_ms is the WHOLE turn, chunk_ms the last chunk",
-  Math.abs(Number(final?.fields.rec_ms) - CAP_MS) < 2500 && Number(final?.fields.chunk_ms) < CHUNK_S * 1000,
-  `rec_ms=${final?.fields.rec_ms} chunk_ms=${final?.fields.chunk_ms}`
-);
-check("one turn id across every request", new Set(report.calls.map((c) => c.fields.turn_id)).size === 1 && /^[0-9a-f-]{36}$/.test(final?.fields.turn_id ?? ""));
+if (FREE) {
+  check(
+    "a free turn stopped itself at the FREE cap, long before the paid one",
+    !!final && final.sinceTapMs >= FREE_CAP_MS - 500 && final.sinceTapMs < FREE_CAP_MS + 3000 && final.sinceTapMs < PAID_CAP_MS - 3000,
+    `final at ${final?.sinceTapMs} ms, free cap ${FREE_CAP_MS} ms, paid cap ${PAID_CAP_MS} ms`
+  );
+  check("it is ONE ordinary request: no parts, no prior, no chunk fields", report.calls.length === 1 && parts.length === 0 && !("prior" in (final?.fields ?? {})) && !("chunk_index" in (final?.fields ?? {})), Object.keys(final?.fields ?? {}).join(","));
+  check("the founder knobs in the address did nothing for a non-founder", parts.length === 0);
+  check("it carried the whole turn's audio", final?.fields.audio?.bytes > 5000 && Math.abs(Number(final?.fields.rec_ms) - FREE_CAP_MS) < 2500, `audio=${final?.fields.audio?.bytes}B rec_ms=${final?.fields.rec_ms}`);
+} else {
+  check("parts 0 and 2 were sent; the forced-fail part 1 never left the phone", parts.map((p) => p.fields.chunk_index).join(",") === "0,2");
+  check(
+    "each part went up while the turn was still recording (the button still said Stop)",
+    parts.length === 2 && parts.every((p) => /stop/i.test(p.button) && p.sinceTapMs < CAP_MS),
+    parts.map((p) => `${p.sinceTapMs} ms "${p.button.trim()}"`).join(", ")
+  );
+  check("each part carried real audio of about one chunk", parts.every((p) => p.fields.audio?.bytes > 5000 && Math.abs(Number(p.fields.chunk_ms) - CHUNK_S * 1000) < 1500));
+  check("exactly one final request", finals.length === 1);
+  check(
+    "nobody tapped Stop: the cap stopped the turn, and at the cap — not a chunk late",
+    !!final && final.sinceTapMs >= CAP_MS - 500 && final.sinceTapMs < CAP_MS + 3000,
+    `final at ${final?.sinceTapMs} ms, cap ${CAP_MS} ms`
+  );
+  check("the final carries [text, lost, text] in order", !!prior && prior.length === 3 && prior[0].text === "words of chunk 0" && prior[1].lost === true && prior[2].text === "words of chunk 2", JSON.stringify(prior));
+  check("the lost chunk reports its own length for the marker", !!prior && Math.abs(prior[1].ms - CHUNK_S * 1000) < 1500);
+  check("the final carries the last chunk's own audio and index", final?.fields.chunk_index === "3" && final?.fields.audio?.bytes > 1000);
+  check(
+    "rec_ms is the WHOLE turn, chunk_ms the last chunk",
+    Math.abs(Number(final?.fields.rec_ms) - CAP_MS) < 2500 && Number(final?.fields.chunk_ms) < CHUNK_S * 1000,
+    `rec_ms=${final?.fields.rec_ms} chunk_ms=${final?.fields.chunk_ms}`
+  );
+  check("one turn id across every request", new Set(report.calls.map((c) => c.fields.turn_id)).size === 1 && /^[0-9a-f-]{36}$/.test(final?.fields.turn_id ?? ""));
+}
 check("the result reached the screen", report.heard === true);
 
 console.log(failures.length === 0 ? "\nall checks passed" : `\n${failures.length} check(s) failed`);

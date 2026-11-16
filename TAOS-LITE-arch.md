@@ -80,8 +80,10 @@ Labels come from `lib/chrome/copy.ts` in the phone owner's language. Fenced by
 
 ### Spoken home (`/`)
 
-`TranslatorShell`: MediaRecorder at a capped bitrate with a 10-minute hard stop
-(`TAOS_HOME_MAX_TURN_MS`), to `POST /api/translate` (transcribe + concept
+`TranslatorShell`: MediaRecorder at a capped bitrate with a hard stop — ten
+minutes for paying subscribers and founders (`TAOS_HOME_MAX_TURN_MS`), five
+for free/trial users (`TAOS_HOME_MAX_TURN_FREE_MS`); the tier is
+`isSubscriber(profile)` or `isFounder(email)` — to `POST /api/translate` (transcribe + concept
 paraphrase; tone is always `detailed`), then optional `POST /api/tts`. A turn
 longer than 4.5 minutes is recorded in chunks — sequential recorders on one
 stream, each chunk transcribed by its own request while the speaker goes on,

@@ -55,7 +55,9 @@ import {
   type RecordedChunk
 } from "@/lib/translate/chunkedRecorder";
 import {
+  HOME_MAX_TURN_FREE_MS_DEFAULT,
   HOME_MAX_TURN_MS_DEFAULT,
+  homeTurnCapMs,
   longTurnKnobs,
   serializePrior,
   splitForSpeech,
@@ -171,10 +173,12 @@ function speakPrompt(pair: readonly [LangCode, LangCode]): string {
 const TONE = "detailed" as const;
 
 // ── Per-turn safety cap ──────────────────────────────────────────────────
-// Hard limit on a single turn: ten minutes (TAOS_HOME_MAX_TURN_MS, handed
-// down as the `maxTurnMs` prop). On reaching it we auto-stop and run the
-// normal transcribe → translate → speak flow on whatever audio was captured
-// (the audio is NEVER discarded).
+// Hard limit on a single turn: ten minutes for a paying subscriber or a
+// founder (TAOS_HOME_MAX_TURN_MS, the `maxTurnMs` prop), five for a free or
+// trial user (TAOS_HOME_MAX_TURN_FREE_MS, the `maxTurnFreeMs` prop) — Tom and
+// Liz's call, 2026-11-15. On reaching it we auto-stop and run the normal
+// transcribe → translate → speak flow on whatever audio was captured (the
+// audio is NEVER discarded).
 //
 // It used to be five minutes, because one recording longer than
 // /api/translate's `maxDuration` (300s) cannot be processed in time. A turn
@@ -276,19 +280,27 @@ export function TranslatorShell({
   profile,
   onSignOut,
   googleTtsEnabled = false,
-  maxTurnMs = HOME_MAX_TURN_MS_DEFAULT
+  maxTurnMs = HOME_MAX_TURN_MS_DEFAULT,
+  maxTurnFreeMs = HOME_MAX_TURN_FREE_MS_DEFAULT
 }: {
   email: string;
   profile: Profile | null;
   onSignOut: () => void;
   googleTtsEnabled?: boolean;
-  /** The turn cap, ms — app/page.tsx reads TAOS_HOME_MAX_TURN_MS. */
+  /** The PAID turn cap, ms — app/page.tsx reads TAOS_HOME_MAX_TURN_MS. */
   maxTurnMs?: number;
+  /** The FREE turn cap, ms — app/page.tsx reads TAOS_HOME_MAX_TURN_FREE_MS. */
+  maxTurnFreeMs?: number;
 }): JSX.Element {
-  // T-30s / T-10s before the cap of the WHOLE turn, not of a chunk
-  // (lib/translate/recorder.ts).
-  const rampWin = rampWindows(maxTurnMs);
   const subscriber = isSubscriber(profile);
+  // This user's cap. The long turn is a paid benefit: a subscriber (the
+  // profile fields the Stripe webhook writes — active or comp) or a founder
+  // gets `maxTurnMs`; a free or trial user, and anyone whose profile did not
+  // load, gets `maxTurnFreeMs`.
+  const turnCapMs = homeTurnCapMs(subscriber || isFounder(email), maxTurnMs, maxTurnFreeMs);
+  // T-30s / T-10s before THIS user's cap, of the WHOLE turn, not of a chunk
+  // (lib/translate/recorder.ts): a free turn glows at 4:30, a paid one at 9:30.
+  const rampWin = rampWindows(turnCapMs);
   const [usage, setUsage] = useState<MonthlyUsage | null>(null);
   const [showPaywall, setShowPaywall] = useState(false);
   const transLeft = translationsLeft(profile, usage);
@@ -584,7 +596,7 @@ export function TranslatorShell({
   // frame, and respect prefers-reduced-motion by using a steady glow instead.
   function tickRamp() {
     const now = performance.now();
-    const remaining = maxTurnMs - turnElapsedMs(turnStartRef.current, nowClock());
+    const remaining = turnCapMs - turnElapsedMs(turnStartRef.current, nowClock());
     const btn = recordBtnRef.current;
 
     // Surface the textual heads-up once we enter the ramp window.
@@ -634,7 +646,7 @@ export function TranslatorShell({
   function checkTurn() {
     const recorder = recorderRef.current;
     if (!recorder || recorder.state !== "recording") return;
-    if (turnCapReached(turnStartRef.current, nowClock(), maxTurnMs)) {
+    if (turnCapReached(turnStartRef.current, nowClock(), turnCapMs)) {
       // Hard stop — and the normal flow on everything captured.
       stopRecording();
       return;

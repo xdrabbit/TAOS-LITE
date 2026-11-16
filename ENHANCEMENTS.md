@@ -69,7 +69,14 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
   4. **Review** — the kept copy is ONE file for the whole turn (parts staged,
      then joined with ffmpeg), so the player, Redo, the second opinion, the
      export and the 14-day sweep are unchanged; `rec_ms` is the whole turn.
-  5. **Cap** — `TAOS_HOME_MAX_TURN_MS`, ten minutes unset, bounded 1–12.
+  5. **Cap** — ten minutes is a PAID benefit (Tom and Liz, 2026-11-15 20:32
+     MT): paying subscribers, comped accounts and founders get
+     `TAOS_HOME_MAX_TURN_MS` (ten minutes unset, bounded 1–12); free and trial
+     users keep five, `TAOS_HOME_MAX_TURN_FREE_MS` (never above the paid cap).
+     The tier is `isSubscriber(profile)` — the fields the Stripe webhook
+     writes — or `isFounder(email)`. The wrap-up glow follows the user's own
+     cap (4:30 free, 9:30 paid). Enforced on the phone, like the monthly
+     allowance; `/api/translate` does not re-check it.
   6. **The runaway-cap bug** — a 11/10 turn recorded 2,236 s because the cap
      was one `setTimeout` that never fired. The cap is now asked every
      second, every frame, and on `visibilitychange`/`pageshow`/`focus`,
