@@ -133,6 +133,20 @@ const EN = {
   navAbout: "About TAOS",
   navSignOut: "Sign out",
 
+  // ── Live (/live) — the style toggle ─────────────────────────────────────
+  // The first words on /live to come from this table; the rest of that screen
+  // is still English in the shell. "Summary" is the honest name for what /live
+  // has always done — ONE line of 3 to 14 words about everything said since
+  // the last one — and the hints say what each side costs the listener,
+  // because that trade is the whole reason there is a toggle.
+  liveStyleLabel: "Style",
+  liveStyleSummary: "Summary",
+  liveStyleVerbatim: "Word for word",
+  liveStyleSummaryHint: "The gist in a few words. Stays current, leaves things out.",
+  liveStyleVerbatimHint: "Every sentence, plainly. Runs a little behind when people talk fast.",
+  // Shown in the feed when word-for-word skipped something rather than guess.
+  liveSkippedAhead: "Fell too far behind — skipped ahead.",
+
   // ── Table (/tabletop) — one phone flat between two people ───────────────
   // `tableListening` is prefixed and the rest are not, and that is the whole
   // of the difference between these screens' wording: /tabletop's listening
@@ -624,6 +638,15 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     navGuide: "Cómo usar",
     navAbout: "Acerca de TAOS",
     navSignOut: "Salir",
+
+    // ── En vivo (/live) — PLACEHOLDERS escritos por un agente el 2026-11-15.
+    // Cada línea: pendiente de revisión por Liz.
+    liveStyleLabel: "Estilo", // pendiente de revisión por Liz
+    liveStyleSummary: "Resumen", // pendiente de revisión por Liz
+    liveStyleVerbatim: "Palabra por palabra", // pendiente de revisión por Liz
+    liveStyleSummaryHint: "La idea en pocas palabras. Va al día, deja cosas fuera.", // pendiente de revisión por Liz
+    liveStyleVerbatimHint: "Cada frase, tal cual. Se atrasa un poco cuando hablan rápido.", // pendiente de revisión por Liz
+    liveSkippedAhead: "Se atrasó demasiado — saltó adelante.", // pendiente de revisión por Liz
 
     tapToTalk: "TOCA PARA HABLAR",
     tapDone: "TOCA AL TERMINAR",

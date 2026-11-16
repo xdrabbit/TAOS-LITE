@@ -19,6 +19,7 @@
 // Every other byte of the session is the builder's.
 
 import { AUDIO_TOKENS_PER_SECOND, type RealtimeUsage } from "@/lib/call/cost";
+import type { NextResponse, PendingTurn } from "@/lib/live/respond";
 
 const REALTIME_WS_URL = "wss://api.openai.com/v1/realtime";
 const SPEECH_URL = "https://api.openai.com/v1/audio/speech";
@@ -116,6 +117,15 @@ export interface DriveOptions {
    * quality cliff caused by the cap. It was caused by the harness.
    */
   beforeUtterance?: (index: number) => Record<string, unknown> | null;
+  /**
+   * /live asks through lib/live/respond.ts, and in word-for-word style that
+   * means one response PER committed segment rather than one per utterance.
+   * When this is set (and the client is the one asking), the driver hands it
+   * the segments still waiting — in commit order — and sends whatever it
+   * returns, one response at a time, until nothing is left. Unset, the driver
+   * sends the bare `response.create` it always has.
+   */
+  nextResponse?: (pending: PendingTurn[], now: number) => NextResponse;
   /** Milliseconds of trailing silence after each utterance, to close VAD. */
   trailingSilenceMs?: number;
   onEvent?: (type: string, ev: Record<string, unknown>) => void;
@@ -140,6 +150,12 @@ export async function driveSession(opts: DriveOptions): Promise<RunResult> {
   let speechStartMs: number | null = null;
   let outputBuffer = "";
   let fatal: Error | null = null;
+  // Segment bookkeeping for `nextResponse`: what VAD committed, in order, and
+  // which of those came back from the transcriber (with or without words).
+  const committedIds: string[] = [];
+  const itemTranscribed = new Map<string, boolean>();
+  const committedAt = new Map<string, number>();
+  let pendingTurns: PendingTurn[] = [];
 
   const waiters = new Set<{ match: (t: string, ev: Record<string, unknown>) => boolean; resolve: (ev: Record<string, unknown>) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 
@@ -194,9 +210,28 @@ export async function driveSession(opts: DriveOptions): Promise<RunResult> {
       }
       speechStartMs = null;
     }
+    if (type === "input_audio_buffer.committed" && typeof ev.item_id === "string") {
+      committedIds.push(ev.item_id);
+      committedAt.set(ev.item_id, Date.now());
+    }
+    if (type === "conversation.item.input_audio_transcription.failed" && typeof ev.item_id === "string") {
+      itemTranscribed.set(ev.item_id, false);
+    }
     if (type === "conversation.item.input_audio_transcription.completed") {
       const t = typeof ev.transcript === "string" ? ev.transcript.trim() : "";
       if (t) heard.push(t);
+      if (typeof ev.item_id === "string") {
+        // The same "real words" test lib/live/ambient.ts applies.
+        const words = /[\p{L}\p{N}]{2,}/u.test(t);
+        itemTranscribed.set(ev.item_id, words);
+        if (words) {
+          pendingTurns.push({
+            itemId: ev.item_id,
+            seq: committedIds.indexOf(ev.item_id),
+            at: committedAt.get(ev.item_id) ?? Date.now()
+          });
+        }
+      }
     }
     // Both shapes, because /live runs in audio mode and /tabletop in text.
     if (
@@ -331,7 +366,24 @@ export async function driveSession(opts: DriveOptions): Promise<RunResult> {
       // The client is the one that asks, on the surfaces minted with
       // create_response:false — exactly as lib/live/ambient.ts does, and only
       // after the transcription confirms real words.
-      if (transcribed) {
+      if (transcribed && opts.nextResponse) {
+        await transcribed;
+        // Let every segment of this utterance come back from the transcriber
+        // before asking, so the queue is the one a real table would have.
+        const deadline = Date.now() + 30_000;
+        while (committedIds.some((id) => !itemTranscribed.has(id)) && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        for (;;) {
+          const next = opts.nextResponse(pendingTurns, Date.now());
+          pendingTurns = next.remaining;
+          if (!next.event) break;
+          const count = turns.length;
+          const done = waitFor(() => turns.length > count, 90_000, `response ${count + 1}`);
+          send(next.event);
+          await done;
+        }
+      } else if (transcribed) {
         await transcribed;
         send({ type: "response.create" });
       }

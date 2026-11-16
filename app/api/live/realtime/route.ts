@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSupportedLanguageCode } from "@/lib/realtime/languages";
-import { buildLiveSession, LIVE_CONTEXT_TOKEN_LIMIT, LIVE_SECRET_TTL_SECONDS } from "@/lib/live/session";
+import {
+  buildLiveSession,
+  buildLiveStylePatch,
+  LIVE_SECRET_TTL_SECONDS,
+  liveContextTokenLimit
+} from "@/lib/live/session";
+import { LIVE_STYLES, resolveLiveStyle, type LiveStyle } from "@/lib/live/style";
 import { guardSpend } from "@/lib/spendGuard";
 
 export const runtime = "nodejs";
@@ -11,6 +17,10 @@ export const maxDuration = 30;
 // any language, any number of voices) and speaks/writes ultra-short micro-
 // summaries in the target language. Same GA endpoints as the tutor
 // (app/api/tutor/realtime).
+//
+// Since 2026-11-15 the body may carry `style: "verbatim"` — the word-for-word
+// side of the /live toggle (lib/live/style.ts). Anything else, including no
+// field at all, is the micro-summary session this route has always minted.
 //
 // SIGNED-IN ONLY since 8/19. It used to be unauthenticated "to match the rest
 // of the /live surface", and the rest of that surface turned out to be the
@@ -58,7 +68,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Unknown codes fall back to the pair this app started life on rather than
   // reaching the prompt raw: an interpreter told its output language is "xx"
   // answers in whatever it likes, which is worse than answering in English.
-  const body = (await req.json().catch(() => ({}))) as { target?: string; source?: string };
+  const body = (await req.json().catch(() => ({}))) as {
+    target?: string;
+    source?: string;
+    style?: string;
+  };
+  const style = resolveLiveStyle(body.style);
   const target =
     typeof body.target === "string" && isSupportedLanguageCode(body.target) ? body.target : "en";
   const rawSource =
@@ -78,7 +93,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const session = buildLiveSession({ target, source, model, voice, transcribeModel });
+  const session = buildLiveSession({ target, source, model, voice, transcribeModel, style });
+  // What each style changes about that session, so the toggle can be flipped
+  // on an open session with a `session.update` instead of a restart
+  // (lib/live/ambient.ts, setStyle). Built here, from this server's env, so
+  // the browser never assembles a prompt or a spend limit of its own.
+  const styles = Object.fromEntries(
+    LIVE_STYLES.map((s) => [s, buildLiveStylePatch({ style: s, target, source })])
+  ) as Record<LiveStyle, Record<string, unknown>>;
 
   try {
     const res = await fetch(CLIENT_SECRETS_URL, {
@@ -121,9 +143,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // whole record. Greppable as [taos-live-mint] in the Vercel runtime logs,
     // and the thing worth seeing is the cap: a mint line showing
     // context_tokens=off is a session that will cost what /live used to.
+    //
+    // `style` is the style the session STARTED in — summary|verbatim, the
+    // value and nothing else. A flip made while live is a data-channel message
+    // between the phone and OpenAI and never passes through here, so it is
+    // not in the logs. No message text is ever logged.
+    const cap = liveContextTokenLimit(style);
     console.info(
-      `[taos-live-mint] pair=${source}->${target} model=${model} ` +
-        `context_tokens=${LIVE_CONTEXT_TOKEN_LIMIT ?? "off"} ttl=${LIVE_SECRET_TTL_SECONDS}s`
+      `[taos-live-mint] pair=${source}->${target} model=${model} style=${style} ` +
+        `context_tokens=${cap ?? "off"} ttl=${LIVE_SECRET_TTL_SECONDS}s`
     );
 
     return NextResponse.json({
@@ -132,7 +160,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       model,
       voice,
       target,
-      source
+      source,
+      style,
+      styles
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error.";

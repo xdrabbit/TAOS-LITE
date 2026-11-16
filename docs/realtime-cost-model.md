@@ -99,6 +99,42 @@ the one tried: the prompt already tells the interpreter *"do NOT try to catch up
 100 ms, so ten to fifteen seconds **is** 100–150 tokens. Anything above that is
 history the prompt has already forbidden the model to use, bought at $32/Mtok.
 
+### /live, word for word — the other side of the style toggle (2026-11-15)
+
+Measured with `tests/live-fire/live-style.measure.ts`: the same 48.3 s of a
+Spanish dinner table through both styles, on the sessions the route mints.
+
+| style | responses | input audio per response | audio out | model cost | per minute of room speech |
+|---|---|---|---|---|---|
+| summary (default, cap 150) | 6 | 60 → 61 → 95 → 75 → 93 → 57 | 387 tok | $0.0487 | **$0.061** |
+| word for word (cap 8,000) | 9 | 60 → 61 → 73 → 34 → 75 → 48 → 45 → 66 → 57 | 762 tok | $0.0763 | **$0.095** |
+
+About **1.6× the summary style**, and all of the difference is the model's own
+voice: it says twice as much. The input side is *cheaper per response* than
+summary's, because word for word never asks the model to re-read the
+conversation — each response is pointed at one heard segment with an
+`item_reference` (lib/live/respond.ts) and billed for that segment alone.
+
+Two things in that design are findings, not preferences:
+
+1. **One response per segment.** With a bare `response.create` and a prompt
+   that said "render everything since your previous response", the model
+   rendered only the newest of two waiting segments — 3 of 3 multi-segment
+   turns lost a sentence (an aside, a question, a whole remark). Per segment,
+   by reference: 9 of 9 complete.
+2. **The cap is large on purpose, and the client refuses stale segments.** At a
+   deliberately tiny cap (50) with four remarks queued, the server pruned
+   segments out from under their own references: `in_audio` 0 → 0 → 0 and the
+   model invented speech (*"Really? And did you notice how that guy was looking
+   at her?"*). So the verbatim cap is 8,000, and a segment that has waited more
+   than 90 s is skipped — and the screen says so — rather than rendered. At 30
+   tokens a second (10 of room audio, 20 of the model's voice) a 90-second-old
+   segment has at most ~3,000 tokens after it; the server keeps 6,400.
+
+A flip between styles on an open session is one `session.update` carrying all
+three fields that differ (instructions, `max_output_tokens`, `truncation`); the
+server's `session.updated` echo confirmed each of them both ways.
+
 ### /tabletop — six push-to-talk turns, alternating sides (22.3 s of speech)
 
 | `post_instructions` | billed audio in | per-turn `in_audio` | model cost |
