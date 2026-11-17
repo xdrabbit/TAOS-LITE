@@ -115,7 +115,9 @@ beforeEach(() => {
       }
       if (u.includes("/api/tts")) {
         ttsBodies.push(body());
-        return new Response(new Blob(["mp3"]), { status: 200, headers: { "Content-Type": "audio/mpeg" } });
+        // Bytes, not a Blob: jsdom's Blob has no .stream(), and Node 22 (CI)
+        // refuses to build a Response from one.
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "Content-Type": "audio/mpeg" } });
       }
       return new Response("v=0", { status: 200 });
     })
