@@ -17,6 +17,7 @@
 import { languageLabel } from "@/lib/languages/catalog";
 import { LITERAL_RULE, TRANSLATE_ONLY_RULE } from "@/lib/fast/prompt";
 import type { LiveStyle } from "@/lib/live/style";
+import { autoTagFormatRule, autoTagReminder } from "@/lib/tabletop/instructions";
 
 /**
  * Ambient AI's session instructions.
@@ -91,6 +92,46 @@ export function buildVerbatimInstructions(target: string, source: string): strin
     `NEVER invent content. Render ONLY what was actually said. If you heard only noise, music, silence, or unintelligible sound, output nothing at all — no filler, no guesses, no pleasantries. An empty response is always better than an invented one.`,
     `Delivery: fast, flat, neutral — like a UN interpreter, not a narrator.`,
     `REMINDER: your output language is ${targetName} and ONLY ${targetName}.`
+  ].join(" ");
+}
+
+/**
+ * Two-way Auto (Tom and Liz, 11/17): one phone between two people, each
+ * segment in ONE of the pair's languages, rendered into the OTHER, word for
+ * word. See lib/live/auto.ts for why Auto is word-for-word only and why its
+ * session writes instead of speaking.
+ *
+ * Built from parts that already exist, on purpose:
+ *
+ *   · the first and last sentences are the tabletop's tag rule, imported
+ *     (lib/tabletop/instructions.ts) — so lib/tabletop/autoDetect.ts reads
+ *     this session's output with the parser it already has;
+ *   · LITERAL_RULE and TRANSLATE_ONLY_RULE are /fast's, as in
+ *     buildVerbatimInstructions above; NEVER converse and NEVER invent are
+ *     that prompt's own sentences.
+ *
+ * What is NOT here: the tabletop's meaning-first rule ("Not word for word") —
+ * this is the word-for-word side of /live, and tests/meaning-first-rule.test.ts
+ * keeps that rule out of this file — and "If the speech is already in
+ * <target>, repeat it", which has no meaning when both languages are targets.
+ * "One stretch of speech" rather than "everything since your previous
+ * response": each response is pointed at exactly one heard segment
+ * (lib/live/respond.ts), and telling the model otherwise invites it to go
+ * looking for more.
+ */
+export function buildAutoVerbatimInstructions(a: string, b: string): string {
+  const pair = { a, b };
+  const aName = languageLabel(a);
+  const bName = languageLabel(b);
+  return [
+    autoTagFormatRule(pair),
+    `You are a silent simultaneous interpreter for two people sharing one phone. One speaks ${aName}, the other speaks ${bName}.`,
+    `Each time you respond you are given ONE stretch of speech, in ONE of the two languages. Render ALL of it in the OTHER language: ${aName} into ${bName}, ${bName} into ${aName}. Every sentence, in the order it was said. Do NOT summarize, condense, or shorten. Do NOT skip asides, repetitions, or small talk.`,
+    LITERAL_RULE,
+    TRANSLATE_ONLY_RULE,
+    `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer or ask questions, never add opinions or commentary, never mention being an AI or an interpreter.`,
+    `NEVER invent content. Render ONLY what was actually said. If you heard only noise, music, silence, or unintelligible sound, output nothing at all — no tag, no filler, no guesses. An empty response is always better than an invented one.`,
+    autoTagReminder(pair)
   ].join(" ");
 }
 

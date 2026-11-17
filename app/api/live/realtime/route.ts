@@ -22,6 +22,11 @@ export const maxDuration = 30;
 // side of the /live toggle (lib/live/style.ts). Anything else, including no
 // field at all, is the micro-summary session this route has always minted.
 //
+// Since 2026-11-17 it may also carry `auto: true` — two-way mode: either of
+// the pair's languages is heard and rendered into the other, word for word,
+// as TEXT with a `[xx]` tag in front (lib/live/auto.ts). Absent, nothing about
+// the session this route mints has changed.
+//
 // SIGNED-IN ONLY since 8/19. It used to be unauthenticated "to match the rest
 // of the /live surface", and the rest of that surface turned out to be the
 // problem rather than the precedent (ship report cdf9f02a). Minting is the
@@ -72,8 +77,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     target?: string;
     source?: string;
     style?: string;
+    auto?: unknown;
   };
-  const style = resolveLiveStyle(body.style);
+  // Two-way Auto (lib/live/auto.ts) is word-for-word by definition, so the
+  // style a request carries beside `auto: true` is not consulted. Strictly
+  // `true`: a truthy string from a hand-typed body is today's /live.
+  const auto = body.auto === true;
+  const style = auto ? "verbatim" : resolveLiveStyle(body.style);
   const target =
     typeof body.target === "string" && isSupportedLanguageCode(body.target) ? body.target : "en";
   const rawSource =
@@ -93,7 +103,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const transcribeModel =
     process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-  const session = buildLiveSession({ target, source, model, voice, transcribeModel, style });
+  const session = buildLiveSession({ target, source, model, voice, transcribeModel, style, auto });
   // What each style changes about that session, so the toggle can be flipped
   // on an open session with a `session.update` instead of a restart
   // (lib/live/ambient.ts, setStyle). Built here, from this server's env, so
@@ -151,7 +161,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const cap = liveContextTokenLimit(style);
     console.info(
       `[taos-live-mint] pair=${source}->${target} model=${model} style=${style} ` +
-        `context_tokens=${cap ?? "off"} ttl=${LIVE_SECRET_TTL_SECONDS}s`
+        // Only present when on: a mint without Auto logs the line it always has.
+        `${auto ? "auto=1 " : ""}context_tokens=${cap ?? "off"} ttl=${LIVE_SECRET_TTL_SECONDS}s`
     );
 
     return NextResponse.json({
@@ -162,6 +173,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       target,
       source,
       style,
+      auto,
       styles
     });
   } catch (error) {

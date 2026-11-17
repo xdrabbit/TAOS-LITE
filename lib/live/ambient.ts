@@ -4,6 +4,8 @@ import type { LanguageCode } from "@/lib/languages/catalog";
 import { jsonAuthHeaders } from "@/lib/authClient";
 import { nextResponse, type PendingTurn } from "@/lib/live/respond";
 import { audioDrainTimeoutMs, DEFAULT_LIVE_STYLE, type LiveStyle } from "@/lib/live/style";
+import { otherOfPair, type LiveLine } from "@/lib/live/auto";
+import { createTagStream, parseTag, type TagVerdict } from "@/lib/tabletop/autoDetect";
 
 // WebRTC client for /live "Ambient AI" mode. Streams the mic continuously to a
 // GA Realtime session (minted by POST /api/live/realtime) whose only job is to
@@ -37,6 +39,19 @@ export interface AmbientConfig {
   source: AmbientTarget;
   /** Summary (the default) or word-for-word. Changeable while live: setStyle. */
   style?: LiveStyle;
+  /**
+   * Two-way Auto (lib/live/auto.ts): either of the pair is heard and rendered
+   * into the other, word for word, as tagged TEXT. The session is minted that
+   * way and stays that way — flipping Auto is a restart, not a patch — and
+   * `style` is not consulted while it is on.
+   */
+  auto?: boolean;
+  /**
+   * Auto's second echo fence: asked for every heard segment before it is
+   * queued. True = that was this phone's own readout coming back; it is not
+   * rendered, and onEchoDropped says so.
+   */
+  isEcho?: (heard: string) => boolean;
   /** Start with output audio muted (text-only). */
   muted?: boolean;
   /** Hard session cap; default 2 h — a long dinner. */
@@ -61,6 +76,14 @@ export interface AmbientEvents {
    * not to have.
    */
   onSkipped?: (count: number) => void;
+  /**
+   * One finished line, in every mode: what was heard and what it became. In
+   * Auto this is the feed (both languages, labelled by the tag); outside it,
+   * it is what "Save this conversation" stores. Fires after onSummaryDone.
+   */
+  onLine?: (line: LiveLine) => void;
+  /** Auto dropped a heard segment that was its own voice (config.isEcho). */
+  onEchoDropped?: () => void;
   onTick?: (elapsedSec: number) => void;
   /**
    * The session is about to close itself. `secondsLeft` counts down; null
@@ -86,6 +109,15 @@ export interface ActiveAmbientSession {
    * already being spoken finishes in the old one.
    */
   setStyle: (style: LiveStyle) => void;
+  /**
+   * Send the microphone as silence (true) or as the room (false). Auto's
+   * half-duplex: held while this phone reads a line aloud, so the session
+   * cannot hear, transcribe or translate its own voice. `track.enabled`, so
+   * the stream stays continuous and VAD still sees a pause as a pause.
+   */
+  setMicHeld: (held: boolean) => void;
+  /** Is somebody mid-sentence right now, by the server's VAD? */
+  speechActive: () => boolean;
 }
 
 const DEFAULT_MAX_MS = 2 * 60 * 60 * 1000;
@@ -151,8 +183,22 @@ export async function startAmbientLive(
   const committed = new Map<string, { seq: number; at: number }>();
   let commitSeq = 0;
   // The style the listener wants, and the one the open session is running.
-  let style: LiveStyle = config.style ?? DEFAULT_LIVE_STYLE;
+  const auto = Boolean(config.auto);
+  const pair: readonly [string, string] = [config.target, config.source];
+  // Auto is word-for-word, whatever the chip says (lib/live/auto.ts).
+  let style: LiveStyle = auto ? "verbatim" : (config.style ?? DEFAULT_LIVE_STYLE);
   let sessionStyle: LiveStyle = style;
+  // What each waiting segment's transcript was, until its response is asked for.
+  const heardText = new Map<string, string>();
+  // The response being answered right now: what it covers and, in Auto, the
+  // tag reader for its text.
+  let currentHeard = "";
+  let tagStream: ReturnType<typeof createTagStream> | null = null;
+  let tagVerdict: TagVerdict | null = null;
+  let textBuffer = "";
+  let lineSeq = 0;
+  let speechNow = false;
+  let micHeld = false;
   let stylePatches: MintResponse["styles"] = undefined;
   let responseActive = false;
   let audioPlaying = false;
@@ -230,6 +276,58 @@ export async function startAmbientLive(
     if (audioEl) audioEl.muted = muted;
   };
 
+  const setMicHeld = (held: boolean) => {
+    micHeld = held;
+    localStream?.getTracks().forEach((t) => {
+      t.enabled = !held;
+    });
+    // A held mic is silence: whatever VAD thought it was hearing is over.
+    if (held) speechNow = false;
+  };
+
+  // One finished response → one line. `raw` is everything the model wrote or
+  // said for it; in Auto that still has the tag on the front.
+  const finishLine = (raw: string) => {
+    const heard = currentHeard;
+    currentHeard = "";
+    let text = raw.trim();
+    let line: LiveLine | null = null;
+    if (auto) {
+      // The whole text, parsed again: the stream decided the same thing delta
+      // by delta, but this is the one place both are in hand.
+      const parsed = parseTag(raw, pair);
+      const verdict = tagVerdict ?? parsed.verdict;
+      text = parsed.text;
+      tagStream = null;
+      tagVerdict = null;
+      if (text) {
+        line =
+          verdict.kind === "hit"
+            ? {
+                seq: (lineSeq += 1),
+                heard,
+                heardLang: otherOfPair(pair, verdict.code),
+                text,
+                textLang: verdict.code,
+                detect: "hit"
+              }
+            : { seq: (lineSeq += 1), heard, heardLang: null, text, textLang: null, detect: "miss" };
+      }
+    } else if (text) {
+      line = {
+        seq: (lineSeq += 1),
+        heard,
+        heardLang: config.source,
+        text,
+        textLang: config.target,
+        detect: null
+      };
+    }
+    if (!text) return;
+    events.onSummaryDone?.(text);
+    if (line) events.onLine?.(line);
+  };
+
   const clearAudioStuckTimer = () => {
     if (audioStuckTimer !== null) window.clearTimeout(audioStuckTimer);
     audioStuckTimer = null;
@@ -242,11 +340,28 @@ export async function startAmbientLive(
     if (!dc || dc.readyState !== "open") return;
     // Ask in the style the SESSION is in, not the one the toggle shows: the
     // two only differ for the instant before the patch below is sent.
+    const before = pending;
     const next = nextResponse(sessionStyle, pending, Date.now());
     pending = next.remaining;
     if (next.skipped > 0) events.onSkipped?.(next.skipped);
+    // What this response covers: the one segment it references, or (summary)
+    // everything that was waiting.
+    const input = (next.event?.response as { input?: Array<{ id?: string }> } | undefined)?.input;
+    const refId = input?.[0]?.id;
+    const covered = !next.event ? [] : refId ? before.filter((t) => t.itemId === refId) : before;
+    const stillWaiting = new Set(pending.map((t) => t.itemId));
+    currentHeard = covered
+      .map((t) => heardText.get(t.itemId) ?? "")
+      .filter(Boolean)
+      .join(" ");
+    for (const t of before) if (!stillWaiting.has(t.itemId)) heardText.delete(t.itemId);
     if (!next.event) return;
     responseActive = true;
+    if (auto) {
+      tagStream = createTagStream(pair);
+      tagVerdict = null;
+      textBuffer = "";
+    }
     dc.send(JSON.stringify(next.event));
   };
 
@@ -255,7 +370,7 @@ export async function startAmbientLive(
   // agree. Data-channel messages are ordered, so a `response.create` sent
   // after this is answered under the new settings.
   const syncStyle = () => {
-    if (stopped || style === sessionStyle) return;
+    if (auto || stopped || style === sessionStyle) return;
     if (!dc || dc.readyState !== "open") return;
     const patch = stylePatches?.[style];
     if (!patch) return;
@@ -264,6 +379,8 @@ export async function startAmbientLive(
   };
 
   const setStyle = (next: LiveStyle) => {
+    // An Auto session has one style and no patch to switch to.
+    if (auto) return;
     style = next;
     syncStyle();
     // Anything already waiting is answered the new way, now.
@@ -303,7 +420,14 @@ export async function startAmbientLive(
     const mintRes = await fetch("/api/live/realtime", {
       method: "POST",
       headers: await jsonAuthHeaders(),
-      body: JSON.stringify({ target: config.target, source: config.source, style: mintedStyle })
+      body: JSON.stringify({
+        target: config.target,
+        source: config.source,
+        style: mintedStyle,
+        // Only ever sent when on, so a request without Auto is byte-for-byte
+        // the one /live has always made.
+        ...(auto ? { auto: true } : {})
+      })
     });
     const mint = (await mintRes.json().catch(() => ({}))) as MintResponse;
     if (!mintRes.ok || !mint.clientSecret) {
@@ -371,7 +495,13 @@ export async function startAmbientLive(
       const type = typeof ev.type === "string" ? ev.type : "";
 
       if (type === "input_audio_buffer.speech_started") {
+        // Not while the mic is held: that is a turn the silence is closing.
+        if (!micHeld) speechNow = true;
         bumpIdle();
+        return;
+      }
+      if (type === "input_audio_buffer.speech_stopped") {
+        speechNow = false;
         return;
       }
       // VAD finished a turn and committed its audio to the conversation. Do
@@ -388,6 +518,15 @@ export async function startAmbientLive(
       }
       if (type === "response.done") {
         responseActive = false;
+        // Auto: a response that ended without a text.done (cancelled, or the
+        // tag was all it wrote) still closes its line here.
+        if (auto && tagStream) {
+          const rest = tagStream.end();
+          if (rest.verdict) tagVerdict = rest.verdict;
+          const raw = textBuffer;
+          textBuffer = "";
+          finishLine(raw);
+        }
         // Over WebRTC the audio can still be draining; output_audio_buffer
         // events release that side of the gate. Belt-and-braces: if the
         // "stopped" event never arrives, unstick after 12s (summaries are
@@ -424,7 +563,15 @@ export async function startAmbientLive(
         const commit = committed.get(itemId);
         committed.delete(itemId);
         if (t && /[\p{L}\p{N}]{2,}/u.test(t)) {
+          // Auto, voice on: this phone's own readout, heard back. Not shown as
+          // heard, not rendered, counted.
+          if (auto && config.isEcho?.(t)) {
+            events.onEchoDropped?.();
+            bumpIdle();
+            return;
+          }
           events.onHeard?.(t);
+          heardText.set(itemId, t);
           pending.push({
             itemId,
             seq: commit?.seq ?? (commitSeq += 1),
@@ -454,7 +601,32 @@ export async function startAmbientLive(
         const t =
           (typeof ev.transcript === "string" && ev.transcript.trim()) || summaryBuffer.trim();
         summaryBuffer = "";
-        if (t) events.onSummaryDone?.(t);
+        finishLine(t);
+        bumpIdle();
+        return;
+      }
+      // Auto writes instead of speaking (lib/live/auto.ts), so its words
+      // arrive as text events — the table's (lib/tabletop/openaiBrain.ts) —
+      // with the `[xx]` tag on the front. The tag never reaches the screen.
+      if (type === "response.output_text.delta" || type === "response.text.delta") {
+        const d = typeof ev.delta === "string" ? ev.delta : "";
+        if (d && tagStream) {
+          textBuffer += d;
+          const out = tagStream.push(d);
+          if (out.verdict) tagVerdict = out.verdict;
+          if (out.text) events.onSummaryDelta?.(out.text);
+        }
+        bumpIdle();
+        return;
+      }
+      if (type === "response.output_text.done" || type === "response.text.done") {
+        if (tagStream) {
+          const rest = tagStream.end();
+          if (rest.verdict) tagVerdict = rest.verdict;
+          const raw = (typeof ev.text === "string" && ev.text) || textBuffer;
+          textBuffer = "";
+          finishLine(raw);
+        }
         bumpIdle();
         return;
       }
@@ -483,7 +655,7 @@ export async function startAmbientLive(
     }
     await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
 
-    return { stop, setMuted, setStyle };
+    return { stop, setMuted, setStyle, setMicHeld, speechActive: () => speechNow };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start live mode.";
     setState("error");

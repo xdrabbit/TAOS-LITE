@@ -131,6 +131,24 @@ Two things in that design are findings, not preferences:
    tokens a second (10 of room audio, 20 of the model's voice) a 90-second-old
    segment has at most ~3,000 tokens after it; the server keeps 6,400.
 
+#### Two-way Auto (2026-11-17)
+
+Measured with `tests/live-fire/live-auto.measure.ts`: the same 48 s table
+(`tests/live-fire/live-table.ts`) through the session `auto: true` mints.
+
+| mode | responses | input audio per response | out | model cost | per minute of room speech |
+|---|---|---|---|---|---|
+| Auto (word for word, **text out**, cap 8,000) | 9 | 55 → 61 → 115 → 39 → 60 → 43 → 41 → 56 → 54 | 210 text tok, 0 audio | $0.0284 | **$0.036** |
+
+About **0.38× word for word and 0.59× summary**, and the whole difference is
+that an Auto session writes instead of speaking (it has to: the `[xx]` tag is
+the first thing it produces). The input side is word-for-word's, unchanged —
+one `item_reference` per segment — plus a flat 423 text tokens of prompt per
+response. Tags: 9 of 9 here, and 9 of 9 with the right language on a second run
+of two speakers alternating Spanish and English ($0.034/min). **Not included:**
+Auto's optional voice is `/api/tts`, billed per character by whichever engine
+the caller's tier gets, and only when the listener turns it on.
+
 A flip between styles on an open session is one `session.update` carrying all
 three fields that differ (instructions, `max_output_tokens`, `truncation`); the
 server's `session.updated` echo confirmed each of them both ways.

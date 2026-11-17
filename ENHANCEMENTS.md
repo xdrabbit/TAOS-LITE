@@ -16,6 +16,22 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **/live two-way Auto-detect + saved conversations — DRAFT PR, awaiting a
+  two-person phone test** (Tom and Liz, 2026-11-17). Built: an Auto-detect
+  chip on /live (off by default, per device) that renders each heard segment
+  into the OTHER language of the pair using the tabletop's `[xx]` tag; word for
+  word only; text out, so voice is off by default in Auto and, when turned on,
+  the mic is held shut while the phone speaks. And "Save this conversation"
+  (text only, off by default, founders unless `TAOS_LIVE_SAVE` widens it) with
+  `/live/saved` to read, export and delete. STILL OPEN: Tom applies
+  `supabase/migrations/20261117_live_saved_conversations.sql` (until then the
+  Save chip is disabled with a hint); every Spanish string is pendiente de
+  revisión por Liz; the half-duplex and the echo guard have only met a
+  scripted provider and a silent WAV — a real speaker next to a real mic is
+  the test; Auto with voice ON costs /api/tts per line on top of the measured
+  $0.036/min; saved conversations hold the OTHER person's words too, which is
+  the consent question already written down under Ideas. (added 2026-11-17)
+
 - **/tabletop flush — what PR #135 left open.** Spanish for the three new
   lines is pendiente de revisión por Liz (shipped as written on Tom's say-so,
   2026-11-16; reword if she objects). The `[taos-tabletop]` line is

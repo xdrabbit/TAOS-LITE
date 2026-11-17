@@ -13,7 +13,19 @@ import {
   storeLiveStyle,
   type LiveStyle
 } from "@/lib/live/style";
-import { copyFor } from "@/lib/chrome/copy";
+import {
+  createEchoGuard,
+  createLiveEchoGate,
+  effectiveLiveStyle,
+  readStoredLiveAuto,
+  storeLiveAuto,
+  type LiveEchoGate,
+  type LiveLine
+} from "@/lib/live/auto";
+import { LIVE_SAVE_UNAVAILABLE, readStoredLiveSave, storeLiveSave, type LiveSaveStatus } from "@/lib/live/saved";
+import { createLiveSaver, fetchLiveSaveStatus, type LiveSaver } from "@/lib/live/saveClient";
+import { copyFor, fill } from "@/lib/chrome/copy";
+import Link from "next/link";
 import { keepWake } from "@/lib/wakeLock";
 import { isTextOnlyLanguage, requestSpeech, TEXT_ONLY_TITLE } from "@/lib/tts/speech";
 import { LanguagePillRow, LanguageSheet } from "./LanguagePicker";
@@ -84,6 +96,12 @@ interface ConceptEntry {
   at: number;
   /** Not something anyone said: the screen admitting a gap (word-for-word). */
   note?: boolean;
+  /**
+   * Two-way Auto: the whole line — what was heard, what it became, and the
+   * language of each (lib/live/auto.ts). Both people read this one screen, so
+   * an Auto entry shows both halves, each under its own language's name.
+   */
+  line?: LiveLine;
 }
 
 interface LiveError {
@@ -161,6 +179,35 @@ export function LiveShell(): JSX.Element {
   const [style, setStyle] = useState<LiveStyle>(DEFAULT_LIVE_STYLE);
   const styleRef = useRef<LiveStyle>(DEFAULT_LIVE_STYLE);
 
+  // Two-way Auto (Tom and Liz, 11/17): one phone between two people, either
+  // language heard and written in the other. OFF unless this device turned it
+  // on, restored after mount like the style. See lib/live/auto.ts.
+  const [auto, setAuto] = useState(false);
+  const autoRef = useRef(false);
+  // Auto writes; it only speaks if asked, and it is never asked by default —
+  // a phone on the table that is not speaking cannot hear itself. Off again
+  // every time Auto is switched on.
+  const [autoVoice, setAutoVoice] = useState(false);
+  const autoVoiceRef = useRef(false);
+  // Shown plainly, never guessed around: lines whose language tag could not
+  // be read, and heard segments dropped for being this phone's own readout.
+  const [misses, setMisses] = useState(0);
+  const [echoes, setEchoes] = useState(0);
+  const echoGuardRef = useRef(createEchoGuard());
+  const echoGateRef = useRef<LiveEchoGate | null>(null);
+  const autoSpeechRef = useRef<{ line: LiveLine; queuedAt: number }[]>([]);
+  const autoSpeakingRef = useRef(false);
+
+  // "Save this conversation": text only, off by default, and nothing is sent
+  // unless it is on at the moment a line is produced. The toggle is not drawn
+  // at all until the server says this user may save (lib/live/saveAccess.ts),
+  // and is drawn disabled while the tables are not there yet.
+  const [saveStatus, setSaveStatus] = useState<LiveSaveStatus>(LIVE_SAVE_UNAVAILABLE);
+  const [saveOn, setSaveOn] = useState(false);
+  const saveOnRef = useRef(false);
+  const [saveFailed, setSaveFailed] = useState(0);
+  const saverRef = useRef<LiveSaver | null>(null);
+
   const engineRef = useRef<Engine>("ambient");
   const ambientRef = useRef<ActiveAmbientSession | null>(null);
 
@@ -227,10 +274,41 @@ export function LiveShell(): JSX.Element {
     const restored = readStoredLiveStyle();
     styleRef.current = restored;
     setStyle(restored);
+    const restoredAuto = readStoredLiveAuto();
+    autoRef.current = restoredAuto;
+    setAuto(restoredAuto);
+  }, []);
+
+  // Asked once. Until it answers — and on any failure — there is no toggle,
+  // and a stored "on" is only honoured once saving is actually possible.
+  useEffect(() => {
+    let alive = true;
+    void fetchLiveSaveStatus().then((status) => {
+      if (!alive) return;
+      setSaveStatus(status);
+      if (status.allowed && status.ready && readStoredLiveSave()) {
+        saveOnRef.current = true;
+        setSaveOn(true);
+      }
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const pushFeed = useCallback((concept: string, isGuess: boolean, note = false) => {
     const entry: ConceptEntry = { id: (idRef.current += 1), concept, isGuess, at: Date.now(), note };
+    setFeed((prev) => [entry, ...prev].slice(0, MAX_FEED));
+  }, []);
+
+  const pushLine = useCallback((line: LiveLine) => {
+    const entry: ConceptEntry = {
+      id: (idRef.current += 1),
+      concept: line.text,
+      isGuess: false,
+      at: Date.now(),
+      line
+    };
     setFeed((prev) => [entry, ...prev].slice(0, MAX_FEED));
   }, []);
 
@@ -320,7 +398,116 @@ export function LiveShell(): JSX.Element {
     [drainSpeechQueue]
   );
 
+  // ── Voice readout (two-way Auto) ──────────────────────────────────────────
+  // An Auto session produces text, so its optional voice is /api/tts — the
+  // table's readout, with the voice-follows-speaker rule deciding whose voice.
+  // Two fences keep the phone from translating itself (lib/live/auto.ts):
+  // the mic is held shut from the first audible sample until 300 ms after the
+  // last (echoGateRef), and what was spoken is remembered so that anything
+  // that still gets through is dropped by its words (echoGuardRef).
+  //
+  // And one courtesy: a readout does not START while somebody is mid-sentence.
+  // Shutting the mic there would cut their sentence in half, so the line waits
+  // for the pause — and if no pause comes inside STALE_SPEECH_MS it is not
+  // spoken at all; it has been on the screen the whole time.
+  const drainAutoSpeech = useCallback(() => {
+    if (autoSpeakingRef.current) return;
+    let next = autoSpeechRef.current.shift();
+    while (next && Date.now() - next.queuedAt > STALE_SPEECH_MS) next = autoSpeechRef.current.shift();
+    if (!next || !autoVoiceRef.current) {
+      autoSpeechRef.current = next && autoVoiceRef.current ? autoSpeechRef.current : [];
+      setSpeakingConcept(false);
+      return;
+    }
+    const { line, queuedAt } = next;
+    autoSpeakingRef.current = true;
+    const quiet = () =>
+      new Promise<boolean>((resolve) => {
+        const check = () => {
+          if (!autoVoiceRef.current || Date.now() - queuedAt > STALE_SPEECH_MS) return resolve(false);
+          if (!ambientRef.current?.speechActive()) return resolve(true);
+          window.setTimeout(check, 150);
+        };
+        check();
+      });
+    requestSpeech(
+      {
+        text: line.text,
+        latency: "flash",
+        sourceLanguage: line.heardLang as PairLangCode,
+        targetLanguage: line.textLang as PairLangCode
+      },
+      { surface: "live" }
+    )
+      .then(async (blob) => {
+        if (!blob || !(await quiet())) return;
+        const a = ensureAudioEl();
+        if (!a) return;
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        const url = URL.createObjectURL(blob);
+        objectUrlRef.current = url;
+        a.src = url;
+        setSpeakingConcept(true);
+        // Shut the mic BEFORE the first sample, and remember the words.
+        echoGateRef.current?.speakStart();
+        echoGuardRef.current.spoke(line.text, Date.now());
+        await new Promise<void>((resolve) => {
+          a.onended = () => resolve();
+          a.onpause = () => resolve();
+          a.onerror = () => resolve();
+          a.play().catch(() => resolve());
+        });
+        echoGuardRef.current.finished(line.text, Date.now());
+        echoGateRef.current?.speakEnd();
+      })
+      .catch(() => {
+        // Voice is a bonus layer — a failed readout never interrupts the feed.
+        echoGateRef.current?.speakEnd();
+      })
+      .finally(() => {
+        autoSpeakingRef.current = false;
+        drainAutoSpeech();
+      });
+  }, [ensureAudioEl]);
+
+  const enqueueAutoSpeech = useCallback(
+    (line: LiveLine) => {
+      // A miss has no direction, so there is no voice to pick: not spoken.
+      if (!autoVoiceRef.current || !line.heardLang || !line.textLang) return;
+      if (isTextOnlyLanguage(line.textLang as PairLangCode)) return;
+      const q = autoSpeechRef.current;
+      q.push({ line, queuedAt: Date.now() });
+      while (q.length > MAX_SPEECH_QUEUE) q.shift();
+      drainAutoSpeech();
+    },
+    [drainAutoSpeech]
+  );
+
+  const silenceAutoVoice = useCallback(() => {
+    autoSpeechRef.current = [];
+    setSpeakingConcept(false);
+    const a = audioRef.current;
+    if (a) {
+      try {
+        a.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    echoGateRef.current?.speakEnd();
+  }, []);
+
   const toggleVoice = useCallback(() => {
+    if (autoRef.current) {
+      // Auto has its own voice switch (default off); the earpiece voice of
+      // one-direction /live is left exactly as it was set.
+      const on = !autoVoiceRef.current;
+      autoVoiceRef.current = on;
+      setAutoVoice(on);
+      if (on) blessAudio();
+      else silenceAutoVoice();
+      return;
+    }
     const next = !voiceOnRef.current;
     voiceOnRef.current = next;
     setVoiceOn(next);
@@ -341,7 +528,7 @@ export function LiveShell(): JSX.Element {
         }
       }
     }
-  }, [blessAudio]);
+  }, [blessAudio, silenceAutoVoice]);
 
   // ── Concept lookup (device engine) ────────────────────────────────────────
 
@@ -590,14 +777,34 @@ export function LiveShell(): JSX.Element {
     ambientRef.current = null;
     setDraft("");
     setEndingSoon(null);
+    silenceAutoVoice();
     if (session) await session.stop("user");
-  }, []);
+  }, [silenceAutoVoice]);
 
   const startAmbient = useCallback(async () => {
     setError(null);
     setEndingSoon(null);
     setDraft("");
     setLastHeard("");
+    // Auto is a property of the SESSION (it is minted that way), so it is
+    // read once here and every callback below uses this value, not the chip.
+    const sessionAuto = autoRef.current;
+    echoGuardRef.current.clear();
+    echoGateRef.current?.dispose();
+    echoGateRef.current = createLiveEchoGate({
+      setMicHeld: (held) => ambientRef.current?.setMicHeld(held)
+    });
+    // One saver per START. It makes no id and no request until it is handed
+    // a line, and it is only handed lines while the toggle is on.
+    saverRef.current = createLiveSaver(
+      {
+        mine: pairRef.current[0],
+        theirs: pairRef.current[1],
+        style: effectiveLiveStyle(styleRef.current, sessionAuto),
+        auto: sessionAuto
+      },
+      () => setSaveFailed((n) => n + 1)
+    );
     try {
       const session = await startAmbientLive(
         // Read out of the ref, not the closure: startAmbient is a useCallback
@@ -606,6 +813,8 @@ export function LiveShell(): JSX.Element {
           target: pairRef.current[0],
           source: pairRef.current[1],
           style: styleRef.current,
+          auto: sessionAuto,
+          isEcho: (heard) => echoGuardRef.current.isEcho(heard, Date.now()),
           muted: !voiceOnRef.current
         },
         {
@@ -615,8 +824,20 @@ export function LiveShell(): JSX.Element {
           onSummaryDelta: (d) => setDraft((prev) => prev + d),
           onSummaryDone: (t) => {
             setDraft("");
-            pushFeed(t, false);
+            // An Auto line reaches the feed whole, from onLine below.
+            if (!sessionAuto) pushFeed(t, false);
           },
+          onLine: (line) => {
+            if (sessionAuto) {
+              pushLine(line);
+              if (line.detect === "miss") setMisses((n) => n + 1);
+              enqueueAutoSpeech(line);
+            }
+            // Read at the moment the line exists: nothing is written unless
+            // the toggle is on right now.
+            if (saveOnRef.current) saverRef.current?.line(line);
+          },
+          onEchoDropped: () => setEchoes((n) => n + 1),
           // Word for word fell too far behind and left something out rather
           // than guess at it. Say so, in the feed, where the gap is.
           onSkipped: () => pushFeed(copyFor(pairRef.current[0]).liveSkippedAhead, false, true),
@@ -625,6 +846,7 @@ export function LiveShell(): JSX.Element {
           onWarningCleared: () => setEndingSoon(null),
           onStopped: (reason) => {
             ambientRef.current = null;
+            echoGateRef.current?.dispose();
             setDraft("");
             setElapsed(0);
             setEndingSoon(null);
@@ -649,7 +871,7 @@ export function LiveShell(): JSX.Element {
     } catch {
       /* onError already surfaced the message */
     }
-  }, [pushFeed]);
+  }, [enqueueAutoSpeech, pushFeed, pushLine]);
 
   const ambientActive = ambientState !== "idle" && ambientState !== "error";
 
@@ -703,6 +925,28 @@ export function LiveShell(): JSX.Element {
     ambientRef.current?.setStyle(next);
   }, []);
 
+  // Auto is minted into the session (text out, tagged prompt), so flipping it
+  // while live is the same bounce a language change does — a second or two —
+  // rather than a patch. Voice goes back to off: see autoVoice above.
+  const changeAuto = useCallback(
+    (next: boolean) => {
+      if (next === autoRef.current) return;
+      autoRef.current = next;
+      setAuto(next);
+      storeLiveAuto(next);
+      autoVoiceRef.current = false;
+      setAutoVoice(false);
+      if (ambientRef.current) void stopAmbient().then(() => startAmbient());
+    },
+    [startAmbient, stopAmbient]
+  );
+
+  const changeSave = useCallback((next: boolean) => {
+    saveOnRef.current = next;
+    setSaveOn(next);
+    storeLiveSave(next);
+  }, []);
+
   const changeSide = useCallback(
     (next: Side) => {
       if (next === sideRef.current) return;
@@ -742,6 +986,9 @@ export function LiveShell(): JSX.Element {
     setDraft("");
     setLastHeard("");
     setError(null);
+    setMisses(0);
+    setEchoes(0);
+    setSaveFailed(0);
   }, []);
 
   // Clean up on unmount.
@@ -761,6 +1008,9 @@ export function LiveShell(): JSX.Element {
       }
       void ambientRef.current?.stop("user");
       ambientRef.current = null;
+      echoGateRef.current?.dispose();
+      autoVoiceRef.current = false;
+      autoSpeechRef.current = [];
       voiceOnRef.current = false;
       speechQueueRef.current = [];
       const a = audioRef.current;
@@ -803,6 +1053,11 @@ export function LiveShell(): JSX.Element {
   // The style toggle's words follow the phone's owner, like the rest of the
   // chrome that has been moved to lib/chrome/copy.ts.
   const t = copyFor(mine);
+  // Auto is ambient-only (the on-device engine has no session to tag).
+  const autoOn = engine === "ambient" && auto;
+  const shownStyle = effectiveLiveStyle(style, autoOn);
+  const voiceShown = autoOn ? autoVoice : voiceOn;
+  const saveUsable = saveStatus.allowed && saveStatus.ready;
 
   return (
     <main className="min-h-screen px-4 pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -815,9 +1070,11 @@ export function LiveShell(): JSX.Element {
         <div>
           <div className="text-xs uppercase tracking-[0.2em] text-amber-100/50">Live follow-along</div>
           <p className="mt-1 text-sm text-amber-50/70">
-            {engine === "ambient"
-              ? "Point the phone at the conversation — dinner, TV, a call. Short summaries in your language, on screen and in your ear."
-              : "Phone-call mode: pick who's speaking. Short concept summaries, not word-for-word."}
+            {autoOn
+              ? fill(t.liveAutoHint, { a: languageNative(mine), b: languageNative(theirs) })
+              : engine === "ambient"
+                ? "Point the phone at the conversation — dinner, TV, a call. Short summaries in your language, on screen and in your ear."
+                : "Phone-call mode: pick who's speaking. Short concept summaries, not word-for-word."}
           </p>
         </div>
 
@@ -861,7 +1118,7 @@ export function LiveShell(): JSX.Element {
           onOpenSheet={() => setSheetOpen(true)}
         />
         <p className="-mt-2 text-xs text-amber-100/50">
-          {languageNative(heardLanguage)} → {languageNative(readLanguage)}
+          {languageNative(heardLanguage)} {autoOn ? "⇄" : "→"} {languageNative(readLanguage)}
           {readoutTextOnly ? " · text only · solo texto" : ""}
         </p>
 
@@ -883,9 +1140,12 @@ export function LiveShell(): JSX.Element {
                   key={key}
                   type="button"
                   onClick={() => changeStyle(key)}
-                  aria-pressed={style === key}
-                  className={`rounded-full border px-3 py-1 text-[11px] transition ${
-                    style === key
+                  aria-pressed={shownStyle === key}
+                  // Auto is word for word only (lib/live/auto.ts). The chips
+                  // show that, and the stored style waits for Auto to go off.
+                  disabled={autoOn}
+                  className={`rounded-full border px-3 py-1 text-[11px] transition disabled:opacity-60 ${
+                    shownStyle === key
                       ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
                       : "border-white/10 bg-white/5 text-amber-100/70"
                   }`}
@@ -895,8 +1155,86 @@ export function LiveShell(): JSX.Element {
               ))}
             </div>
             <p className="text-[11px] text-amber-100/50">
-              {style === "verbatim" ? t.liveStyleVerbatimHint : t.liveStyleSummaryHint}
+              {autoOn
+                ? t.liveAutoVerbatimOnly
+                : style === "verbatim"
+                  ? t.liveStyleVerbatimHint
+                  : t.liveStyleSummaryHint}
             </p>
+          </div>
+        ) : null}
+
+        {/* Two-way Auto and "Save this conversation" — a second row of the
+            same chips, wrapping for the same reason the style row does. Auto
+            is OFF unless this device turned it on, so anyone who ignores this
+            row has the /live they had. The Save chip is not drawn at all until
+            the server says this user may save, and is drawn disabled (with
+            the reason) while the tables are not there yet. */}
+        {engine === "ambient" ? (
+          <div data-live-auto="" className="-mt-1 flex flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-live-auto-chip=""
+                onClick={() => changeAuto(!auto)}
+                aria-pressed={auto}
+                className={`rounded-full border px-3 py-1 text-[11px] transition ${
+                  auto
+                    ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
+                    : "border-white/10 bg-white/5 text-amber-100/70"
+                }`}
+              >
+                ⇄ {t.liveAutoChip}
+              </button>
+              {saveStatus.allowed ? (
+                <button
+                  type="button"
+                  data-live-save-chip=""
+                  onClick={() => changeSave(!saveOn)}
+                  aria-pressed={saveUsable && saveOn}
+                  disabled={!saveUsable}
+                  className={`rounded-full border px-3 py-1 text-[11px] transition disabled:opacity-60 ${
+                    saveUsable && saveOn
+                      ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
+                      : "border-white/10 bg-white/5 text-amber-100/70"
+                  }`}
+                >
+                  {t.liveSaveToggle}
+                </button>
+              ) : null}
+              {saveUsable ? (
+                <Link href="/live/saved" className="text-[11px] text-amber-100/60 underline underline-offset-2">
+                  {t.liveSavedLink}
+                </Link>
+              ) : null}
+            </div>
+            {/* Only before START: once it is running the feed needs the room. */}
+            {autoOn && !running ? <p className="text-[11px] text-amber-100/50">{t.liveAutoVoiceHint}</p> : null}
+            {saveStatus.allowed && !saveStatus.ready ? (
+              <p data-live-save-hint="" className="text-[11px] text-amber-100/50">
+                {t.liveSaveNotReady}
+              </p>
+            ) : saveUsable && saveOn ? (
+              <p data-live-save-hint="" className="text-[11px] text-emerald-100/60">
+                {t.liveSaveOnHint}
+              </p>
+            ) : null}
+            {saveFailed > 0 ? (
+              <p role="status" className="text-[11px] text-amber-200/80">
+                {fill(t.liveSaveFailed, { count: saveFailed })}
+              </p>
+            ) : null}
+            {/* Said plainly, never guessed around. */}
+            {autoOn && (misses > 0 || echoes > 0) ? (
+              <p data-live-auto-counts="" role="status" className="text-[11px] text-amber-200/80">
+                {[
+                  misses > 0 ? fill(t.liveAutoMisses, { count: misses }) : "",
+                  echoes > 0 ? fill(t.liveAutoEchoes, { count: echoes }) : ""
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -966,18 +1304,18 @@ export function LiveShell(): JSX.Element {
               <button
                 type="button"
                 onClick={toggleVoice}
-                aria-pressed={voiceOn && !readoutTextOnly}
+                aria-pressed={voiceShown && !readoutTextOnly}
                 disabled={readoutTextOnly}
                 title={readoutTextOnly ? TEXT_ONLY_TITLE : undefined}
                 className={`rounded-full border px-3 py-1 text-[11px] normal-case tracking-normal transition ${
-                  voiceOn && !readoutTextOnly
+                  voiceShown && !readoutTextOnly
                     ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100"
                     : "border-white/10 bg-white/5 text-amber-100/70"
                 }`}
               >
                 {readoutTextOnly
                   ? "🔇 Text only"
-                  : voiceOn
+                  : voiceShown
                     ? speakingConcept
                       ? "🔊 Voice · speaking"
                       : "🔊 Voice on"
@@ -1035,7 +1373,58 @@ export function LiveShell(): JSX.Element {
             ) : (
               <ol className="flex flex-col gap-2">
                 {feed.map((entry) =>
-                  entry.note ? (
+                  entry.line ? (
+                    // Two-way Auto: one card per line, both halves, each under
+                    // the name of the language it is in — heard first, then
+                    // what it became. The rendering is the large one (it is
+                    // what the OTHER person reads); the heard half is big
+                    // enough for the speaker to check they were heard right.
+                    // A miss keeps its words and says the language is unknown.
+                    <li
+                      key={entry.id}
+                      data-live-line=""
+                      data-detect={entry.line.detect ?? ""}
+                      className={`rounded-3xl border p-4 ${
+                        entry.line.detect === "miss"
+                          ? "border-dashed border-amber-300/40 bg-amber-400/[0.04]"
+                          : "border-white/10 bg-[rgba(18,44,36,0.7)]"
+                      }`}
+                    >
+                      <div className="mb-2 text-[10px] tracking-wider text-white/25">{formatTime(entry.at)}</div>
+                      {entry.line.heard ? (
+                        <div data-live-heard="" className="mb-3">
+                          <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-100/70">
+                            {entry.line.heardLang ? languageNative(entry.line.heardLang as PairLangCode) : "?"}
+                          </span>
+                          <p
+                            lang={entry.line.heardLang ?? undefined}
+                            className="mt-1 text-pretty text-lg leading-snug text-amber-50/80"
+                          >
+                            {entry.line.heard}
+                          </p>
+                        </div>
+                      ) : null}
+                      <div data-live-rendered="">
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${
+                            entry.line.textLang
+                              ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-100/80"
+                              : "border-amber-300/40 bg-amber-400/10 text-amber-200"
+                          }`}
+                        >
+                          {entry.line.textLang
+                            ? languageNative(entry.line.textLang as PairLangCode)
+                            : `? · ${t.liveAutoMissTag}`}
+                        </span>
+                        <p
+                          lang={entry.line.textLang ?? undefined}
+                          className="mt-1 text-pretty text-[clamp(1.35rem,5.5vw,2rem)] font-semibold leading-tight tracking-tight text-white"
+                        >
+                          {entry.line.text}
+                        </p>
+                      </div>
+                    </li>
+                  ) : entry.note ? (
                     <li
                       key={entry.id}
                       data-live-note=""
