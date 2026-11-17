@@ -330,6 +330,11 @@ describe("/live Auto: two people, one phone, a scripted provider", () => {
 
     await hear("i1", "¿Dónde está el baño, por favor?");
     await answer("[en] Where is the bathroom, please?");
+    // The readout is a fetch, a blob and a play() away: wait for it rather
+    // than count ticks (a slower machine takes more of them).
+    await act(async () => {
+      await vi.waitFor(() => expect(playing.length).toBe(1), { timeout: 5000 });
+    });
     // Read through /api/tts, in the direction the tag gave.
     expect(ttsBodies).toEqual([
       { text: "Where is the bathroom, please?", latency: "flash", sourceLanguage: "es", targetLanguage: "en" }
