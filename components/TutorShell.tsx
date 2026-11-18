@@ -32,6 +32,7 @@ import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { languageNative } from "@/lib/languages/catalog";
 import { requestSpeech } from "@/lib/tts/speech";
 import { SignIn } from "./SignIn";
+import { rememberEmailSource } from "@/lib/email/client";
 import { Paywall } from "./Paywall";
 import { authHeaders } from "@/lib/authClient";
 import { ExitHome } from "./ExitHome";
@@ -92,6 +93,10 @@ export function TutorShell(): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
+
+  // A visit from the daily email: keep its marker through the sign-in bounce
+  // (lib/email/client.ts). Before the gate, so a signed-out tap still counts.
+  useEffect(rememberEmailSource, []);
 
   useEffect(() => {
     let active = true;
@@ -155,7 +160,9 @@ export function TutorShell(): JSX.Element {
       </main>
     );
   }
-  if (!session) return <SignIn />;
+  // Back to /tutor after Google, not to the home screen: the daily email's
+  // button lands here signed-out, and "/" is the wrong place to be put down.
+  if (!session) return <SignIn redirectPath="/tutor" />;
   // Everyone signed in gets in at their tier; the conversation tab shows upgrade
   // prompts inline when this month's tutor minutes run out.
   return (

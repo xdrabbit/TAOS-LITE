@@ -32,6 +32,8 @@ import type { StudyLessonResponse } from "@/lib/study/types";
 import { bestOf } from "@/lib/study/practice";
 import { StudyLessonCard } from "./study/StudyLessonCard";
 import { SignIn } from "./SignIn";
+import { DailyReminder } from "./DailyReminder";
+import { rememberEmailSource } from "@/lib/email/client";
 import { ExitHome } from "./ExitHome";
 
 const LEARN_KEY = "taos.study.learn";
@@ -98,6 +100,10 @@ export function StudyShell(): JSX.Element {
   /** Best score so far per line of the open lesson, from tutor_attempts. */
   const [bests, setBests] = useState<Record<string, number>>({});
   const playing = useRef<HTMLAudioElement | null>(null);
+
+  // A visit from the daily email: keep its marker through the sign-in bounce
+  // (lib/email/client.ts). Before the gate, so a signed-out tap still counts.
+  useEffect(rememberEmailSource, []);
 
   // ── auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -337,6 +343,8 @@ export function StudyShell(): JSX.Element {
             </select>
           </label>
         </section>
+
+        {view !== "lesson" && explain ? <DailyReminder dest="study" lang={explain} /> : null}
 
         {error ? (
           <div role="alert" className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
