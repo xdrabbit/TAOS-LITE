@@ -7,6 +7,10 @@
     {
       "path": "/api/walkie/sweep",
       "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/email/daily",
+      "schedule": "0 * * * *"
     }
   ]
 }

@@ -66,6 +66,7 @@ import {
 } from "@/lib/tutor/crawl";
 import { ENDED_NOTICE, WARN_NOTICE, joinBilingual, minutesLabel } from "@/lib/tutor/meterCopy";
 import { keepWake } from "@/lib/wakeLock";
+import { DailyReminder } from "@/components/DailyReminder";
 import {
   startConversation,
   type ActiveConversation,
@@ -201,6 +202,8 @@ export function ModulesShell({
     <main className="min-h-screen px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col gap-4">
         {header}
+
+        <DailyReminder dest="tutor" lang={mine} />
 
         <LanguagePillRow
           pills={pills}
