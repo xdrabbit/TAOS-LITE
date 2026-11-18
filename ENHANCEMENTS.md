@@ -16,29 +16,13 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
-- **Daily study reminder email — opt-in, built 2026-11-18, draft PR open,
-  founders only, nothing sent yet.** Tom (2026-11-18 06:43 MT): "we want them
-  to invite us into their lives every day." A "Remind me every day" toggle on
-  `/study` and `/tutor` (default OFF, hour of day in the person's own time
-  zone, default 8:00), one short email with a phrase of the day from the
-  built-in course and one button, in their own language. Audience knob
-  `TAOS_DAILY_EMAIL` = off | founders | all (unset = founders). Hourly cron
-  `/api/email/daily`; Resend behind `lib/email/provider.ts`. **Rule: no user
-  conversation text in email, ever** — the phrase comes from
-  `content/tutor-course` only (`lib/email/phrases.ts`), and the only personal
-  thing in it is a count of days. One-click unsubscribe (signed link +
-  `List-Unsubscribe` headers), auto-pause after 21 days away with one last
-  email, bounces never mailed again. **Not live until Tom does the outside
-  work:** a Resend account and the sending-domain DNS records at Cloudflare,
-  five env vars (`RESEND_API_KEY`, `TAOS_EMAIL_FROM`,
-  `TAOS_EMAIL_FOOTER_ADDRESS` — the CAN-SPAM mailing address, which only Tom
-  may choose and which has no default — `TAOS_EMAIL_LINK_SECRET`,
-  `RESEND_WEBHOOK_SECRET`), and applying
-  `supabase/migrations/20261118_daily_email_prefs.sql`. Until then the toggle
-  is not drawn and the cron logs one `state=inert` line. Open: every Spanish
-  string is pendiente de revisión por Liz; a pair that is not English/Spanish
-  still gets the English/Spanish phrase (the course is only those two); no
-  real email has been sent to anyone. (added 2026-11-18)
+- **Daily study reminder email — what PR #139 left open.** Every Spanish
+  string is pendiente de revisión por Liz. A pair that is not English/Spanish
+  still gets the English/Spanish phrase (the course is only those two). No
+  real email had been sent to anyone at merge — the first real one, to a
+  founder who turned the toggle on, is the test (delivery, the button, the
+  one-click unsubscribe, the Resend webhook). `TAOS_DAILY_EMAIL` is unset
+  (founders); widening it to `all` is Tom's call. (added 2026-11-18)
 - **/live Auto + saved conversations — what PR #137 left open.** Every
   Spanish string is pendiente de revisión por Liz (shipped as written on Tom's
   standing exception, 2026-11-17; reword if she objects) — that now includes
@@ -1278,6 +1262,23 @@ blank.
 
 ## Shipped
 
+- Daily study reminder email, opt-in — Tom (2026-11-18): "we want them to
+  invite us into their lives every day." A "Remind me every day" toggle on
+  `/study` and `/tutor` (default OFF, hour of day in the person's own time
+  zone, default 8:00), one short email with a phrase of the day from the
+  built-in course and one button, in their own language. Audience knob
+  `TAOS_DAILY_EMAIL` = off | founders | all (unset = founders). Hourly Vercel
+  Cron on `/api/email/daily` (Bearer `CRON_SECRET`; anything else gets a 404,
+  like the walkie sweep); Resend behind `lib/email/provider.ts`. **Rule: no
+  user conversation text in email, ever** — the phrase comes from
+  `content/tutor-course` only (`lib/email/phrases.ts`), and the only personal
+  thing in it is a count of days. One-click unsubscribe (signed link +
+  `List-Unsubscribe` headers), auto-pause after 21 days away with one last
+  email, bounces never mailed again. Tom did the outside work himself: Resend,
+  the sending-domain DNS, and the five env vars (`RESEND_API_KEY`,
+  `TAOS_EMAIL_FROM`, `TAOS_EMAIL_FOOTER_ADDRESS`, `TAOS_EMAIL_LINK_SECRET`,
+  `RESEND_WEBHOOK_SECRET`); migration `20261118_daily_email_prefs` applied
+  2026-11-18 — 2026-11-18, PR #139
 - /live: two-way Auto-detect, and saved conversations — an "Auto-detect" chip
   on /live (off by default, per device, `taos.live.auto`): one phone between
   two people, each heard segment written in the OTHER language of the pair,
