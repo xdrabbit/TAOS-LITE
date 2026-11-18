@@ -33,10 +33,20 @@ vi.mock("@/lib/authServer", () => ({
 }));
 
 type Row = Record<string, unknown>;
-const db: { tables: Record<string, Row[]> | null; profiles: Row[]; writes: number } = {
+const db: {
+  tables: Record<string, Row[]> | null;
+  profiles: Row[];
+  writes: number;
+  /** PostgREST's row cap. Production's is 1,000, whatever `.limit()` asks for. */
+  maxRows: number;
+  /** Every select that was run: the table and the rows it asked for. */
+  reads: Array<{ table: string; from: number; asked: number }>;
+} = {
   tables: null,
   profiles: [],
-  writes: 0
+  writes: 0,
+  maxRows: 1000,
+  reads: []
 };
 const SESSIONS = "taos_lite_live_sessions";
 const LINES = "taos_lite_live_lines";
@@ -47,7 +57,11 @@ function table(name: string) {
   let payload: Row = {};
   let conflict: string[] = [];
   let columns = "";
-  const run = () => {
+  let wantCount = false;
+  const orders: Array<[string, boolean]> = [];
+  let from = 0;
+  let asked = Infinity;
+  const run = (): { data: Row[] | null; error: Row | null; count?: number | null } => {
     if (name === "profiles") return { data: db.profiles.filter((r) => filters.every(([k, v]) => r[k] === v)), error: null };
     if (!db.tables) return { data: null, error: { code: "PGRST205", message: "Could not find the table" } };
     const rows = db.tables[name];
@@ -77,16 +91,32 @@ function table(name: string) {
         ? { ...r, [LINES]: [{ count: db.tables![LINES].filter((l) => l.session_id === r.id).length }] }
         : r
     );
-    return { data: found, error: null };
+    for (const [col, ascending] of [...orders].reverse()) {
+      found.sort((a, b) => (a[col]! < b[col]! ? -1 : a[col]! > b[col]! ? 1 : 0) * (ascending ? 1 : -1));
+    }
+    db.reads.push({ table: name, from, asked });
+    // What the real one does (measured against production, 2026-11-17): a
+    // range that starts past the end is a 416; otherwise at most `maxRows`
+    // rows come back, with a success status and no error, however many were
+    // asked for.
+    if (from > 0 && from >= found.length) {
+      return { data: null, error: { code: "PGRST103", message: "Requested range not satisfiable" }, count: null };
+    }
+    return {
+      data: found.slice(from, from + Math.min(asked, db.maxRows)),
+      error: null,
+      count: wantCount ? found.length : null
+    };
   };
   const q: Record<string, unknown> = {
-    select: (c: string) => ((columns = c ?? ""), q),
+    select: (c: string, o?: { count?: string }) => ((columns = c ?? ""), (wantCount = o?.count === "exact"), q),
     upsert: (p: Row, o: { onConflict: string }) => ((op = "upsert"), (payload = p), (conflict = o.onConflict.split(",")), q),
     update: (p: Row) => ((op = "update"), (payload = p), q),
     delete: () => ((op = "delete"), q),
     eq: (k: string, v: unknown) => (filters.push([k, v]), q),
-    order: () => q,
-    limit: () => q,
+    order: (col: string, o?: { ascending?: boolean }) => (orders.push([col, o?.ascending !== false]), q),
+    limit: (n: number) => ((asked = n), q),
+    range: (a: number, b: number) => ((from = a), (asked = b - a + 1), q),
     maybeSingle: async () => {
       const r = run();
       return { data: Array.isArray(r.data) ? (r.data[0] ?? null) : null, error: r.error };
@@ -114,6 +144,8 @@ beforeEach(async () => {
   db.tables = { [SESSIONS]: [], [LINES]: [] };
   db.profiles = [];
   db.writes = 0;
+  db.maxRows = 1000;
+  db.reads = [];
   delete process.env.TAOS_LIVE_SAVE;
   logs = [];
   for (const level of ["log", "info", "warn", "error"] as const) {
@@ -154,10 +186,10 @@ async function save(b: unknown, signedIn = true) {
   const { POST } = await import("@/app/api/live/saved/lines/route");
   return POST(request("/api/live/saved/lines", { method: "POST", body: b, signedIn }));
 }
-async function list() {
+async function list(query = "") {
   const { GET } = await import("@/app/api/live/saved/route");
-  const res = await GET(request("/api/live/saved"));
-  return { res, json: (await res.json()) as { ready: boolean; canSave: boolean; sessions: Row[] } };
+  const res = await GET(request(`/api/live/saved${query}`));
+  return { res, json: (await res.json()) as { ready: boolean; canSave: boolean; sessions: Row[]; more: boolean } };
 }
 async function one(id: string, method: "GET" | "DELETE" = "GET", query = "") {
   const route = await import("@/app/api/live/saved/[id]/route");
@@ -190,9 +222,9 @@ describe("TAOS_LIVE_SAVE", () => {
 
   it("is read per request, so widening it needs no deploy", async () => {
     caller = STRANGER;
-    expect((await status()).json).toEqual({ allowed: false, ready: false });
+    expect((await status()).json).toEqual({ allowed: false, ready: false, hasSaved: false });
     process.env.TAOS_LIVE_SAVE = "all";
-    expect((await status()).json).toEqual({ allowed: true, ready: true });
+    expect((await status()).json).toEqual({ allowed: true, ready: true, hasSaved: false });
     process.env.TAOS_LIVE_SAVE = "subscribers";
     expect((await status()).json.allowed).toBe(false);
     db.profiles = [{ id: STRANGER.id, subscription_status: "active", tier: "basic" }];
@@ -210,7 +242,7 @@ describe("before the migration is applied", () => {
   it("status says allowed but not ready — the toggle's disabled state — with no error", async () => {
     const { res, json } = await status();
     expect(res.status).toBe(200);
-    expect(json).toEqual({ allowed: true, ready: false });
+    expect(json).toEqual({ allowed: true, ready: false, hasSaved: false });
   });
 
   it("a write is refused as not_ready and nothing is attempted", async () => {
@@ -223,7 +255,7 @@ describe("before the migration is applied", () => {
   it("the list is empty and says so; one conversation is a plain 404", async () => {
     const { res, json } = await list();
     expect(res.status).toBe(200);
-    expect(json).toEqual({ ready: false, canSave: true, sessions: [] });
+    expect(json).toEqual({ ready: false, canSave: true, sessions: [], more: false });
     expect((await one(SID)).status).toBe(404);
   });
 });
@@ -325,14 +357,16 @@ describe("the user's own saved conversations", () => {
     caller = STRANGER;
     const theirs = await list();
     // Signed in is enough to ask; they simply have none, and may not add any.
-    expect(theirs.json).toEqual({ ready: true, canSave: false, sessions: [] });
+    expect(theirs.json).toEqual({ ready: true, canSave: false, sessions: [], more: false });
   });
 
   it("reads one in order; somebody else's id is a 404", async () => {
     const res = await one(SID);
-    const json = (await res.json()) as { session: Row; lines: Row[] };
+    const json = (await res.json()) as { session: Row; lines: Row[]; total: number; complete: boolean };
     expect(json.session.id).toBe(SID);
     expect(json.lines.map((l) => l.seq)).toEqual([1, 2, 3]);
+    expect(json.total).toBe(3);
+    expect(json.complete).toBe(true);
     caller = STRANGER;
     expect((await one(SID)).status).toBe(404);
     expect((await one(SID, "DELETE")).status).toBe(404);
@@ -366,8 +400,20 @@ describe("the user's own saved conversations", () => {
     delete process.env.TAOS_LIVE_SAVE;
     expect((await save(body({ session: { id: theirs }, line: { seq: 2 } }))).status).toBe(404);
     expect((await list()).json.sessions.map((s) => s.id)).toEqual([theirs]);
+    // Copilot on #137: …and the way to it stays on /live. `allowed` is false
+    // now, so the screen has no Save chip; `hasSaved` is what draws the link.
+    expect((await status()).json).toEqual({ allowed: false, ready: false, hasSaved: true });
     expect((await one(theirs)).status).toBe(200);
     expect((await one(theirs, "DELETE")).status).toBe(200);
+    // Nothing left: the link goes with it.
+    expect((await status()).json).toEqual({ allowed: false, ready: false, hasSaved: false });
+  });
+
+  it("someone who never saved and may not save is told nothing new — and nobody else's count is theirs", async () => {
+    caller = STRANGER;
+    // The founder's conversation from beforeEach is in the table.
+    expect(db.tables![SESSIONS]).toHaveLength(1);
+    expect((await status()).json).toEqual({ allowed: false, ready: false, hasSaved: false });
   });
 
   it("never logs what anybody said — ids and counts only", async () => {
@@ -381,6 +427,185 @@ describe("the user's own saved conversations", () => {
       expect(all).not.toContain(said);
     }
     expect(all).toContain(`[taos-live-save] line session=${SID} seq=1 heard_chars=${HEARD.length} text_chars=${TEXT.length} detect=hit auto=1`);
+  });
+});
+
+// ── Nothing saved is out of reach (Copilot on #137) ─────────────────────────
+//
+// Both findings were the same shape: a `.limit()` standing in for "all of it".
+// The list stopped at 200 conversations with no way to the 201st, and one
+// conversation was read with `.limit(5000)` — which this project's PostgREST
+// answers with 1,000 rows and no error (see LIVE_SAVED_LINES_PAGE). The fake
+// database above has that cap, so these fail against the old code.
+
+/** Put rows straight into the tables: one write per row through the route is 1,300 round trips. */
+function seedConversation(id: string, lines: number, startedAt = "2026-11-17T20:00:00.000Z", userId = FOUNDER.id) {
+  db.tables![SESSIONS].push({
+    id,
+    user_id: userId,
+    lang_mine: "en",
+    lang_theirs: "es",
+    style: "verbatim",
+    auto: true,
+    started_at: startedAt,
+    ended_at: startedAt
+  });
+  // Stored out of order on purpose: the order is the query's job.
+  for (let seq = lines; seq >= 1; seq -= 1) {
+    db.tables![LINES].push({
+      session_id: id,
+      user_id: userId,
+      seq,
+      heard_text: `oído ${seq}`,
+      heard_lang: "es",
+      translation: `heard ${seq}`,
+      translation_lang: "en",
+      detect: "hit",
+      created_at: startedAt
+    });
+  }
+}
+
+describe("a long conversation is read and exported whole", () => {
+  // Tom and Liz's real use: ninety minutes at one table.
+  const LONG = 2345;
+
+  beforeEach(() => seedConversation(SID, LONG));
+
+  it("the row cap is real here: asking for 5,000 in one go gets 1,000 and no error", async () => {
+    const { supabaseAdmin } = await import("@/lib/supabaseAdmin");
+    const old = await supabaseAdmin.from(LINES).select("seq").eq("session_id", SID).order("seq", { ascending: true }).limit(5000);
+    expect(old.error).toBeNull();
+    expect(old.data).toHaveLength(1000);
+  });
+
+  it("the reader gets every line, in order, with the database's own count", async () => {
+    const res = await one(SID);
+    const json = (await res.json()) as { lines: Row[]; total: number; complete: boolean };
+    expect(json.total).toBe(LONG);
+    expect(json.complete).toBe(true);
+    expect(json.lines).toHaveLength(LONG);
+    expect(json.lines.map((l) => l.seq)).toEqual(Array.from({ length: LONG }, (_, i) => i + 1));
+    // Read in pages no bigger than the cap, each starting where the last ended.
+    // (The one-row read is liveSaveTablesReady's probe.)
+    expect(db.reads.filter((r) => r.table === LINES && r.asked > 1).map((r) => [r.from, r.asked])).toEqual([
+      [0, 1000],
+      [1000, 1000],
+      [2000, 1000]
+    ]);
+    expect(logs).toContain(`[taos-live-save] read session=${SID} lines=${LONG} total=${LONG} complete=1 format=json`);
+  });
+
+  it("the export has the last line as well as the first, and does not call itself incomplete", async () => {
+    const text = await (await one(SID, "GET", "?format=text")).text();
+    expect(text).toContain("1.\n[Español] oído 1\n[English] heard 1");
+    expect(text).toContain(`${LONG}.\n[Español] oído ${LONG}\n[English] heard ${LONG}`);
+    expect(text.match(/^\d+\.$/gm)).toHaveLength(LONG);
+    expect(text).not.toContain("INCOMPLETE");
+  });
+
+  it("does not trust the page size: a smaller cap than the page still reads all of it", async () => {
+    db.maxRows = 300;
+    const json = (await (await one(SID)).json()) as { lines: Row[]; complete: boolean };
+    expect(json.lines).toHaveLength(LONG);
+    expect(json.complete).toBe(true);
+  });
+
+  it("a page that fails part-way is an error, never a shorter conversation", async () => {
+    const { supabaseAdmin } = await import("@/lib/supabaseAdmin");
+    const real = supabaseAdmin.from.bind(supabaseAdmin);
+    let lineReads = 0;
+    const spy = vi.spyOn(supabaseAdmin, "from").mockImplementation(((name: string) => {
+      const q = real(name) as unknown as Record<string, unknown>;
+      if (name !== LINES) return q;
+      const range = q.range as (a: number, b: number) => unknown;
+      q.range = (a: number, b: number) => {
+        lineReads += 1;
+        if (lineReads === 2) q.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: { code: "57014" }, count: null });
+        return range(a, b);
+      };
+      return q;
+    }) as never);
+    const res = await one(SID);
+    spy.mockRestore();
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "Could not load." });
+    expect(logs).toContain(`[taos-live-save] read_failed session=${SID} code=read_failed`);
+  });
+
+  it("past the ceiling it says so in the answer and in the file — it is never silently the first part", async () => {
+    const store = await import("@/lib/live/savedStore");
+    const OVER = store.LIVE_SAVED_LINES_MAX + 7;
+    db.tables![SESSIONS] = [];
+    db.tables![LINES] = [];
+    seedConversation(SID, OVER);
+    const json = (await (await one(SID)).json()) as { lines: Row[]; total: number; complete: boolean };
+    expect(json.lines).toHaveLength(store.LIVE_SAVED_LINES_MAX);
+    expect(json.total).toBe(OVER);
+    expect(json.complete).toBe(false);
+    const text = await (await one(SID, "GET", "?format=text")).text();
+    const notice = `INCOMPLETE: this file holds the first ${store.LIVE_SAVED_LINES_MAX} of ${OVER} lines.`;
+    // Under the heading, and again as the last thing in the file.
+    expect(text.split("\n").slice(0, 4)).toContain(notice);
+    expect(text.endsWith(`${notice}\n`)).toBe(true);
+  });
+});
+
+describe("the list is paged, and every page can be reached", () => {
+  const idOf = (n: number) => `cccccccc-cccc-4ccc-8ccc-${String(n).padStart(12, "0")}`;
+  const MANY = 201;
+
+  beforeEach(() => {
+    // #1 is the oldest. Two share a started_at, to hold the tiebreak to account.
+    for (let n = 1; n <= MANY; n += 1) {
+      const minute = n === 100 ? 99 : n;
+      seedConversation(idOf(n), 1, new Date(Date.UTC(2026, 10, 1, 0, minute)).toISOString());
+    }
+  });
+
+  it("a page is 50, newest first, and says there is more", async () => {
+    const { LIVE_SAVED_LIST_PAGE } = await import("@/lib/live/savedStore");
+    expect(LIVE_SAVED_LIST_PAGE).toBe(50);
+    const first = await list();
+    expect(first.json.sessions).toHaveLength(50);
+    expect(first.json.sessions[0].id).toBe(idOf(MANY));
+    expect(first.json.more).toBe(true);
+    expect(first.json.sessions[0]).toMatchObject({ line_count: 1 });
+  });
+
+  it("walking `offset` reaches all 201 — the oldest included — each exactly once", async () => {
+    const seen: string[] = [];
+    let more = true;
+    let pages = 0;
+    while (more) {
+      const { json } = await list(`?offset=${seen.length}`);
+      seen.push(...json.sessions.map((s) => String(s.id)));
+      more = json.more;
+      pages += 1;
+      expect(pages).toBeLessThan(10);
+    }
+    expect(pages).toBe(5);
+    expect(seen).toHaveLength(MANY);
+    expect(new Set(seen).size).toBe(MANY);
+    expect(seen[seen.length - 1]).toBe(idOf(1));
+    // The oldest can then be opened and deleted like any other.
+    expect((await one(idOf(1))).status).toBe(200);
+    expect((await one(idOf(1), "DELETE")).status).toBe(200);
+  });
+
+  it("an offset past the end is an empty last page, not an error; a bad one is the first page", async () => {
+    const past = await list("?offset=5000");
+    expect(past.res.status).toBe(200);
+    expect(past.json).toMatchObject({ sessions: [], more: false });
+    for (const bad of ["?offset=-1", "?offset=abc", "?offset=1.5", "?offset="]) {
+      expect((await list(bad)).json.sessions[0].id).toBe(idOf(MANY));
+    }
+  });
+
+  it("pages only ever hold the caller's own", async () => {
+    seedConversation("dddddddd-dddd-4ddd-8ddd-dddddddddddd", 1, "2026-12-01T00:00:00.000Z", STRANGER.id);
+    const { json } = await list();
+    expect(json.sessions.map((s) => s.id)).not.toContain("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
   });
 });
 
@@ -409,6 +634,15 @@ describe("the text export, on its own", () => {
     const text = savedConversationAsText(session, [line({ seq: 2, heard_text: "" }), line({ seq: 1 })]);
     expect(text).toBe(
       "TAOS·LITE — /live\n2026-11-17T20:00:00.000Z → 2026-11-17T20:03:00.000Z\nen ← es · summary\n\n1.\n[es] a\n[en] b\n\n2.\n[en] b\n"
+    );
+  });
+
+  it("handed fewer lines than the conversation has, it says so at the top and at the bottom", () => {
+    const text = savedConversationAsText(session, [line({ seq: 1 })], (c) => c, 3);
+    expect(text).toBe(
+      "TAOS·LITE — /live\n2026-11-17T20:00:00.000Z → 2026-11-17T20:03:00.000Z\nen ← es · summary\n" +
+        "INCOMPLETE: this file holds the first 1 of 3 lines.\n\n1.\n[es] a\n[en] b\n\n" +
+        "INCOMPLETE: this file holds the first 1 of 3 lines.\n"
     );
   });
 });

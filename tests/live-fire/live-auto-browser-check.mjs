@@ -45,7 +45,8 @@ mkdirSync(SHOTS, { recursive: true });
 
 // ── a tiny PostgREST: just enough for lib/live/savedStore.ts ────────────────
 const fakeUser = { id: "00000000-0000-4000-8000-000000000003", aud: "authenticated", role: "authenticated", email: FOUNDER };
-const store = { missing: true, sessions: [], lines: [], requests: [] };
+const store = { missing: true, sessions: [], lines: [], requests: [], pages: [] };
+const ROW_CAP = 1000;
 const SESSIONS = "taos_lite_live_sessions";
 const LINES = "taos_lite_live_lines";
 const fake = createServer((req, res) => {
@@ -102,13 +103,36 @@ const fake = createServer((req, res) => {
       .map((r) =>
         table === SESSIONS ? { ...r, [LINES]: [{ count: store.lines.filter((l) => l.session_id === r.id).length }] } : r
       )
-      .sort((a, b) => (table === LINES ? a.seq - b.seq : 0));
+      .sort((a, b) =>
+        table === LINES
+          ? a.seq - b.seq
+          : a.started_at === b.started_at
+            ? (a.id < b.id ? 1 : -1)
+            : a.started_at < b.started_at ? 1 : -1
+      );
     if ((req.headers.accept ?? "").includes("vnd.pgrst.object")) {
       return found[0]
         ? res.writeHead(200, cors).end(JSON.stringify(found[0]))
         : res.writeHead(406, cors).end(JSON.stringify({ code: "PGRST116", message: "0 rows" }));
     }
-    res.writeHead(200, cors).end(JSON.stringify(found));
+    // The row cap, as production's PostgREST has it (measured 2026-11-17): at
+    // most 1,000 rows per request whatever was asked for, a 206 and no error;
+    // and a range that starts past the end is a 416.
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const asked = url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : Infinity;
+    if (offset > 0 && offset >= found.length) {
+      return res
+        .writeHead(416, { ...cors, "Content-Range": `*/${found.length}` })
+        .end(JSON.stringify({ code: "PGRST103", message: "Requested range not satisfiable" }));
+    }
+    const page = found.slice(offset, offset + Math.min(asked, ROW_CAP));
+    store.pages.push(`${table} ${offset}+${page.length}/${found.length}`);
+    res
+      .writeHead(page.length < found.length ? 206 : 200, {
+        ...cors,
+        "Content-Range": page.length ? `${offset}-${offset + page.length - 1}/${found.length}` : `*/${found.length}`
+      })
+      .end(JSON.stringify(page));
   });
 }).listen(FAKE_PORT, "127.0.0.1");
 
@@ -482,6 +506,85 @@ await clickText("/^Delete$/");
 await waitFor(`!document.querySelector("[data-saved-open]")`, 10_000);
 await sleep(300);
 check("delete removes the session AND its lines, and the list is empty", store.sessions.length === 0 && store.lines.length === 0 && /Nothing saved yet/.test(await evaluate(`document.body.innerText`)));
+
+// ── 5b. a ninety-minute conversation, and a long history (Copilot on #137) ──
+// Seeded straight into the fake database: 2,345 lines is Tom and Liz at one
+// table for an evening, and 120 conversations is three pages of the list.
+console.log("\n── 5b. a long conversation and a long history ──");
+const LONG = 2345;
+const longId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const seedSession = (id, startedAt) =>
+  store.sessions.push({ id, user_id: fakeUser.id, lang_mine: "en", lang_theirs: "es", style: "verbatim", auto: true, started_at: startedAt, ended_at: startedAt });
+seedSession(longId, "2026-11-17T20:00:00.000Z");
+for (let seq = 1; seq <= LONG; seq += 1) {
+  store.lines.push({ session_id: longId, user_id: fakeUser.id, seq, heard_text: `oído ${seq}`, heard_lang: "es", translation: `heard ${seq}`, translation_lang: "en", detect: "hit", created_at: "2026-11-17T20:00:00.000Z" });
+}
+for (let n = 1; n <= 119; n += 1) {
+  seedSession(`ffffffff-ffff-4fff-8fff-${String(n).padStart(12, "0")}`, new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString());
+}
+store.pages.length = 0;
+await cdp("Page.navigate", { url: `${APP}/live/saved` });
+await waitFor(`document.querySelectorAll("[data-saved-list] button").length === 50`, 60_000);
+check("the list opens on a page of 50 with a way to the rest",
+  (await evaluate(`document.querySelectorAll("[data-saved-list] button").length`)) === 50 && /Show older/.test((await text("[data-saved-more]")) ?? ""),
+  `${await evaluate(`document.querySelectorAll("[data-saved-list] button").length`)} rows`);
+check("375 px: the saved list with its Show older button is not pannable", (await overflow()) <= 0, `overflow ${await overflow()} px`);
+await shot("live-saved-3-paged-list.png");
+for (let i = 0; i < 5 && (await evaluate(`!!document.querySelector("[data-saved-more]")`)); i += 1) {
+  const had = await evaluate(`document.querySelectorAll("[data-saved-list] button").length`);
+  await click("[data-saved-more]");
+  await waitFor(`document.querySelectorAll("[data-saved-list] button").length > ${had}`, 20_000);
+}
+check("Show older reaches all 120 conversations, the oldest included, and then goes away",
+  (await evaluate(`document.querySelectorAll("[data-saved-list] button").length`)) === 120 && !(await evaluate(`!!document.querySelector("[data-saved-more]")`)),
+  `${await evaluate(`document.querySelectorAll("[data-saved-list] button").length`)} rows`);
+check("the long conversation's count on the list is the real one", /2345 lines/.test((await text("[data-saved-list] li")) ?? ""), (await text("[data-saved-list] li")) ?? "");
+store.pages.length = 0;
+await click("[data-saved-list] button"); // newest first: the long one
+await waitFor(`document.querySelectorAll("[data-saved-line]").length >= ${LONG}`, 60_000);
+const readLines = await evaluate(`document.querySelectorAll("[data-saved-line]").length`);
+check(`the reader shows all ${LONG} lines — the first and the last — and no "partial" notice`,
+  readLines === LONG &&
+    /heard 1$/.test(await evaluate(`document.querySelector("[data-saved-line]").textContent`)) &&
+    new RegExp(`heard ${LONG}$`).test(await evaluate(`[...document.querySelectorAll("[data-saved-line]")].pop().textContent`)) &&
+    !(await evaluate(`!!document.querySelector("[data-saved-partial]")`)),
+  `${readLines} lines`);
+check("it was read in pages under the row cap, not in one request that the cap would cut",
+  store.pages.filter((p) => p.startsWith(LINES)).join(" | ") === `${LINES} 0+1000/${LONG} | ${LINES} 1000+1000/${LONG} | ${LINES} 2000+345/${LONG}`,
+  store.pages.filter((p) => p.startsWith(LINES)).join(" | "));
+const longExport = await evaluate(`(async () => {
+  const token = JSON.parse(localStorage.getItem("sb-127-auth-token")).access_token;
+  const res = await fetch("/api/live/saved/${longId}?format=text", { headers: { Authorization: "Bearer " + token } });
+  const body = await res.text();
+  return { status: res.status, numbered: (body.match(/^\\d+\\.$/gm) || []).length, last: body.includes("${LONG}.\\n[Español] oído ${LONG}\\n[English] heard ${LONG}"), incomplete: body.includes("INCOMPLETE") };
+})()`);
+check(`the export holds all ${LONG} lines, ends with the last one, and does not call itself incomplete`,
+  longExport.status === 200 && longExport.numbered === LONG && longExport.last === true && longExport.incomplete === false,
+  JSON.stringify(longExport));
+check("the server logged the count it read against the count that exists",
+  serverLog.some((l) => l.includes(`read session=${longId} lines=${LONG} total=${LONG} complete=1 format=text`)));
+// A fresh page load since section 5: a native confirm() would block the tab.
+await evaluate(`window.confirm = () => true; true`);
+await clickText("/^Delete$/");
+await waitFor(`!document.querySelector("[data-saved-open]")`, 10_000);
+await sleep(300);
+check("deleting the long one removes all its lines", store.lines.length === 0 && store.sessions.length === 119, `${store.lines.length} lines, ${store.sessions.length} sessions`);
+
+// ── 5c. saved text, but no longer allowed to save (Copilot on #137) ─────────
+console.log("\n── 5c. the link to what was saved does not depend on being able to save ──");
+const founderEmail = fakeUser.email;
+fakeUser.email = "narrowed-out@example.com";
+await openLive(["en", "es"]);
+await waitFor(`!!document.querySelector("[data-live-saved-link]")`, 20_000);
+check("not allowed to save: no Save chip, and the link to /live/saved is still there",
+  !(await evaluate(`!!document.querySelector("[data-live-save-chip]")`)) && (await evaluate(`document.querySelector("[data-live-saved-link]")?.getAttribute("href")`)) === "/live/saved");
+await shot("live-auto-5-link-without-save.png");
+store.sessions.length = 0;
+await openLive(["en", "es"]);
+await sleep(1500);
+check("nothing saved and not allowed to save: neither the chip nor the link",
+  !(await evaluate(`!!document.querySelector("[data-live-save-chip]")`)) && !(await evaluate(`!!document.querySelector("[data-live-saved-link]")`)));
+fakeUser.email = founderEmail;
 
 // ── 6. the same row in Spanish, at 375 ──────────────────────────────────────
 console.log("\n── 6. the owner reads Spanish ──");

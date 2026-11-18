@@ -22,7 +22,7 @@ export async function fetchLiveSaveStatus(): Promise<LiveSaveStatus> {
     const res = await fetch("/api/live/saved/status", { headers: await jsonAuthHeaders(), cache: "no-store" });
     if (!res.ok) return LIVE_SAVE_UNAVAILABLE;
     const body = (await res.json().catch(() => null)) as Partial<LiveSaveStatus> | null;
-    return { allowed: body?.allowed === true, ready: body?.ready === true };
+    return { allowed: body?.allowed === true, ready: body?.ready === true, hasSaved: body?.hasSaved === true };
   } catch {
     return LIVE_SAVE_UNAVAILABLE;
   }

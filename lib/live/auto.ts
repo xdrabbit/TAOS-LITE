@@ -37,7 +37,7 @@
 // import this, and two of those run in the browser.
 
 import { createHalfDuplex, HALF_DUPLEX_TAIL_MS } from "@/lib/interpreter/halfDuplex";
-import { echoOverlap, ECHO_OVERLAP } from "@/lib/interpreter/captionFilter";
+import { ECHO_OVERLAP } from "@/lib/interpreter/captionFilter";
 import type { LiveStyle } from "@/lib/live/style";
 
 /** Per device, like the style. Off unless this device turned it on. */
@@ -114,7 +114,10 @@ export interface LiveEchoGate {
   speakEnd: () => void;
   /** Is the mic shut right now? */
   held: () => boolean;
-  /** Drop any pending re-open timer (session over). Leaves the mic open. */
+  /**
+   * Session over: drop any pending re-open timer and leave the mic open. Final —
+   * `speakStart` and `speakEnd` do nothing afterwards.
+   */
   dispose: () => void;
 }
 
@@ -135,6 +138,10 @@ export function createLiveEchoGate(deps: {
   const duplex = createHalfDuplex(tailMs);
   let timer: unknown = null;
   let isHeld = false;
+  // A gate belongs to ONE session. Once that session is over the gate is dead:
+  // a readout that outlived it (a slow /api/tts answer, a late "ended") must
+  // not be able to shut or open the mic of the session that replaced it.
+  let disposed = false;
 
   const apply = () => {
     const want = duplex.micMuted(now());
@@ -153,18 +160,21 @@ export function createLiveEchoGate(deps: {
 
   return {
     speakStart: () => {
+      if (disposed) return;
       duplex.playing(0, now() + LIVE_READOUT_MAX_MS);
       apply();
       // If the element never reports the end, the mic is not lost for good.
       rearm(LIVE_READOUT_MAX_MS + tailMs + 1);
     },
     speakEnd: () => {
+      if (disposed) return;
       duplex.cut(0, now());
       apply();
       rearm(tailMs + 1);
     },
     held: () => isHeld,
     dispose: () => {
+      disposed = true;
       if (timer !== null) clearTimer(timer);
       timer = null;
       if (isHeld) {
@@ -180,13 +190,82 @@ export function createLiveEchoGate(deps: {
 /** How long after a readout its words are still suspect when heard back. */
 export const LIVE_ECHO_WINDOW_MS = 20_000;
 
+// ── Counting "words" in a script that does not put spaces between them ─────
+//
+// The interpreter's echoOverlap splits on runs of letters, which is a word in
+// Spanish and a whole SENTENCE in Chinese, Japanese or Thai: `请问洗手间在哪里`
+// is one run. On that measure every such sentence is "one word", the
+// two-words-match-anything rule below switched the fence off for it, and a
+// phone reading Chinese aloud translated itself.
+//
+// So a run in one of those scripts is cut into overlapping character pairs
+// instead. Pairs, not a dictionary segmenter (Intl.Segmenter): they need no
+// ICU data, they are the same on every phone, and a transcript that comes back
+// one character different still shares nearly all of them — which is the
+// property a fence against our own voice wants.
+
+const SPACELESS =
+  "\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Thai}\\p{scx=Lao}\\p{scx=Khmer}\\p{scx=Myanmar}";
+/** A run of a spaceless script (letters and marks, not its punctuation), or an ordinary word. */
+const ECHO_RUN = new RegExp(
+  `(?:(?=[${SPACELESS}])[\\p{L}\\p{M}\\p{N}])+|(?:(?![${SPACELESS}])[\\p{L}\\p{N}])+`,
+  "gu"
+);
+const SPACELESS_RUN = new RegExp(`^[${SPACELESS}]`, "u");
+
+/**
+ * What the echo fence compares, and how much speech it amounts to.
+ *
+ * `tokens`: an ordinary word is one token (lower case, accents off — the
+ * interpreter's rule); a run of a spaceless script is its character pairs.
+ * `words`: the length in word-equivalents — one per ordinary word, and one per
+ * two characters of a spaceless script.
+ */
+export function echoUnits(text: string): { tokens: string[]; words: number } {
+  const tokens: string[] = [];
+  let words = 0;
+  for (const run of text.toLowerCase().match(ECHO_RUN) ?? []) {
+    if (!SPACELESS_RUN.test(run)) {
+      // Accents come off Latin-style words only: in Thai the marks are vowels.
+      const word = run.normalize("NFD").replace(/\p{M}+/gu, "");
+      if (word) {
+        tokens.push(word);
+        words += 1;
+      }
+      continue;
+    }
+    const chars = Array.from(run);
+    words += Math.ceil(chars.length / 2);
+    if (chars.length === 1) tokens.push(chars[0]);
+    for (let i = 0; i + 1 < chars.length; i += 1) tokens.push(chars[i] + chars[i + 1]);
+  }
+  return { tokens, words };
+}
+
+/** The share of `heard`'s tokens that are in `spoken`, 0..1, repeats counted once each. */
+function sharedShare(heard: readonly string[], spoken: readonly string[]): number {
+  if (!heard.length) return 0;
+  const pool = new Map<string, number>();
+  for (const t of spoken) pool.set(t, (pool.get(t) ?? 0) + 1);
+  let shared = 0;
+  for (const t of heard) {
+    const left = pool.get(t) ?? 0;
+    if (left > 0) {
+      shared += 1;
+      pool.set(t, left - 1);
+    }
+  }
+  return shared / heard.length;
+}
+
 /**
  * Remembers what this phone SPOKE and answers "is this heard segment that,
  * coming back?". Only spoken lines are remembered, so with voice off this can
  * never drop anything. The measure is the interpreter's: the share of the
  * heard words that are in the spoken line, 0.6 and up is a repetition
- * (ECHO_OVERLAP). A real reply shares names, numbers and the odd cognate with
- * the line before it; our own voice shares nearly all of it.
+ * (ECHO_OVERLAP) — counted over echoUnits above, so a sentence in a script
+ * without spaces is measured too. A real reply shares names, numbers and the
+ * odd cognate with the line before it; our own voice shares nearly all of it.
  *
  * It errs toward dropping: somebody who reads the translation aloud off the
  * screen within the window is dropped too. That is counted and shown on the
@@ -195,12 +274,16 @@ export const LIVE_ECHO_WINDOW_MS = 20_000;
  * loop.
  */
 export function createEchoGuard(windowMs: number = LIVE_ECHO_WINDOW_MS) {
-  let spoken: Array<{ text: string; until: number }> = [];
+  let spoken: Array<{ text: string; tokens: string[]; until: number }> = [];
   return {
-    /** A readout of `text` started (or is still audible) at `now`. */
+    /**
+     * A readout of `text` is audible at `now`. Call it when playback has
+     * actually STARTED: words this phone never said aloud must not be able to
+     * drop somebody really saying them.
+     */
     spoke(text: string, now: number): void {
       spoken = spoken.filter((s) => s.until > now);
-      spoken.push({ text, until: now + windowMs });
+      spoken.push({ text, tokens: echoUnits(text).tokens, until: now + windowMs });
       if (spoken.length > 8) spoken = spoken.slice(-8);
     },
     /** Extend the window from when a readout actually finished. */
@@ -209,10 +292,10 @@ export function createEchoGuard(windowMs: number = LIVE_ECHO_WINDOW_MS) {
     },
     isEcho(heard: string, now: number): boolean {
       spoken = spoken.filter((s) => s.until > now);
-      // Two words can match anything by accident ("Sí, claro").
-      const words = heard.match(/[\p{L}\p{N}]+/gu) ?? [];
-      if (words.length < 3) return false;
-      return spoken.some((s) => echoOverlap(heard, s.text) >= ECHO_OVERLAP);
+      // Two words can match anything by accident ("Sí, claro", "好的谢谢").
+      const units = echoUnits(heard);
+      if (units.words < 3) return false;
+      return spoken.some((s) => sharedShare(units.tokens, s.tokens) >= ECHO_OVERLAP);
     },
     clear(): void {
       spoken = [];

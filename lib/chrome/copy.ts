@@ -167,6 +167,8 @@ const EN = {
   liveSavedNotReady: "Saved conversations aren't set up yet.",
   liveSavedLoadFailed: "Could not load. Try again.",
   liveSavedLines: "{count} lines",
+  liveSavedMore: "Show older",
+  liveSavedPartial: "Showing the first {shown} of {total} lines. The rest is not shown here.",
   liveSavedExport: "Export as text",
   liveSavedDelete: "Delete",
   liveSavedDeleteConfirm: "Delete this conversation? This cannot be undone.",
@@ -693,6 +695,8 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     liveSavedNotReady: "Las conversaciones guardadas todavía no están configuradas.", // pendiente de revisión por Liz
     liveSavedLoadFailed: "No se pudo cargar. Inténtalo de nuevo.", // pendiente de revisión por Liz
     liveSavedLines: "{count} líneas", // pendiente de revisión por Liz
+    liveSavedMore: "Ver anteriores", // pendiente de revisión por Liz
+    liveSavedPartial: "Se muestran las primeras {shown} de {total} líneas. El resto no se muestra aquí.", // pendiente de revisión por Liz
     liveSavedExport: "Exportar como texto", // pendiente de revisión por Liz
     liveSavedDelete: "Borrar", // pendiente de revisión por Liz
     liveSavedDeleteConfirm: "¿Borrar esta conversación? No se puede deshacer.", // pendiente de revisión por Liz

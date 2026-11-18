@@ -27,10 +27,32 @@ import {
 
 export const LIVE_SESSIONS_TABLE = "taos_lite_live_sessions";
 export const LIVE_LINES_TABLE = "taos_lite_live_lines";
-/** How many saved conversations the list loads. */
-export const LIVE_SAVED_LIST_LIMIT = 200;
-/** How many lines one conversation is read (and exported) with. */
-export const LIVE_SAVED_LINES_LIMIT = 5000;
+/**
+ * How many saved conversations ONE PAGE of the list holds. It bounds a page,
+ * not the history: the list is walked with `offset` until `more` is false.
+ */
+export const LIVE_SAVED_LIST_PAGE = 50;
+/**
+ * How many lines are asked for per request when a conversation is read.
+ *
+ * This is not a preference. The project's PostgREST answers at most 1,000
+ * rows per request whatever `.limit()` says — measured 2026-11-17 against
+ * production with the service role: `limit=5000` on a 12,392-row table came
+ * back 206 with `Content-Range: 0-999/12392` and no error. The first version
+ * of this file asked for 5,000 in one go and would have shown, and exported,
+ * the first 1,000 lines of a long conversation as if they were all of it.
+ * So a conversation is read in pages, and the read does not trust the page
+ * size either: it stops on the row count the database reports.
+ */
+export const LIVE_SAVED_LINES_PAGE = 1000;
+/**
+ * The most lines one read returns. Far beyond anything a session can produce
+ * (a START is capped at two hours); it exists so a request has an end. A
+ * conversation longer than this is NOT cut quietly: the read says
+ * `complete: false` with the real total, and the reader and the export both
+ * say so in words.
+ */
+export const LIVE_SAVED_LINES_MAX = 20_000;
 
 export class LiveSavedError extends Error {
   constructor(public readonly code: string) {
@@ -179,28 +201,84 @@ export async function saveLiveLine(userId: string, req: LiveSaveRequest, now: nu
 
 const SESSION_COLUMNS = "id, lang_mine, lang_theirs, style, auto, started_at, ended_at";
 
-/** This user's saved conversations, newest first, each with its line count. */
-export async function listSavedLive(userId: string): Promise<SavedLiveSession[]> {
+/** One page of the list, and whether there is anything older than it. */
+export interface SavedLivePage {
+  sessions: SavedLiveSession[];
+  /** True → ask again with `offset + sessions.length`. */
+  more: boolean;
+}
+
+/** A page offset from a query string. Anything that is not a whole number ≥ 0 is 0. */
+export function parseSavedOffset(raw: string | null | undefined): number {
+  const n = typeof raw === "string" && /^\d{1,9}$/.test(raw) ? Number(raw) : 0;
+  return Number.isSafeInteger(n) ? n : 0;
+}
+
+/**
+ * This user's saved conversations, newest first, each with its line count —
+ * one page of them, from `offset`. One row more than a page is asked for, and
+ * that extra row is only ever the answer to "is there more?".
+ */
+export async function listSavedLive(userId: string, offset: number = 0): Promise<SavedLivePage> {
   if (!hasServiceRoleKey) throw new LiveSavedError("no_service_role");
   const { data, error } = await supabaseAdmin
     .from(LIVE_SESSIONS_TABLE)
     .select(`${SESSION_COLUMNS}, ${LIVE_LINES_TABLE}(count)`)
     .eq("user_id", userId)
     .order("started_at", { ascending: false })
-    .limit(LIVE_SAVED_LIST_LIMIT);
+    // Two conversations can share a started_at; without a tiebreak a row could
+    // sit on both sides of a page boundary, or on neither.
+    .order("id", { ascending: false })
+    .range(offset, offset + LIVE_SAVED_LIST_PAGE);
+  // PostgREST answers a range that starts past the last row with a 416
+  // (PGRST103), not with no rows. That is the end of the list, not a failure:
+  // it is what "Show older" meets when the last conversations were deleted
+  // from another phone in the meantime.
+  if (error && offset > 0 && (error as { code?: string }).code === "PGRST103") return { sessions: [], more: false };
   if (error) throw new LiveSavedError("list_failed");
-  return ((data ?? []) as unknown as Array<Record<string, unknown>>).map((row) => {
+  const rows = ((data ?? []) as unknown as Array<Record<string, unknown>>).map((row) => {
     const { [LIVE_LINES_TABLE]: counted, ...session } = row;
     const first = Array.isArray(counted) ? (counted[0] as { count?: number } | undefined) : undefined;
     return { ...(session as unknown as SavedLiveSession), line_count: first?.count ?? 0 };
   });
+  return { sessions: rows.slice(0, LIVE_SAVED_LIST_PAGE), more: rows.length > LIVE_SAVED_LIST_PAGE };
 }
 
-/** One conversation and its lines in order, or null if it is not this user's. */
-export async function readSavedLive(
-  userId: string,
-  sessionId: string
-): Promise<{ session: SavedLiveSession; lines: SavedLiveLine[] } | null> {
+/**
+ * Does this user have anything saved? Asked for the link on /live, which must
+ * be there for someone who can no longer save but still has text to read or
+ * delete. A failed lookup is "no": it decides a link, nothing else.
+ */
+export async function hasSavedLive(userId: string): Promise<boolean> {
+  if (!hasServiceRoleKey) return false;
+  try {
+    const { data, error } = await supabaseAdmin.from(LIVE_SESSIONS_TABLE).select("id").eq("user_id", userId).limit(1);
+    return !error && Array.isArray(data) && data.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** One conversation as it was read. */
+export interface SavedLiveRead {
+  session: SavedLiveSession;
+  lines: SavedLiveLine[];
+  /** How many lines the conversation HAS, as the database counts them. */
+  total: number;
+  /** False → `lines` stops at LIVE_SAVED_LINES_MAX and `total` is larger. */
+  complete: boolean;
+}
+
+/**
+ * One conversation and its lines in order, or null if it is not this user's.
+ *
+ * Read in pages (see LIVE_SAVED_LINES_PAGE) until the count the database
+ * reported has arrived. A page that comes back short is not taken as the end —
+ * that is exactly how a row cap looks — only an empty one is. Anything other
+ * than "all of it" or "the first LIVE_SAVED_LINES_MAX, said so" is an error:
+ * this function never hands back a partial conversation as a whole one.
+ */
+export async function readSavedLive(userId: string, sessionId: string): Promise<SavedLiveRead | null> {
   if (!hasServiceRoleKey) throw new LiveSavedError("no_service_role");
   const found = await supabaseAdmin
     .from(LIVE_SESSIONS_TABLE)
@@ -210,18 +288,30 @@ export async function readSavedLive(
     .maybeSingle();
   if (found.error) throw new LiveSavedError("read_failed");
   if (!found.data) return null;
-  const lines = await supabaseAdmin
-    .from(LIVE_LINES_TABLE)
-    .select("seq, heard_text, heard_lang, translation, translation_lang, detect, created_at")
-    .eq("session_id", sessionId)
-    .eq("user_id", userId)
-    .order("seq", { ascending: true })
-    .limit(LIVE_SAVED_LINES_LIMIT);
-  if (lines.error) throw new LiveSavedError("read_failed");
-  return {
-    session: found.data as unknown as SavedLiveSession,
-    lines: (lines.data ?? []) as unknown as SavedLiveLine[]
-  };
+
+  const lines: SavedLiveLine[] = [];
+  let total = 0;
+  while (lines.length < LIVE_SAVED_LINES_MAX) {
+    const from = lines.length;
+    const to = Math.min(from + LIVE_SAVED_LINES_PAGE, LIVE_SAVED_LINES_MAX) - 1;
+    const page = await supabaseAdmin
+      .from(LIVE_LINES_TABLE)
+      .select("seq, heard_text, heard_lang, translation, translation_lang, detect, created_at", { count: "exact" })
+      .eq("session_id", sessionId)
+      .eq("user_id", userId)
+      .order("seq", { ascending: true })
+      .range(from, to);
+    if (page.error || typeof page.count !== "number") throw new LiveSavedError("read_failed");
+    total = page.count;
+    const rows = (page.data ?? []) as unknown as SavedLiveLine[];
+    lines.push(...rows);
+    if (rows.length === 0 || lines.length >= total) break;
+  }
+  const complete = lines.length >= total;
+  // Short of the total without having reached the ceiling: the pages stopped
+  // coming. Say so rather than pass it off as the conversation.
+  if (!complete && lines.length < LIVE_SAVED_LINES_MAX) throw new LiveSavedError("read_incomplete");
+  return { session: found.data as unknown as SavedLiveSession, lines, total, complete };
 }
 
 /** Delete one conversation (its lines go with it). False = it was not this user's. */

@@ -197,6 +197,12 @@ export function LiveShell(): JSX.Element {
   const echoGateRef = useRef<LiveEchoGate | null>(null);
   const autoSpeechRef = useRef<{ line: LiveLine; queuedAt: number }[]>([]);
   const autoSpeakingRef = useRef(false);
+  // Which session a readout belongs to. Every stop — STOP, the idle and cap
+  // auto-stops, a restart, leaving the page — moves this on, and a readout
+  // whose /api/tts answer comes back afterwards finds a different number and
+  // is dropped: it may not play into a stopped room, and it may not touch the
+  // mic of the session that replaced its own.
+  const readoutGenRef = useRef(0);
 
   // "Save this conversation": text only, off by default, and nothing is sent
   // unless it is on at the moment a line is produced. The toggle is not drawn
@@ -421,11 +427,18 @@ export function LiveShell(): JSX.Element {
     }
     const { line, queuedAt } = next;
     autoSpeakingRef.current = true;
+    // The session this line came from, and that session's own mic gate.
+    const gen = readoutGenRef.current;
+    const gate = echoGateRef.current;
+    const current = () => gen === readoutGenRef.current && autoVoiceRef.current;
     const quiet = () =>
       new Promise<boolean>((resolve) => {
         const check = () => {
-          if (!autoVoiceRef.current || Date.now() - queuedAt > STALE_SPEECH_MS) return resolve(false);
-          if (!ambientRef.current?.speechActive()) return resolve(true);
+          if (!current() || Date.now() - queuedAt > STALE_SPEECH_MS) return resolve(false);
+          // No session is not a quiet room: there is nobody to read to.
+          const session = ambientRef.current;
+          if (!session) return resolve(false);
+          if (!session.speechActive()) return resolve(true);
           window.setTimeout(check, 150);
         };
         check();
@@ -440,7 +453,9 @@ export function LiveShell(): JSX.Element {
       { surface: "live" }
     )
       .then(async (blob) => {
-        if (!blob || !(await quiet())) return;
+        // Stopped, restarted or voice switched off while the audio was in
+        // flight (or while waiting for the pause): not played.
+        if (!blob || !current() || !(await quiet()) || !current()) return;
         const a = ensureAudioEl();
         if (!a) return;
         if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -448,21 +463,33 @@ export function LiveShell(): JSX.Element {
         objectUrlRef.current = url;
         a.src = url;
         setSpeakingConcept(true);
-        // Shut the mic BEFORE the first sample, and remember the words.
-        echoGateRef.current?.speakStart();
-        echoGuardRef.current.spoke(line.text, Date.now());
-        await new Promise<void>((resolve) => {
-          a.onended = () => resolve();
-          a.onpause = () => resolve();
-          a.onerror = () => resolve();
-          a.play().catch(() => resolve());
-        });
-        echoGuardRef.current.finished(line.text, Date.now());
-        echoGateRef.current?.speakEnd();
+        // Shut the mic BEFORE the first sample…
+        gate?.speakStart();
+        let started = false;
+        try {
+          await new Promise<void>((resolve) => {
+            a.onended = () => resolve();
+            a.onpause = () => resolve();
+            a.onerror = () => resolve();
+            a.play().then(
+              () => {
+                // …but remember the words only once they are really audible.
+                // A play() the browser refused made no sound, and an entry for
+                // it would drop somebody genuinely saying that sentence.
+                started = true;
+                echoGuardRef.current.spoke(line.text, Date.now());
+              },
+              () => resolve()
+            );
+          });
+          if (started) echoGuardRef.current.finished(line.text, Date.now());
+        } finally {
+          // Whatever happened to the playback, the mic comes back.
+          gate?.speakEnd();
+        }
       })
       .catch(() => {
         // Voice is a bonus layer — a failed readout never interrupts the feed.
-        echoGateRef.current?.speakEnd();
       })
       .finally(() => {
         autoSpeakingRef.current = false;
@@ -498,7 +525,9 @@ export function LiveShell(): JSX.Element {
   }, []);
 
   const toggleVoice = useCallback(() => {
-    if (autoRef.current) {
+    // Auto is ambient-only, so its voice switch is too: a remembered Auto on
+    // the on-device engine must not capture the button that engine draws.
+    if (autoRef.current && engineRef.current === "ambient") {
       // Auto has its own voice switch (default off); the earpiece voice of
       // one-direction /live is left exactly as it was set.
       const on = !autoVoiceRef.current;
@@ -777,9 +806,18 @@ export function LiveShell(): JSX.Element {
     ambientRef.current = null;
     setDraft("");
     setEndingSoon(null);
+    // Any readout still on its way belongs to the session being stopped.
+    readoutGenRef.current += 1;
     silenceAutoVoice();
+    echoGateRef.current?.dispose();
     if (session) await session.stop("user");
   }, [silenceAutoVoice]);
+
+  // startAmbient restarts itself (below) when Auto changed under it, so it
+  // reaches both through refs rather than naming itself in its own closure.
+  const stopAmbientRef = useRef<() => Promise<void>>(async () => {});
+  stopAmbientRef.current = stopAmbient;
+  const startAmbientRef = useRef<() => Promise<void>>(async () => {});
 
   const startAmbient = useCallback(async () => {
     setError(null);
@@ -789,6 +827,7 @@ export function LiveShell(): JSX.Element {
     // Auto is a property of the SESSION (it is minted that way), so it is
     // read once here and every callback below uses this value, not the chip.
     const sessionAuto = autoRef.current;
+    readoutGenRef.current += 1;
     echoGuardRef.current.clear();
     echoGateRef.current?.dispose();
     echoGateRef.current = createLiveEchoGate({
@@ -846,6 +885,9 @@ export function LiveShell(): JSX.Element {
           onWarningCleared: () => setEndingSoon(null),
           onStopped: (reason) => {
             ambientRef.current = null;
+            // The idle and cap stops end the readouts too, exactly as STOP does.
+            readoutGenRef.current += 1;
+            silenceAutoVoice();
             echoGateRef.current?.dispose();
             setDraft("");
             setElapsed(0);
@@ -868,10 +910,18 @@ export function LiveShell(): JSX.Element {
       // The chip may have been tapped while this was connecting, when there
       // was no session to tell. A no-op when they already agree.
       session.setStyle(styleRef.current);
+      // Auto cannot be told to a session — it is minted in. If the chip was
+      // tapped while this one was connecting, the screen now says one thing
+      // and the session does another: bounce, exactly as a tap while live does.
+      if (autoRef.current !== sessionAuto) {
+        await stopAmbientRef.current();
+        await startAmbientRef.current();
+      }
     } catch {
       /* onError already surfaced the message */
     }
-  }, [enqueueAutoSpeech, pushFeed, pushLine]);
+  }, [enqueueAutoSpeech, pushFeed, pushLine, silenceAutoVoice]);
+  startAmbientRef.current = startAmbient;
 
   const ambientActive = ambientState !== "idle" && ambientState !== "error";
 
@@ -1008,6 +1058,7 @@ export function LiveShell(): JSX.Element {
       }
       void ambientRef.current?.stop("user");
       ambientRef.current = null;
+      readoutGenRef.current += 1;
       echoGateRef.current?.dispose();
       autoVoiceRef.current = false;
       autoSpeechRef.current = [];
@@ -1058,6 +1109,9 @@ export function LiveShell(): JSX.Element {
   const shownStyle = effectiveLiveStyle(style, autoOn);
   const voiceShown = autoOn ? autoVoice : voiceOn;
   const saveUsable = saveStatus.allowed && saveStatus.ready;
+  // The way to what was saved is not the right to save more: someone whose
+  // access was narrowed still has to be able to reach, export and delete it.
+  const savedReachable = saveUsable || saveStatus.hasSaved;
 
   return (
     <main className="min-h-screen px-4 pt-[calc(env(safe-area-inset-top)+1rem)]">
@@ -1169,7 +1223,9 @@ export function LiveShell(): JSX.Element {
             is OFF unless this device turned it on, so anyone who ignores this
             row has the /live they had. The Save chip is not drawn at all until
             the server says this user may save, and is drawn disabled (with
-            the reason) while the tables are not there yet. */}
+            the reason) while the tables are not there yet. The link to what
+            was saved follows a different rule: it is there for anyone who can
+            save OR already has something saved. */}
         {engine === "ambient" ? (
           <div data-live-auto="" className="-mt-1 flex flex-col gap-1.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -1202,8 +1258,8 @@ export function LiveShell(): JSX.Element {
                   {t.liveSaveToggle}
                 </button>
               ) : null}
-              {saveUsable ? (
-                <Link href="/live/saved" className="text-[11px] text-amber-100/60 underline underline-offset-2">
+              {savedReachable ? (
+                <Link data-live-saved-link="" href="/live/saved" className="text-[11px] text-amber-100/60 underline underline-offset-2">
                   {t.liveSavedLink}
                 </Link>
               ) : null}

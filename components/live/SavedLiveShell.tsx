@@ -13,6 +13,12 @@ import { ExitHome } from "@/components/ExitHome";
 // to read it; Export hands over a .txt; Delete removes it (and its lines) for
 // good. Everything shown here is text — this feature stores no audio.
 //
+// Nothing saved is out of reach from here. The list arrives a page at a time
+// and "Show older" asks for the next one until the server says there is no
+// more; a conversation is read whole, and in the one case where it is not
+// (longer than the server will read in one go) the screen says how many lines
+// it is showing out of how many.
+//
 // The chrome follows the phone's owner (lib/chrome/copy.ts). The conversation
 // itself is shown as it was saved: each half under the name of its language,
 // and "?" where the language was not detected.
@@ -36,28 +42,66 @@ export function SavedLiveShell(): JSX.Element {
   const t = copyFor(mine);
   const [load, setLoad] = useState<Load>("loading");
   const [sessions, setSessions] = useState<SavedLiveSession[]>([]);
-  const [open, setOpen] = useState<{ session: SavedLiveSession; lines: SavedLiveLine[] } | null>(null);
+  const [more, setMore] = useState(false);
+  const [open, setOpen] = useState<{
+    session: SavedLiveSession;
+    lines: SavedLiveLine[];
+    total: number;
+    complete: boolean;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  // One page of the list from `offset`. Returns null when it could not be had.
+  const page = useCallback(async (offset: number) => {
+    const res = await fetch(`/api/live/saved${offset ? `?offset=${offset}` : ""}`, {
+      headers: await authHeaders(),
+      cache: "no-store"
+    });
+    const body = (await res.json().catch(() => null)) as
+      | { ready?: boolean; sessions?: SavedLiveSession[]; more?: boolean }
+      | null;
+    return res.ok && body ? body : null;
+  }, []);
 
   const refresh = useCallback(async () => {
     setFailed(false);
     try {
-      const res = await fetch("/api/live/saved", { headers: await authHeaders(), cache: "no-store" });
-      const body = (await res.json().catch(() => null)) as
-        | { ready?: boolean; sessions?: SavedLiveSession[] }
-        | null;
-      if (!res.ok || !body) return setLoad("failed");
+      const body = await page(0);
+      if (!body) return setLoad("failed");
       setSessions(body.sessions ?? []);
+      setMore(body.more === true);
       setLoad(body.ready ? "ready" : "not_ready");
     } catch {
       setLoad("failed");
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The next page starts after what is on the screen. A conversation saved or
+  // deleted since the last page can shift the server's rows by one, so a row
+  // already shown is not shown twice.
+  const loadMore = useCallback(async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      const body = await page(sessions.length);
+      if (!body) return setFailed(true);
+      const older = body.sessions ?? [];
+      setSessions((prev) => {
+        const seen = new Set(prev.map((s) => s.id));
+        return [...prev, ...older.filter((s) => !seen.has(s.id))];
+      });
+      setMore(body.more === true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }, [page, sessions.length]);
 
   const read = useCallback(async (id: string) => {
     setBusy(true);
@@ -65,10 +109,13 @@ export function SavedLiveShell(): JSX.Element {
     try {
       const res = await fetch(`/api/live/saved/${id}`, { headers: await authHeaders(), cache: "no-store" });
       const body = (await res.json().catch(() => null)) as
-        | { session?: SavedLiveSession; lines?: SavedLiveLine[] }
+        | { session?: SavedLiveSession; lines?: SavedLiveLine[]; total?: number; complete?: boolean }
         | null;
       if (!res.ok || !body?.session) return setFailed(true);
-      setOpen({ session: body.session, lines: body.lines ?? [] });
+      const lines = body.lines ?? [];
+      const total = typeof body.total === "number" ? body.total : lines.length;
+      // Whole only if the server says so AND the numbers agree.
+      setOpen({ session: body.session, lines, total, complete: body.complete !== false && lines.length >= total });
     } catch {
       setFailed(true);
     } finally {
@@ -168,6 +215,15 @@ export function SavedLiveShell(): JSX.Element {
               {nameOf(open.session.lang_theirs)}
               {open.session.auto ? ` · ${t.liveAutoChip}` : ""}
             </p>
+            {open.complete ? null : (
+              <p
+                data-saved-partial=""
+                role="status"
+                className="rounded-2xl border border-amber-300/25 bg-amber-400/5 px-4 py-3 text-sm text-amber-100/80"
+              >
+                {fill(t.liveSavedPartial, { shown: open.lines.length, total: open.total })}
+              </p>
+            )}
             <ol className="flex flex-col gap-2">
               {open.lines.map((line) => (
                 <li
@@ -206,24 +262,37 @@ export function SavedLiveShell(): JSX.Element {
             {t.liveSavedEmpty}
           </p>
         ) : (
-          <ol data-saved-list="" className="flex flex-col gap-2">
-            {sessions.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void read(s.id)}
-                  className="w-full rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-4 text-left disabled:opacity-60"
-                >
-                  <div className="text-base font-semibold text-white">{when(s.started_at)}</div>
-                  <div className="mt-1 text-xs text-amber-100/60">
-                    {nameOf(s.lang_mine)} {s.auto ? "⇄" : "←"} {nameOf(s.lang_theirs)}
-                    {s.auto ? ` · ${t.liveAutoChip}` : ""} · {fill(t.liveSavedLines, { count: s.line_count ?? 0 })}
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ol>
+          <>
+            <ol data-saved-list="" className="flex flex-col gap-2">
+              {sessions.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void read(s.id)}
+                    className="w-full rounded-3xl border border-white/10 bg-[rgba(18,44,36,0.7)] p-4 text-left disabled:opacity-60"
+                  >
+                    <div className="text-base font-semibold text-white">{when(s.started_at)}</div>
+                    <div className="mt-1 text-xs text-amber-100/60">
+                      {nameOf(s.lang_mine)} {s.auto ? "⇄" : "←"} {nameOf(s.lang_theirs)}
+                      {s.auto ? ` · ${t.liveAutoChip}` : ""} · {fill(t.liveSavedLines, { count: s.line_count ?? 0 })}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ol>
+            {more ? (
+              <button
+                type="button"
+                data-saved-more=""
+                disabled={busy}
+                onClick={() => void loadMore()}
+                className={`self-center ${chip}`}
+              >
+                {t.liveSavedMore}
+              </button>
+            ) : null}
+          </>
         )}
       </div>
     </main>

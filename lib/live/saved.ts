@@ -37,9 +37,15 @@ export interface LiveSaveStatus {
   allowed: boolean;
   /** Are the tables there? False → the toggle is shown disabled, with a hint. */
   ready: boolean;
+  /**
+   * Does this user already have a saved conversation? True → the link to
+   * /live/saved is drawn even when `allowed` is false: reading, exporting and
+   * deleting one's own never depended on being allowed to save more.
+   */
+  hasSaved: boolean;
 }
 
-export const LIVE_SAVE_UNAVAILABLE: LiveSaveStatus = { allowed: false, ready: false };
+export const LIVE_SAVE_UNAVAILABLE: LiveSaveStatus = { allowed: false, ready: false, hasSaved: false };
 
 /** The longest heard text or rendering one saved line may carry. */
 export const LIVE_SAVE_MAX_TEXT = 8000;
@@ -94,12 +100,20 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
  *   1.
  *   [es] ¿Dónde está el baño?
  *   [en] Where is the bathroom?
+ *
+ * `total` is how many lines the conversation has. When that is more than the
+ * lines handed in, the file says so twice — under the heading and again at the
+ * end, where a reader who scrolled to the bottom will find it. An export never
+ * passes a part off as the whole.
  */
 export function savedConversationAsText(
   session: SavedLiveSession,
   lines: readonly SavedLiveLine[],
-  labelFor: (code: string) => string = (c) => c
+  labelFor: (code: string) => string = (c) => c,
+  total: number = lines.length
 ): string {
+  const partial =
+    total > lines.length ? `INCOMPLETE: this file holds the first ${lines.length} of ${total} lines.` : null;
   const tag = (code: string | null) => `[${code ? labelFor(code) : "??"}]`;
   const head = [
     "TAOS·LITE — /live",
@@ -108,7 +122,8 @@ export function savedConversationAsText(
       `${labelFor(session.lang_mine)} ${session.auto ? "⇄" : "←"} ${labelFor(session.lang_theirs)}`,
       session.style === "verbatim" ? "word for word" : "summary",
       ...(session.auto ? ["auto-detect"] : [])
-    ].join(" · ")
+    ].join(" · "),
+    ...(partial ? [partial] : [])
   ];
   const body = [...lines]
     .sort((a, b) => a.seq - b.seq)
@@ -119,5 +134,5 @@ export function savedConversationAsText(
         `${tag(l.translation_lang)} ${l.translation}`
       ].join("\n")
     );
-  return [head.join("\n"), ...body].join("\n\n") + "\n";
+  return [head.join("\n"), ...body, ...(partial ? [partial] : [])].join("\n\n") + "\n";
 }

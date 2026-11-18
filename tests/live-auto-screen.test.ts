@@ -35,7 +35,13 @@ let serverSays: (ev: Record<string, unknown>) => void = () => {};
 let mintBodies: Array<Record<string, unknown>> = [];
 let savedBodies: Array<Record<string, any>> = [];
 let ttsBodies: Array<Record<string, unknown>> = [];
-let saveStatus: { allowed: boolean; ready: boolean } | null = null;
+let saveStatus: { allowed: boolean; ready: boolean; hasSaved?: boolean } | null = null;
+/** Set → the next /api/tts answer waits for it (a slow readout). */
+let ttsHold: Promise<void> | null = null;
+/** Set → the next mint waits for it (a session still connecting). */
+let mintHold: Promise<void> | null = null;
+/** True → the browser refuses to play (autoplay policy, a dead element). */
+let playRefused = false;
 let micTrack = { enabled: true, stop: () => {} };
 /** Every <audio> the shell asked to play, so a test can end the readout. */
 let playing: HTMLMediaElement[] = [];
@@ -78,11 +84,16 @@ beforeEach(() => {
   savedBodies = [];
   ttsBodies = [];
   saveStatus = null;
+  ttsHold = null;
+  mintHold = null;
+  playRefused = false;
+  delete process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT;
   playing = [];
   micTrack = { enabled: true, stop: () => {} };
   window.HTMLElement.prototype.scrollIntoView = () => {};
   // A readout stays "playing" until the test ends it (endReadout below).
   window.HTMLMediaElement.prototype.play = function play(this: HTMLMediaElement) {
+    if (playRefused && this.src) return Promise.reject(new DOMException("refused", "NotAllowedError"));
     if (this.src) playing.push(this);
     return Promise.resolve();
   };
@@ -104,6 +115,7 @@ beforeEach(() => {
       const body = () => JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       if (u.includes("/api/live/realtime")) {
         mintBodies.push(body());
+        if (mintHold) await mintHold;
         return json({ clientSecret: "ek_test", callUrl: "https://example.test/calls", styles: {} });
       }
       if (u.includes("/api/live/saved/status")) {
@@ -115,6 +127,7 @@ beforeEach(() => {
       }
       if (u.includes("/api/tts")) {
         ttsBodies.push(body());
+        if (ttsHold) await ttsHold;
         // Bytes, not a Blob: jsdom's Blob has no .stream(), and Node 22 (CI)
         // refuses to build a Response from one.
         return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "Content-Type": "audio/mpeg" } });
@@ -386,6 +399,186 @@ describe("/live Auto: two people, one phone, a scripted provider", () => {
     });
     expect(lines(c)).toEqual([]);
     expect(c.querySelector("ol")!.textContent).toContain("Asking where the bathroom is.");
+  });
+});
+
+// ── Copilot's review of #137 ────────────────────────────────────────────────
+
+/** A promise the test resolves when it is ready. */
+function hold(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const promise = new Promise<void>((r) => (release = r));
+  return { promise, release };
+}
+
+describe("/live Auto voice: a readout belongs to the session that produced it", () => {
+  async function liveWithVoice(): Promise<HTMLElement> {
+    const c = await mount();
+    await tap(autoChip(c));
+    await tap(start(c));
+    await settle();
+    await tap(voiceChip(c));
+    return c;
+  }
+
+  it("STOP while /api/tts is still answering: the line is not read into a stopped room", async () => {
+    const c = await liveWithVoice();
+    const tts = hold();
+    ttsHold = tts.promise;
+    await hear("i1", "¿Dónde está el baño, por favor?");
+    await answer("[en] Where is the bathroom, please?");
+    expect(ttsBodies).toHaveLength(1);
+    await tap(start(c)); // STOP
+    await settle();
+    await act(async () => tts.release());
+    await settle(8);
+    expect(playing).toEqual([]);
+  });
+
+  it("STOP then START: the old readout neither plays nor touches the new session's mic", async () => {
+    const c = await liveWithVoice();
+    const tts = hold();
+    ttsHold = tts.promise;
+    await hear("i1", "¿Dónde está el baño, por favor?");
+    await answer("[en] Where is the bathroom, please?");
+    await tap(start(c)); // STOP
+    await settle();
+    ttsHold = null;
+    await tap(start(c)); // START — a new session, voice still on
+    await settle();
+    expect(mintBodies).toHaveLength(2);
+    const micOfNew = micTrack;
+    const flips: boolean[] = [];
+    Object.defineProperty(micOfNew, "enabled", {
+      get: () => true,
+      set: (v: boolean) => flips.push(v),
+      configurable: true
+    });
+    await act(async () => tts.release());
+    await settle(8);
+    expect(playing).toEqual([]);
+    expect(flips).toEqual([]);
+
+    // The new session's own lines are still read.
+    await hear("i2", "Gracias, muy amable.");
+    await answer("[en] Thank you, very kind.");
+    await act(async () => {
+      await vi.waitFor(() => expect(playing.length).toBe(1), { timeout: 5000 });
+    });
+    expect(flips).toEqual([false]);
+  });
+});
+
+describe("/live Auto voice: the echo entry is for words that were actually spoken", () => {
+  it("a refused play() records nothing: somebody really saying that sentence is translated, and the mic comes back", async () => {
+    const c = await mount();
+    await tap(autoChip(c));
+    await tap(start(c));
+    await settle();
+    await tap(voiceChip(c));
+    playRefused = true;
+    await hear("i1", "¿Dónde está el baño, por favor?");
+    await answer("[en] Where is the bathroom, please?");
+    await act(async () => {
+      await vi.waitFor(() => expect(ttsBodies).toHaveLength(1), { timeout: 5000 });
+    });
+    await settle(8);
+    expect(playing).toEqual([]);
+    // The gate opened again (after the tail), though nothing ever "ended".
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    expect(micTrack.enabled).toBe(true);
+
+    // The phone made no sound, so this is a person, not an echo.
+    const asked = responseCreates().length;
+    await hear("i2", "Where is the bathroom, please?");
+    expect(responseCreates().length).toBe(asked + 1);
+    expect(c.querySelector("[data-live-auto-counts]")).toBeNull();
+  });
+});
+
+describe("/live: the Voice button on the on-device engine", () => {
+  it("a remembered Auto does not capture it — it toggles the voice that engine shows", async () => {
+    process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT = "1";
+    window.localStorage.setItem(LIVE_AUTO_STORAGE_KEY, "1");
+    const c = await mount();
+    const onDevice = Array.from(c.querySelectorAll("button")).find((b) => b.textContent === "On-device")!;
+    await tap(onDevice);
+    // Auto is ambient-only: no chip, and the button shows the device voice (on).
+    expect(c.querySelector("[data-live-auto-chip]")).toBeNull();
+    expect(voiceChip(c).getAttribute("aria-pressed")).toBe("true");
+    await tap(voiceChip(c));
+    expect(voiceChip(c).getAttribute("aria-pressed")).toBe("false");
+    expect(voiceChip(c).textContent).toContain("Voice off");
+    await tap(voiceChip(c));
+    expect(voiceChip(c).getAttribute("aria-pressed")).toBe("true");
+
+    // Back on Ambient with Auto still remembered: Auto's own switch, still off.
+    const ambient = Array.from(c.querySelectorAll("button")).find((b) => /Ambient AI/.test(b.textContent ?? ""))!;
+    await tap(ambient);
+    expect(autoChip(c).getAttribute("aria-pressed")).toBe("true");
+    expect(voiceChip(c).textContent).toContain("Voice off");
+  });
+});
+
+describe("/live: Auto tapped while the session is still connecting", () => {
+  it("the session that comes up is bounced into what the chip says", async () => {
+    const c = await mount();
+    const mint = hold();
+    mintHold = mint.promise;
+    await tap(start(c));
+    expect(mintBodies).toEqual([{ target: "en", source: "es", style: "summary" }]);
+    await tap(autoChip(c)); // no session yet to restart
+    expect(autoChip(c).getAttribute("aria-pressed")).toBe("true");
+    expect(mintBodies).toHaveLength(1);
+    mintHold = null;
+    await act(async () => mint.release());
+    await settle(8);
+    expect(mintBodies).toEqual([
+      { target: "en", source: "es", style: "summary" },
+      { target: "en", source: "es", style: "verbatim", auto: true }
+    ]);
+    // And it IS an Auto session: a tagged line lands as a line card.
+    await hear("i1", "¿Dónde está el baño?");
+    await answer("[en] Where is the bathroom?");
+    expect(lines(c)).toHaveLength(1);
+  });
+
+  it("tapped on and off again before it connects: nothing to reconcile, one session", async () => {
+    const c = await mount();
+    const mint = hold();
+    mintHold = mint.promise;
+    await tap(start(c));
+    await tap(autoChip(c));
+    await tap(autoChip(c));
+    mintHold = null;
+    await act(async () => mint.release());
+    await settle(8);
+    expect(mintBodies).toEqual([{ target: "en", source: "es", style: "summary" }]);
+  });
+});
+
+describe("/live: the way to what was saved", () => {
+  const link = (c: HTMLElement) => c.querySelector<HTMLAnchorElement>("[data-live-saved-link]");
+
+  it("is there for someone who has saved text but may no longer save — with no Save chip", async () => {
+    saveStatus = { allowed: false, ready: false, hasSaved: true };
+    const c = await mount();
+    expect(saveChip(c)).toBeNull();
+    expect(link(c)!.getAttribute("href")).toBe("/live/saved");
+    expect(link(c)!.textContent).toBe(ENGLISH.liveSavedLink);
+  });
+
+  it("is there for someone who can save, and not for someone with neither", async () => {
+    saveStatus = { allowed: true, ready: true, hasSaved: false };
+    expect(link(await mount())).not.toBeNull();
+    cleanup();
+    saveStatus = { allowed: false, ready: false, hasSaved: false };
+    expect(link(await mount())).toBeNull();
+    cleanup();
+    saveStatus = null; // signed out, or the answer never came
+    expect(link(await mount())).toBeNull();
   });
 });
 

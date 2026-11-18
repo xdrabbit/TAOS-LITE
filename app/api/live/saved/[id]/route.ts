@@ -8,13 +8,17 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
 
-// GET    /api/live/saved/<id>               → { session, lines }
+// GET    /api/live/saved/<id>               → { session, lines, total, complete }
 // GET    /api/live/saved/<id>?format=text   → the conversation as a .txt download
 // DELETE /api/live/saved/<id>               → { deleted: true }
 //
 // One saved /live conversation — the signed-in user's own, or a 404 that does
 // not say whether the id exists. Logs carry the id and a line count, never the
 // text.
+//
+// The whole conversation, however long (lib/live/savedStore.ts reads it in
+// pages). `total` is the database's own count and `complete` says whether
+// `lines` is all of it; when it is not, the .txt says so in words.
 const noStore = { "Cache-Control": "no-store" };
 
 function notFound(): NextResponse {
@@ -30,10 +34,12 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }): Pr
     const found = await readSavedLive(guard.user.id, id);
     if (!found) return notFound();
     const asText = new URL(req.url).searchParams.get("format") === "text";
-    console.info(`[taos-live-save] read session=${id} lines=${found.lines.length} format=${asText ? "text" : "json"}`);
+    console.info(
+      `[taos-live-save] read session=${id} lines=${found.lines.length} total=${found.total} complete=${found.complete ? 1 : 0} format=${asText ? "text" : "json"}`
+    );
     if (asText) {
       const day = found.session.started_at.slice(0, 10);
-      return new NextResponse(savedConversationAsText(found.session, found.lines, languageNative), {
+      return new NextResponse(savedConversationAsText(found.session, found.lines, languageNative, found.total), {
         headers: {
           ...noStore,
           "Content-Type": "text/plain; charset=utf-8",

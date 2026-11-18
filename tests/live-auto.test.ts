@@ -26,6 +26,7 @@ import { LIVE_VERBATIM_MAX_LAG_MS, nextResponse } from "@/lib/live/respond";
 import {
   createEchoGuard,
   createLiveEchoGate,
+  echoUnits,
   effectiveLiveStyle,
   LIVE_ECHO_WINDOW_MS,
   otherOfPair,
@@ -217,6 +218,18 @@ describe("echo fence one: the mic is shut while this phone speaks", () => {
     b.g.dispose();
     expect(b.held).toEqual([true, false]);
   });
+
+  // Copilot on #137: a readout that outlives its session (a slow /api/tts
+  // answer, a late "ended") was reaching the mic of the session after it.
+  it("is dead once disposed: a late readout can neither shut nor open the next session's mic", () => {
+    const { g, held, advance } = gate();
+    g.dispose();
+    g.speakStart();
+    expect(g.held()).toBe(false);
+    g.speakEnd();
+    advance(10 * 60_000);
+    expect(held).toEqual([]);
+  });
 });
 
 describe("echo fence two: a heard line that is what this phone just said", () => {
@@ -253,6 +266,50 @@ describe("echo fence two: a heard line that is what this phone just said", () =>
     const guard = createEchoGuard();
     guard.spoke("Sí, claro, vamos el domingo", NOW);
     expect(guard.isEcho("Sí, claro", NOW + 1000)).toBe(false);
+  });
+
+  // Copilot on #137: a sentence in a script without spaces is ONE run of
+  // letters, so "fewer than three words" switched the fence off for Chinese,
+  // Japanese and Thai — an exact repeat of the readout was translated again.
+  describe("a script that does not put spaces between words", () => {
+    it("is measured in character pairs, and its length in word-equivalents", () => {
+      expect(echoUnits("请问洗手间在哪里")).toEqual({
+        tokens: ["请问", "问洗", "洗手", "手间", "间在", "在哪", "哪里"],
+        words: 4
+      });
+      // Punctuation ends a run; it is never part of a pair.
+      expect(echoUnits("好的，谢谢。").tokens).toEqual(["好的", "谢谢"]);
+      // Words with spaces are what they always were: lower case, accents off.
+      expect(echoUnits("¿Dónde está el baño?")).toEqual({ tokens: ["donde", "esta", "el", "bano"], words: 4 });
+      // Mixed: each script by its own rule.
+      expect(echoUnits("iPhone很好用")).toEqual({ tokens: ["iphone", "很好", "好用"], words: 3 });
+      // Thai keeps its vowel marks — they are not accents.
+      expect(echoUnits("ห้องน้ำ").tokens.join("")).toContain("้");
+    });
+
+    it.each([
+      ["Chinese", "请问洗手间在哪里", "请问洗手间在哪里？", "在走廊尽头的左边"],
+      ["Cantonese", "請問洗手間喺邊度", "請問洗手間喺邊度呀", "喺走廊盡頭左手邊"],
+      ["Japanese", "トイレはどこですか", "トイレはどこですか？", "廊下の突き当たりを左です"],
+      ["Thai", "ห้องน้ำอยู่ที่ไหนครับ", "ห้องน้ำอยู่ที่ไหนครับ", "เดินตรงไปแล้วเลี้ยวซ้าย"]
+    ])("%s: the readout coming back is dropped, the answer is not", (_name, spoken, echo, reply) => {
+      const guard = createEchoGuard();
+      guard.spoke(spoken, NOW);
+      expect(guard.isEcho(echo, NOW + 3000)).toBe(true);
+      expect(guard.isEcho(reply, NOW + 3000)).toBe(false);
+    });
+
+    it("survives the room changing a character or two", () => {
+      const guard = createEchoGuard();
+      guard.spoke("请问洗手间在哪里", NOW);
+      expect(guard.isEcho("请问，洗手间在哪", NOW + 3000)).toBe(true);
+    });
+
+    it("still does not judge a couple of words — '好的谢谢' matches too much by accident", () => {
+      const guard = createEchoGuard();
+      guard.spoke("好的，谢谢，我们星期天去", NOW);
+      expect(guard.isEcho("好的谢谢", NOW + 1000)).toBe(false);
+    });
   });
 });
 
