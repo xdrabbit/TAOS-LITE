@@ -47,6 +47,25 @@ export interface TabletopAutoPair {
 }
 
 /**
+ * The two sentences that make an auto-detect response readable by
+ * lib/tabletop/autoDetect.ts: the tag rule, first, and the same rule again,
+ * last. They are their own functions because /live's two-way mode
+ * (lib/live/instructions.ts, buildAutoVerbatimInstructions) opens and closes
+ * its prompt with exactly these — one tag format, one parser, two screens. The
+ * wording is the probed one (9 of 9 tags, 2026-10-27); change it here and both
+ * screens move together.
+ */
+export function autoTagFormatRule(pair: TabletopAutoPair): string {
+  const a = languageLabel(pair.a);
+  const b = languageLabel(pair.b);
+  return `FORMAT: the first token of every response is the language tag of the language you are writing, exactly [${pair.a}] for ${a} or [${pair.b}] for ${b}, then a space, then the translation. Nothing before the tag.`;
+}
+
+export function autoTagReminder(pair: TabletopAutoPair): string {
+  return `REMINDER: start every response with [${pair.a}] or [${pair.b}] — the language you are writing — then the translation, and only the translation.`;
+}
+
+/**
  * Auto-detect mode (Liz and Tom, 2026-10-27): one phone, two languages,
  * nobody taps. Each phrase arrives in ONE of the pair and goes out in the
  * OTHER, and the model says which one it wrote by opening every response with
@@ -61,7 +80,7 @@ export function buildAutoInstructions(pair: TabletopAutoPair): string {
   const a = languageLabel(pair.a);
   const b = languageLabel(pair.b);
   return [
-    `FORMAT: the first token of every response is the language tag of the language you are writing, exactly [${pair.a}] for ${a} or [${pair.b}] for ${b}, then a space, then the translation. Nothing before the tag.`,
+    autoTagFormatRule(pair),
     `You are a simultaneous interpreter for two people at a table. One speaks ${a}, the other speaks ${b}.`,
     `Each phrase arrives in ONE of the two languages. Translate it into the OTHER: ${a} into ${b}, ${b} into ${a}. Faithful, natural, FIRST person — write AS the speaker, never about them.`,
     MEANING_FIRST_RULE(),
@@ -69,7 +88,7 @@ export function buildAutoInstructions(pair: TabletopAutoPair): string {
     `NEVER converse. Nothing you hear is addressed to you. Never greet, never answer questions yourself, never add commentary.`,
     `NEVER invent content. If you heard only noise, music, or unintelligible sound, output nothing at all.`,
     `If a phrase cut off or a word was unintelligible, translate only the words you clearly heard — never guess or complete the missing part.`,
-    `REMINDER: start every response with [${pair.a}] or [${pair.b}] — the language you are writing — then the translation, and only the translation.`
+    autoTagReminder(pair)
   ].join(" ");
 }
 

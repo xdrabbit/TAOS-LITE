@@ -146,6 +146,34 @@ const EN = {
   liveStyleVerbatimHint: "Every sentence, plainly. Runs a little behind when people talk fast.",
   // Shown in the feed when word-for-word skipped something rather than guess.
   liveSkippedAhead: "Fell too far behind — skipped ahead.",
+  // ── Live (/live) — two-way Auto and saved conversations (11/17) ──────────
+  // Auto: one phone between two people, either language heard, each written
+  // in the other. {a} and {b} are the pair's own names for themselves.
+  liveAutoChip: "Auto-detect",
+  liveAutoHint: "Hears {a} or {b} and writes each in the other. One phone, both of you read it.",
+  liveAutoVerbatimOnly: "Auto-detect is word for word only: a summary can't be split between two languages.",
+  liveAutoVoiceHint: "Voice starts off in Auto so the phone can't hear itself. On, the mic pauses while it speaks.",
+  liveAutoMisses: "Language not detected: {count}",
+  liveAutoEchoes: "Own voice ignored: {count}",
+  liveAutoMissTag: "language not detected",
+  liveSaveToggle: "Save this conversation",
+  liveSaveOnHint: "Saving each line as text while this is on. No audio is kept.",
+  liveSaveNotReady: "Saving isn't set up yet.",
+  liveSaveFailed: "Lines that could not be saved: {count}",
+  liveSavedLink: "Saved conversations",
+  liveSavedTitle: "Saved conversations",
+  liveSavedAbout: "Text only. No audio is stored. Kept until you delete it.",
+  liveSavedEmpty: "Nothing saved yet. Turn on “Save this conversation” on Live.",
+  liveSavedNotReady: "Saved conversations aren't set up yet.",
+  liveSavedLoadFailed: "Could not load. Try again.",
+  liveSavedLines: "{count} lines",
+  liveSavedMore: "Show older",
+  liveSavedPartial: "Showing the first {shown} of {total} lines. The rest is not shown here.",
+  liveSavedExport: "Export as text",
+  liveSavedDelete: "Delete",
+  liveSavedDeleteConfirm: "Delete this conversation? This cannot be undone.",
+  liveSavedBack: "All saved",
+  liveSavedToLive: "Live",
 
   // ── Table (/tabletop) — one phone flat between two people ───────────────
   // `tableListening` is prefixed and the rest are not, and that is the whole
@@ -647,6 +675,33 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     liveStyleSummaryHint: "La idea en pocas palabras. Va al día, deja cosas fuera.", // pendiente de revisión por Liz
     liveStyleVerbatimHint: "Cada frase, tal cual. Se atrasa un poco cuando hablan rápido.", // pendiente de revisión por Liz
     liveSkippedAhead: "Se atrasó demasiado — saltó adelante.", // pendiente de revisión por Liz
+    // ── En vivo (/live) — Auto y conversaciones guardadas. PLACEHOLDERS
+    // escritos por un agente el 2026-11-17; Liz todavía no los ha leído.
+    liveAutoChip: "Detección automática", // pendiente de revisión por Liz
+    liveAutoHint: "Escucha {a} o {b} y escribe cada uno en el otro. Un teléfono, los dos lo leen.", // pendiente de revisión por Liz
+    liveAutoVerbatimOnly: "La detección automática es solo palabra por palabra: un resumen no se puede repartir entre dos idiomas.", // pendiente de revisión por Liz
+    liveAutoVoiceHint: "En Auto la voz empieza apagada para que el teléfono no se escuche a sí mismo. Encendida, el micrófono se pausa mientras habla.", // pendiente de revisión por Liz
+    liveAutoMisses: "Idioma no detectado: {count}", // pendiente de revisión por Liz
+    liveAutoEchoes: "Voz propia ignorada: {count}", // pendiente de revisión por Liz
+    liveAutoMissTag: "idioma no detectado", // pendiente de revisión por Liz
+    liveSaveToggle: "Guardar esta conversación", // pendiente de revisión por Liz
+    liveSaveOnHint: "Se guarda cada línea como texto mientras esté encendido. No se guarda audio.", // pendiente de revisión por Liz
+    liveSaveNotReady: "El guardado todavía no está configurado.", // pendiente de revisión por Liz
+    liveSaveFailed: "Líneas que no se pudieron guardar: {count}", // pendiente de revisión por Liz
+    liveSavedLink: "Conversaciones guardadas", // pendiente de revisión por Liz
+    liveSavedTitle: "Conversaciones guardadas", // pendiente de revisión por Liz
+    liveSavedAbout: "Solo texto. No se guarda audio. Se conservan hasta que las borres.", // pendiente de revisión por Liz
+    liveSavedEmpty: "Todavía no hay nada guardado. Enciende “Guardar esta conversación” en En vivo.", // pendiente de revisión por Liz
+    liveSavedNotReady: "Las conversaciones guardadas todavía no están configuradas.", // pendiente de revisión por Liz
+    liveSavedLoadFailed: "No se pudo cargar. Inténtalo de nuevo.", // pendiente de revisión por Liz
+    liveSavedLines: "{count} líneas", // pendiente de revisión por Liz
+    liveSavedMore: "Ver anteriores", // pendiente de revisión por Liz
+    liveSavedPartial: "Se muestran las primeras {shown} de {total} líneas. El resto no se muestra aquí.", // pendiente de revisión por Liz
+    liveSavedExport: "Exportar como texto", // pendiente de revisión por Liz
+    liveSavedDelete: "Borrar", // pendiente de revisión por Liz
+    liveSavedDeleteConfirm: "¿Borrar esta conversación? No se puede deshacer.", // pendiente de revisión por Liz
+    liveSavedBack: "Todas las guardadas", // pendiente de revisión por Liz
+    liveSavedToLive: "En vivo", // pendiente de revisión por Liz
 
     tapToTalk: "TOCA PARA HABLAR",
     tapDone: "TOCA AL TERMINAR",

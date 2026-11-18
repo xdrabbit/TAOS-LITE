@@ -83,6 +83,8 @@ type Loader = () => Promise<ComponentType>;
 /** Every route under app/ that is a screen, and what it mounts. */
 const SCREENS: Record<string, Loader> = {
   live: async () => (await import("@/components/LiveShell")).LiveShell,
+  // /live/saved: the saved-conversations page, a SessionGate around this.
+  "live/saved": async () => (await import("@/components/live/SavedLiveShell")).SavedLiveShell,
   chat: async () => (await import("@/components/ChatShell")).ChatShell,
   tabletop: async () => (await import("@/components/TabletopShell")).TabletopShell,
   translate: async () => (await import("@/components/TranslateShell")).TranslateShell,

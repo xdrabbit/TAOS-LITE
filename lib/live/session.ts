@@ -8,7 +8,7 @@
 // against a hand-copied session object, and a hand-copied object is one edit
 // away from documenting a configuration nobody ships.
 
-import { buildLiveInstructions } from "@/lib/live/instructions";
+import { buildAutoVerbatimInstructions, buildLiveInstructions } from "@/lib/live/instructions";
 import { DEFAULT_LIVE_STYLE, type LiveStyle } from "@/lib/live/style";
 import { contextTokenLimitFromEnv, truncationCap } from "@/lib/realtime/truncation";
 
@@ -84,6 +84,15 @@ export const LIVE_VERBATIM_CONTEXT_TOKEN_LIMIT = contextTokenLimitFromEnv(
 export const LIVE_SUMMARY_MAX_OUTPUT_TOKENS = 120;
 export const LIVE_VERBATIM_MAX_OUTPUT_TOKENS = 1200;
 
+/**
+ * One Auto response's ceiling. Auto WRITES (see buildLiveAutoPatch), and text
+ * is about four times denser than the model's voice: the minute of continuous
+ * speech that LIVE_VERBATIM_MAX_OUTPUT_TOKENS buys in audio is ~150 words,
+ * well under 400 text tokens in any language of the catalog, tag included.
+ * Still a hard stop on a runaway.
+ */
+export const LIVE_AUTO_MAX_OUTPUT_TOKENS = 400;
+
 /** The context cap a style runs under. `null` = uncapped (env said "off"). */
 export function liveContextTokenLimit(style: LiveStyle): number | null {
   return style === "verbatim" ? LIVE_VERBATIM_CONTEXT_TOKEN_LIMIT : LIVE_CONTEXT_TOKEN_LIMIT;
@@ -116,6 +125,38 @@ export interface LiveSessionOptions {
    * harness passes null; it is how the "before" column gets measured.
    */
   contextTokenLimit?: number | null;
+  /**
+   * Two-way Auto (lib/live/auto.ts): `target` and `source` are then simply the
+   * pair, either may be spoken, and the session is minted on
+   * buildLiveAutoPatch — word-for-word, text out, tagged. `style` is ignored.
+   */
+  auto?: boolean;
+}
+
+/**
+ * What an Auto session runs on: the tagged two-way prompt, TEXT output, and
+ * word-for-word's context cap — unchanged, because Auto asks the way
+ * word-for-word does (one `item_reference` per response) and needs the cap for
+ * the same reason: not to lose a segment that is still waiting its turn.
+ *
+ * Text, not audio, because the tag must be the first thing produced and a
+ * speaking model would say "[es]" out loud. It is also most of why Auto is the
+ * cheapest minute on this screen: audio out is $64/Mtok at 20 tokens a second,
+ * and this session produces none.
+ */
+export function buildLiveAutoPatch(opts: {
+  pair: readonly [string, string];
+  contextTokenLimit?: number | null;
+}): Record<string, unknown> {
+  const cap =
+    opts.contextTokenLimit === undefined ? liveContextTokenLimit("verbatim") : opts.contextTokenLimit;
+  return {
+    type: "realtime",
+    instructions: buildAutoVerbatimInstructions(opts.pair[0], opts.pair[1]),
+    output_modalities: ["text"],
+    max_output_tokens: LIVE_AUTO_MAX_OUTPUT_TOKENS,
+    ...(cap === null ? {} : { truncation: truncationCap(cap) })
+  };
 }
 
 /**
@@ -156,14 +197,21 @@ export function buildLiveSession(opts: LiveSessionOptions): Record<string, unkno
   const style = opts.style ?? DEFAULT_LIVE_STYLE;
 
   return {
-    ...buildLiveStylePatch({
-      style,
-      target: opts.target,
-      source: opts.source,
-      contextTokenLimit: opts.contextTokenLimit
-    }),
-    model: opts.model,
     output_modalities: ["audio"],
+    // Auto's patch comes second so its `output_modalities: ["text"]` is the
+    // one that stands.
+    ...(opts.auto
+      ? buildLiveAutoPatch({
+          pair: [opts.target, opts.source],
+          contextTokenLimit: opts.contextTokenLimit
+        })
+      : buildLiveStylePatch({
+          style,
+          target: opts.target,
+          source: opts.source,
+          contextTokenLimit: opts.contextTokenLimit
+        })),
+    model: opts.model,
     audio: {
       input: {
         // NO noise_reduction here, unlike /call and /tabletop. Both of those
