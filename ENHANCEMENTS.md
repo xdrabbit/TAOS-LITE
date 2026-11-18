@@ -16,21 +16,21 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
-- **/live two-way Auto-detect + saved conversations — DRAFT PR, awaiting a
-  two-person phone test** (Tom and Liz, 2026-11-17). Built: an Auto-detect
-  chip on /live (off by default, per device) that renders each heard segment
-  into the OTHER language of the pair using the tabletop's `[xx]` tag; word for
-  word only; text out, so voice is off by default in Auto and, when turned on,
-  the mic is held shut while the phone speaks. And "Save this conversation"
-  (text only, off by default, founders unless `TAOS_LIVE_SAVE` widens it) with
-  `/live/saved` to read, export and delete. STILL OPEN: Tom applies
-  `supabase/migrations/20261117_live_saved_conversations.sql` (until then the
-  Save chip is disabled with a hint); every Spanish string is pendiente de
-  revisión por Liz; the half-duplex and the echo guard have only met a
-  scripted provider and a silent WAV — a real speaker next to a real mic is
-  the test; Auto with voice ON costs /api/tts per line on top of the measured
-  $0.036/min; saved conversations hold the OTHER person's words too, which is
-  the consent question already written down under Ideas. (added 2026-11-17)
+- **/live Auto + saved conversations — what PR #137 left open.** Every
+  Spanish string is pendiente de revisión por Liz (shipped as written on Tom's
+  standing exception, 2026-11-17; reword if she objects) — that now includes
+  "Ver anteriores" and the partial-conversation notice on `/live/saved`. Voice
+  in Auto: Tom and Liz tested it on the preview (no self-carding, talk-over
+  acceptable); the review fixes to the readout path after that test have only
+  met vitest and headless Chrome. The echo fence for Chinese,
+  Japanese and Thai (character pairs) has only met written sentences, never a
+  real readout coming back through a real mic. Auto with voice ON costs
+  /api/tts per line on top of the measured $0.036/min. Saved conversations
+  hold the OTHER person's words too, which is the consent question already
+  written down under Ideas. Nobody has saved a real conversation yet (the
+  tables were empty at merge), so the first real save, read and export on a
+  phone is still to come. `TAOS_LIVE_SAVE` is unset (founders). (added
+  2026-11-17)
 
 - **/tabletop flush — what PR #135 left open.** Spanish for the three new
   lines is pendiente de revisión por Liz (shipped as written on Tom's say-so,
@@ -1255,6 +1255,26 @@ blank.
 
 ## Shipped
 
+- /live: two-way Auto-detect, and saved conversations — an "Auto-detect" chip
+  on /live (off by default, per device, `taos.live.auto`): one phone between
+  two people, each heard segment written in the OTHER language of the pair,
+  read from the tabletop's `[xx]` tag; a miss keeps its words, names no
+  language and is counted. Word for word only; the session writes text
+  ($0.036/min of room speech), so voice is off by default and, turned on,
+  reads each line through /api/tts with the mic held shut while it plays plus
+  a transcript echo guard. "Save this conversation" (text only, off by
+  default, founders unless `TAOS_LIVE_SAVE=subscribers|all`) with `/live/saved`
+  to read, export as .txt and delete; migration `live_saved_conversations`
+  applied 2026-11-17. Copilot's eight review findings fixed before merge: a
+  readout dies with its session; the echo entry is recorded when playback
+  really starts; the Voice button's Auto branch is ambient-only; Auto tapped
+  while connecting is reconciled; the link to `/live/saved` stays for anyone
+  with saved text; echo matching handles scripts without spaces; the saved
+  list is paged ("Show older"); and a conversation is read in pages of 1,000 —
+  this project's PostgREST returns at most 1,000 rows per request and no error
+  whatever `.limit()` asks, measured on production — so a long one reads and
+  exports whole, and anything short of whole says so. Tom and Liz ran the
+  preview for a 90-minute two-way conversation — 2026-11-17, PR #137
 - Home turn: ten minutes, recorded in chunks — ten minutes for paid
   subscribers and founders (`TAOS_HOME_MAX_TURN_MS`), five for free / trial
   (`TAOS_HOME_MAX_TURN_FREE_MS`), with a hard stop. At 4.5 minutes the recorder
