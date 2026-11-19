@@ -4,6 +4,11 @@ import { runDailyEmails } from "@/lib/email/daily";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Next 14 leaves fetch on auto-cache in a GET-only handler even under
+// force-dynamic, and supabase-js reads through fetch: without this line the
+// table read is answered from the Data Cache — the first run after a deploy
+// is the only one that ever reaches the database.
+export const fetchCache = "force-no-store";
 export const maxDuration = 300;
 
 // GET /api/email/daily — the hourly pass of the daily study reminder

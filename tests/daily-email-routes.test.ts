@@ -207,3 +207,17 @@ describe("POST /api/email/webhook", () => {
     expect(store.rows.get(TOM.id)?.unsubscribed_at).toBeTruthy();
   });
 });
+
+// 2026-11-19: every hourly run logged candidates=0 with an opted-in row in the
+// table. Under Next 14 a GET-only handler keeps fetch on auto-cache even with
+// force-dynamic, and supabase-js reads through fetch — so the first run after
+// a deploy cached `[]` and every later run was handed it back. A cron that
+// reads a table must opt its fetches out, by name.
+describe("the cron routes never read the table from Next's fetch cache", () => {
+  it.each(["app/api/email/daily/route.ts", "app/api/walkie/sweep/route.ts"])("%s sets fetchCache to force-no-store", async (file) => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(file, "utf8");
+    expect(source).toMatch(/^export const fetchCache = "force-no-store";$/m);
+    expect(source).toMatch(/^export const dynamic = "force-dynamic";$/m);
+  });
+});
