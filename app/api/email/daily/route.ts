@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { trustedOrigin } from "@/lib/authRedirect";
+import { emailOrigin } from "@/lib/email/config";
 import { runDailyEmails } from "@/lib/email/daily";
 
 export const runtime = "nodejs";
@@ -35,6 +35,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!secret || header !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
   }
-  const result = await runDailyEmails({ origin: trustedOrigin(new URL(req.url).origin) });
+  // The links' origin comes from config, never from `req.url`: the cron is
+  // called on the deployment hostname, not taoslite.com (emailOrigin says more).
+  const result = await runDailyEmails({ origin: emailOrigin() });
   return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
 }

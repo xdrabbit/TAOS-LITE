@@ -17,6 +17,7 @@
 // Server-only. None of these are NEXT_PUBLIC: the browser asks
 // GET /api/email/prefs and is told `available` or not.
 
+import { PRODUCTION_ORIGIN, trustedOrigin } from "@/lib/authRedirect";
 import { isFounder } from "@/lib/release";
 
 export type DailyEmailAudience = "off" | "founders" | "all";
@@ -71,6 +72,27 @@ export function emailSettings(env: Env = process.env): EmailSettings | null {
     footerAddress: (env.TAOS_EMAIL_FOOTER_ADDRESS ?? "").trim(),
     linkSecret: (env.TAOS_EMAIL_LINK_SECRET ?? "").trim()
   };
+}
+
+/**
+ * Where every link in an email points: https://taoslite.com, no trailing slash.
+ *
+ * NEVER the host the cron was called on. Vercel Cron invokes the production
+ * deployment at its own deployment hostname
+ * (taos-lite-<id>-xdrabbits-projects.vercel.app), not at the custom domain —
+ * and that hostname is on the trustedOrigin allow-list, because it is a real
+ * preview host for sign-in. So the first real send (Tom, 2026-11-20) carried
+ * a button to a deployment URL: it worked, and it was the wrong address, and
+ * it would have kept pointing at THAT build for as long as the mail sat in an
+ * inbox. An email is read later, somewhere else, signed-out; it has one
+ * correct origin and the request that triggered it has no say in it.
+ *
+ * TAOS_EMAIL_ORIGIN is an optional override for sending from a preview on
+ * purpose. It goes through the same allow-list, so a typo is production.
+ */
+export function emailOrigin(env: Env = process.env): string {
+  const override = (env.TAOS_EMAIL_ORIGIN ?? "").trim();
+  return override ? trustedOrigin(override) : PRODUCTION_ORIGIN;
 }
 
 /** The URL marker that says "this visit came from the daily email". */
