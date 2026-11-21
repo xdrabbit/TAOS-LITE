@@ -232,6 +232,8 @@ const app = spawn("node", ["node_modules/next/dist/bin/next", "dev", "--port", S
     ELEVENLABS_API_BASE_URL: `http://127.0.0.1:${ELEVEN_PORT}/v1`,
     ELEVENLABS_REALTIME_WS_URL: `ws://127.0.0.1:${ELEVEN_PORT}/v1/convai/realtime`,
     TAOS_INTERPRETER_ENABLED: "1",
+    // Hidden in production since #124; this check is about that engine.
+    TAOS_INTERPRETER_EXPERIMENTAL_ENGINES: "grok-voice,elevenlabs-realtime",
     TAOS_INTERPRETER_LEGS: "2",
     NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${SUPA_PORT}`,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "fake-anon-key",
