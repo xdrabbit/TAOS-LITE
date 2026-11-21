@@ -20,6 +20,7 @@ import { PAIR_STORAGE_KEY } from "@/lib/translate/pair";
 import { emptyInterpreterTally } from "@/lib/interpreter/cost";
 import { ENGINE_STORAGE_KEY, engineTakesBriefing, INTERPRETER_ENGINES, type InterpreterEngine } from "@/lib/interpreter/engine";
 import { STYLE_STORAGE_KEY, type InterpreterStyle } from "@/lib/interpreter/mediator";
+import { copyFor } from "@/lib/chrome/copy";
 import type { InterpreterHandlers } from "@/lib/interpreter/client";
 import { createSessionTimeline, DIAG_STORAGE_KEY, type TimelineExport } from "@/lib/interpreter/timeline";
 import type { InterpreterModeProps } from "@/components/tabletop/InterpreterMode";
@@ -597,6 +598,102 @@ describe("the experimental Mediator flag", () => {
     });
     await tapStart(container);
     expect(fake.sessions[0].style).toBe("mediator");
+  });
+});
+
+describe("Mediator v2 — the personas on the Style row", () => {
+  const open = async (container: HTMLElement) => {
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-interpreter-context-open]")!);
+    });
+  };
+  const close = async (container: HTMLElement) => {
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-interpreter-context] button")!);
+    });
+  };
+
+  it("offers Interpreter | Mediator | Entendimiento | Deal — only behind the mediator flag", async () => {
+    const off = await mountMode();
+    await open(off.container);
+    expect(off.container.querySelectorAll("[data-interpreter-style-option]")).toHaveLength(0);
+    cleanup();
+
+    const { container } = await mountMode({ mediatorEnabled: true });
+    await open(container);
+    const options = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-interpreter-style-option]"));
+    expect(options.map((o) => o.getAttribute("data-interpreter-style-option"))).toEqual([
+      "interpreter",
+      "mediator",
+      "entendimiento",
+      "deal"
+    ]);
+    const en = copyFor("en");
+    expect(options.map((o) => o.textContent)).toEqual([
+      en.interpreterStyleInterpreter,
+      en.interpreterStyleMediator,
+      en.interpreterStyleEntendimiento,
+      en.interpreterStyleDeal
+    ]);
+    // The interpreter is still what a device starts on.
+    expect(options[0].getAttribute("aria-pressed")).toBe("true");
+    for (const o of options) expect(o.className).toContain("min-h-[36px]");
+  });
+
+  it("a persona is remembered per device, described under the row, named on the strip, and started as itself", async () => {
+    for (const [style, label, hint] of [
+      ["entendimiento", "interpreterStyleEntendimiento", "interpreterStyleEntendimientoHint"],
+      ["deal", "interpreterStyleDeal", "interpreterStyleDealHint"]
+    ] as const) {
+      window.localStorage.clear();
+      fake.sessions.length = 0;
+      const { container } = await mountMode({ mediatorEnabled: true });
+      await open(container);
+      await act(async () => {
+        fireEvent.click(container.querySelector(`[data-interpreter-style-option="${style}"]`)!);
+      });
+      expect(window.localStorage.getItem(STYLE_STORAGE_KEY)).toBe(style);
+      expect(container.querySelector("[data-interpreter-style]")!.textContent).toContain(copyFor("en")[hint]);
+      await close(container);
+      expect(container.querySelector("[data-interpreter-status]")!.textContent).toContain(copyFor("en")[label]);
+      await tapStart(container);
+      expect(fake.sessions[0].style).toBe(style);
+      // Still named while live — the session's own style, the server's word.
+      expect(container.querySelector("[data-interpreter-status]")!.textContent).toContain(copyFor("en")[label]);
+      cleanup();
+    }
+  });
+
+  it("a persona's notes are drawn as the mediator's, exactly like the Mediator's", async () => {
+    window.localStorage.setItem(STYLE_STORAGE_KEY, "deal");
+    const { container } = await mountMode({ mediatorEnabled: true });
+    await tapStart(container);
+    await act(async () => {
+      fake.sessions[0].handlers.onCaption({
+        id: "1:intro",
+        source: "es",
+        target: "en",
+        heard: "",
+        said: "Mediator note: I interpret everything. Nota del mediador: Interpreto todo.",
+        live: false,
+        at: 1
+      });
+    });
+    const near = Array.from(container.querySelectorAll('[data-interpreter-pane="near"] [data-caption]'));
+    const far = Array.from(container.querySelectorAll('[data-interpreter-pane="far"] [data-caption]'));
+    expect(near.map((el) => el.getAttribute("data-caption"))).toEqual(["note"]);
+    expect(far.map((el) => el.getAttribute("data-caption"))).toEqual(["note"]);
+    expect(near[0].textContent).toContain("I interpret everything.");
+    expect(far[0].textContent).toContain("Interpreto todo.");
+    expect(near[0].textContent).not.toContain("Interpreto todo.");
+  });
+
+  it("in Spanish the row reads in Spanish", async () => {
+    const { container } = await mountMode({ mine: "es", theirs: "en", mediatorEnabled: true });
+    await open(container);
+    const es = copyFor("es");
+    expect(container.querySelector('[data-interpreter-style-option="deal"]')!.textContent).toBe(es.interpreterStyleDeal);
+    expect(es.interpreterStyleDeal).toBe("Trato (experimental)");
   });
 });
 

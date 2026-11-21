@@ -10,8 +10,9 @@ import {
   type InterpreterDirection,
   type InterpreterPair
 } from "./briefing";
-import { DEFAULT_INTERPRETER_STYLE, type InterpreterStyle } from "./mediator";
+import { DEFAULT_INTERPRETER_STYLE, isMediatorStyle, type InterpreterStyle } from "./mediator";
 import {
+  engineIntroduces,
   engineTakesBriefing,
   interpreterLegCount,
   interpreterModel,
@@ -46,6 +47,17 @@ export interface InterpreterPlan {
    * briefed cannot be a mediator, and the screen is told so.
    */
   style: InterpreterStyle;
+  /**
+   * The leg that introduces the mediator when the screen cues it at session
+   * start — the ONLY leg whose briefing carries the introduction. Null for
+   * the interpreter style and for an engine that cannot be cued.
+   *
+   * On a two-leg table it is the leg that speaks the phone owner's language
+   * (target = pair.a): it gives the introduction the way it gives any note —
+   * its own language first, then the other — so the person who pressed Start
+   * hears at once that the mediator is there, and the other leg stays quiet.
+   */
+  introLeg: number | null;
 }
 
 export function buildInterpreterPlan(opts: {
@@ -67,6 +79,7 @@ export function buildInterpreterPlan(opts: {
   // A cascade cannot say nothing; its quiet leg is given a word for it
   // (lib/interpreter/briefing.ts, SILENCE_TOKEN).
   const silenceToken = engine === "elevenlabs-realtime" ? SILENCE_TOKEN : undefined;
+  const introduces = briefed && isMediatorStyle(style) && engineIntroduces(engine);
 
   if (interpreterLegCount(engine, env.TAOS_INTERPRETER_LEGS) === 1) {
     return {
@@ -75,27 +88,33 @@ export function buildInterpreterPlan(opts: {
       pair,
       briefed,
       style,
+      introLeg: introduces ? 0 : null,
       legs: [
         {
           direction: null,
           // One session has one voice: voice 1's.
           voice: interpreterVoice(engine, directions[0], env),
-          instructions: buildInterpreterBriefing({ pair, context, liveModel, style, silenceToken })
+          instructions: buildInterpreterBriefing({ pair, context, liveModel, style, silenceToken, intro: introduces })
         }
       ]
     };
   }
 
+  const introIndex = directions.findIndex((d) => d.target === pair.a);
+  const introLeg = introduces && introIndex >= 0 ? introIndex : null;
   return {
     engine,
     model,
     pair,
     briefed,
     style,
-    legs: directions.map((direction) => ({
+    introLeg,
+    legs: directions.map((direction, index) => ({
       direction,
       voice: engine === "openai-translate" ? null : interpreterVoice(engine, direction, env),
-      instructions: briefed ? buildLegBriefing({ direction, context, liveModel, style, silenceToken }) : null
+      instructions: briefed
+        ? buildLegBriefing({ direction, context, liveModel, style, silenceToken, intro: index === introLeg })
+        : null
     }))
   };
 }

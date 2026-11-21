@@ -160,6 +160,16 @@ export function createRealtimeReader(
   let currentResponse = "";
   const responseOf = (ev: Record<string, unknown>) => str(ev.response_id) || currentResponse;
 
+  /**
+   * Output items the provider marked `phase: "commentary"` — a reasoning
+   * model's spoken PREAMBLE ("Let me think for a moment…"), measured in front
+   * of a mediator's answer on 2026-11-10. The briefing forbids it; if one is
+   * spoken anyway it is at least never CAPTIONED as something a person said.
+   * (The item's `phase` is on `response.output_item.added`; an answer's is
+   * "final_answer". The audio is the provider's and cannot be unsaid here.)
+   */
+  const commentaryItems = new Set<string>();
+
   const liveResponses = new Set<string>();
   const captionId = (responseId: string) => `${leg.index}:${responseId}`;
   const consume = (responseId: string) => {
@@ -279,10 +289,19 @@ export function createRealtimeReader(
         }
         return;
       }
+      if (type === "response.output_item.added") {
+        const item = obj(ev.item);
+        if (str(item.phase) === "commentary" && str(item.id)) {
+          commentaryItems.add(str(item.id));
+          if (commentaryItems.size > 40) commentaryItems.delete(commentaryItems.values().next().value as string);
+        }
+        return;
+      }
       if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") {
         const id = responseOf(ev);
         const delta = str(ev.delta);
         if (!id || !delta) return;
+        if (commentaryItems.has(str(ev.item_id))) return;
         const hadWords = !!words(id);
         saidByResponse.set(id, (saidByResponse.get(id) ?? "") + delta);
         if (!words(id)) return;

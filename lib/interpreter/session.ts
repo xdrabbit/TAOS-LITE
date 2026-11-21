@@ -10,6 +10,7 @@
 import { contextTokenLimitFromEnv, truncationCap } from "@/lib/realtime/truncation";
 import type { InterpreterDirection, InterpreterPair } from "./briefing";
 import { transcriberTakesLanguagesHint } from "./engine";
+import type { InterpreterStyle } from "./mediator";
 
 // ── The context cap (the PR #42 pattern) ───────────────────────────────────
 // A realtime session re-reads "the conversation so far", as AUDIO, on every
@@ -33,6 +34,36 @@ export const INTERPRETER_CONTEXT_TOKEN_LIMIT = contextTokenLimitFromEnv(
   process.env.TAOS_INTERPRETER_CONTEXT_TOKENS,
   600
 );
+
+/**
+ * The Deal persona's cap (Mediator v2, 2026-11-10). Its TERMS LEDGER is the
+ * model's own memory of what was agreed — and a session capped at 600 tokens
+ * remembers about the last MINUTE. A ledger that forgets a term agreed ten
+ * minutes ago is worse than no ledger, so a Deal session is allowed to re-read
+ * ten times as much: 6,000 tokens, roughly the last ten minutes of talk.
+ *
+ * It is still a cap, and still flat — at most 6,000 tokens re-read per
+ * response. In the probe's ten-turn negotiation (tests/live-fire/
+ * mediator-v2.measure.ts) all but ~150 tokens of each re-read came from
+ * cache; what a FULL window costs over a long session is an estimate, not a
+ * measurement — a few dollars more per half hour at worst. What it does NOT
+ * do is make the ledger permanent: a point agreed longer ago than
+ * the window and never read back since is gone. Every read-back puts the
+ * whole list at the front of the window again.
+ *
+ *     TAOS_INTERPRETER_DEAL_CONTEXT_TOKENS=6000      ("off" = uncapped)
+ *
+ * Only gpt-realtime-2.1 has this cap at all; GPT-Live manages its own context.
+ */
+export const INTERPRETER_DEAL_CONTEXT_TOKEN_LIMIT = contextTokenLimitFromEnv(
+  process.env.TAOS_INTERPRETER_DEAL_CONTEXT_TOKENS,
+  6000
+);
+
+/** The cap a session of this style runs under. */
+export function interpreterContextTokenLimit(style: InterpreterStyle | undefined): number | null {
+  return style === "deal" ? INTERPRETER_DEAL_CONTEXT_TOKEN_LIMIT : INTERPRETER_CONTEXT_TOKEN_LIMIT;
+}
 
 /** Two minutes, same reasoning as every other mint: a secret is spendable. */
 export const INTERPRETER_SECRET_TTL_SECONDS = 120;

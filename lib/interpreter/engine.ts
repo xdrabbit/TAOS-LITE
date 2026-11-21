@@ -181,6 +181,31 @@ export function engineTakesBriefing(engine: InterpreterEngine): boolean {
   return engine !== "openai-translate";
 }
 
+/**
+ * Can a mediator on this engine be CUED to introduce itself at session start
+ * (lib/interpreter/mediator.ts, INTRO_TRIGGER)? A realtime model does not
+ * speak until it is given a turn, and how a turn is given differs by API:
+ *
+ *   openai-realtime   a system message + `response.create` on the data
+ *                     channel.
+ *   openai-live       `session.commentary.append` — OpenAI's documented
+ *                     "greet before the caller speaks" route, which its own
+ *                     guide says "may paraphrase … or remain silent".
+ *
+ * Both run on the real screen on 2026-11-10 (tests/live-fire/
+ * interpreter-browser-check.mjs with INTERPRETER_CHECK_STYLE=mediator): each
+ * said the line word for word, once, and it was captioned as a note on both
+ * panes. One run each — GPT-Live's is the one its own docs do not promise.
+ *
+ * The rest are left alone on purpose: Gemini has never been run end to end
+ * (no key on the build machine), and Grok and ElevenLabs are hidden
+ * experiments — an unverified frame on a socket is an error on a founder's
+ * screen. On those a mediator still works; it just does not announce itself.
+ */
+export function engineIntroduces(engine: InterpreterEngine): boolean {
+  return engine === "openai-realtime" || engine === "openai-live";
+}
+
 // ── Models ─────────────────────────────────────────────────────────────────
 
 function knob(raw: string | undefined, fallback: string): string {

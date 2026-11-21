@@ -32,6 +32,7 @@ import { formatClock, sessionVerdict, type SessionClock } from "@/lib/interprete
 import {
   DEFAULT_INTERPRETER_STYLE,
   INTERPRETER_STYLES,
+  isMediatorStyle,
   resolveStyle,
   STYLE_STORAGE_KEY,
   type InterpreterStyle
@@ -529,10 +530,24 @@ export function InterpreterMode({
   const briefable = receipt ? receipt.applied : engineTakesBriefing(engine);
   // Notes are looked for only while the session on screen IS a mediator's.
   const mediatorLangs = useMemo(
-    () => (sessionStyle === "mediator" ? [mine, theirs] : null),
+    () => (isMediatorStyle(sessionStyle) ? [mine, theirs] : null),
     [sessionStyle, mine, theirs]
   );
-  const mediatorChosen = mediatorEnabled && style === "mediator" && engineTakesBriefing(engine);
+  const mediatorChosen = mediatorEnabled && isMediatorStyle(style) && engineTakesBriefing(engine);
+  // Each style's name and one-line description, from the copy table.
+  const styleLabel: Record<InterpreterStyle, string> = {
+    interpreter: t.interpreterStyleInterpreter,
+    mediator: t.interpreterStyleMediator,
+    entendimiento: t.interpreterStyleEntendimiento,
+    deal: t.interpreterStyleDeal
+  };
+  const styleHint: Record<InterpreterStyle, string> = {
+    interpreter: t.interpreterStyleInterpreterHint,
+    mediator: t.interpreterStyleMediatorHint,
+    entendimiento: t.interpreterStyleEntendimientoHint,
+    deal: t.interpreterStyleDealHint
+  };
+  const shownStyle = live ? sessionStyle : mediatorChosen ? style : DEFAULT_INTERPRETER_STYLE;
   const notice =
     ended?.kind === "cap"
       ? fill(t.interpreterEndedCap, { minutes: ended.minutes })
@@ -565,7 +580,7 @@ export function InterpreterMode({
           </button>
           <span data-interpreter-status="" className="font-mono text-xs text-amber-100/60">
             {ENGINE_LABEL[engine]}
-            {(live ? sessionStyle === "mediator" : mediatorChosen) ? ` · ${t.interpreterStyleMediator}` : ""}
+            {isMediatorStyle(shownStyle) ? ` · ${styleLabel[shownStyle]}` : ""}
             {live || elapsed > 0 ? ` · ${formatClock(elapsed)}${maxSeconds ? ` / ${formatClock(maxSeconds)}` : ""}` : ""}
             {usd > 0 ? ` · ${formatUsd(usd)}` : ""}
           </span>
@@ -675,7 +690,9 @@ export function InterpreterMode({
           </div>
           {/* The STYLE of the session, on the briefing screen (Tom, 2026-11-09).
               Interpreter is the default and what every device starts on; the
-              mediator is an experiment a founder turns on for their phone. */}
+              mediator is an experiment a founder turns on for their phone —
+              and, since 2026-11-10, comes in three personas (the plain
+              Mediator, Entendimiento, Deal: lib/interpreter/briefing.ts). */}
           {mediatorEnabled ? (
           <div data-interpreter-style="" className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-white/5 p-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -689,20 +706,20 @@ export function InterpreterMode({
                   aria-pressed={style === s}
                   className={`min-h-[36px] rounded-full px-3 text-xs ${
                     style === s
-                      ? s === "mediator"
+                      ? isMediatorStyle(s)
                         ? "bg-sky-300 text-stone-950"
                         : "bg-emerald-400 text-stone-950"
                       : "border border-white/10 bg-white/5 text-amber-100/70"
                   }`}
                 >
-                  {s === "mediator" ? t.interpreterStyleMediator : t.interpreterStyleInterpreter}
+                  {styleLabel[s]}
                 </button>
               ))}
             </div>
             <p className="text-[11px] leading-snug text-amber-100/60">
-              {style === "mediator" ? t.interpreterStyleMediatorHint : t.interpreterStyleInterpreterHint}
+              {styleHint[style]}
             </p>
-            {style === "mediator" && !engineTakesBriefing(engine) ? (
+            {isMediatorStyle(style) && !engineTakesBriefing(engine) ? (
               <p data-interpreter-style-unavailable="" className="text-[11px] leading-snug text-amber-200/80">
                 {t.interpreterStyleNotOnEngine}
               </p>

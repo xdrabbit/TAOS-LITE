@@ -28,7 +28,7 @@ import {
   buildGrokSessionUpdate,
   buildOpenAIRealtimeSession,
   buildOpenAITranslateSession,
-  INTERPRETER_CONTEXT_TOKEN_LIMIT,
+  interpreterContextTokenLimit,
   INTERPRETER_SECRET_TTL_SECONDS,
   INTERPRETER_WS_INPUT_RATE,
   INTERPRETER_WS_OUTPUT_RATE,
@@ -393,7 +393,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 transcribeModel,
                 pair,
                 eagerness: interpreterEagerness(),
-                reasoning: interpreterReasoning()
+                reasoning: interpreterReasoning(),
+                // Deal keeps a longer memory, for its terms ledger.
+                contextTokenLimit: interpreterContextTokenLimit(plan.style)
               })
             });
             return {
@@ -416,7 +418,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       `[taos-interpreter-mint] engine=${engine} model=${plan.model} pair=${mine}<>${theirs} ` +
         `legs=${plan.legs.length} briefed=${plan.briefed ? 1 : 0} style=${plan.style} ` +
         `context_chars=${plan.briefed ? stored.context.length : 0} context=${stored.status} ` +
-        `context_tokens=${INTERPRETER_CONTEXT_TOKEN_LIMIT ?? "off"} max_s=${maxSeconds} idle_s=${idleSeconds}`
+        `context_tokens=${interpreterContextTokenLimit(plan.style) ?? "off"} max_s=${maxSeconds} idle_s=${idleSeconds} ` +
+        `intro_leg=${plan.introLeg ?? "none"}`
     );
 
     return NextResponse.json(
@@ -429,6 +432,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // What the session was actually briefed as — "interpreter" for an
         // engine that takes no briefing, whatever the device asked for.
         style: plan.style,
+        // Which leg the screen cues to introduce the mediator. An index —
+        // the introduction itself is in that leg's briefing, server-side.
+        introLeg: plan.introLeg,
         briefing: {
           // False for gpt-realtime-translate: its session takes no instructions.
           applied: plan.briefed,
