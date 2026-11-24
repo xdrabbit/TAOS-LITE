@@ -157,12 +157,13 @@ describe("nothing in the nav is smaller than a fingertip", () => {
     // they are full-menu-width already — but 40 is still under the floor.
     const h = header();
     const items = h.match(/role="menuitem"/g) ?? [];
-    // A founder sees fifteen launcher tiles and four account rows (Study, the
+    // A founder sees sixteen launcher tiles and four account rows (Study, the
     // eleventh, arrived with #74 after the grid was designed; Your voice —
     // /demo, founders-only — is the twelfth; the public /voz's founder tile
     // is the thirteenth; Taokie, the founders-only walkie, the fourteenth;
-    // Review, the founders-only translation review, the fifteenth).
-    expect(items.length).toBe(19);
+    // Review, the founders-only translation review, the fifteenth; Practice
+    // with Claude, behind its own flag, the sixteenth).
+    expect(items.length).toBe(20);
     // Every menu item — including every tile in the launcher grid, which is
     // where a 44px floor is easiest to lose, since a tile is sized by its own
     // padding rather than by the width of a menu — plus every pill in the row
@@ -271,7 +272,7 @@ describe("the launcher is the whole catalog, in one glance", () => {
     for (const href of ["/", "/translate", "/live", "/tabletop", "/chat", "/vision"]) {
       expect(grid).toContain(`href="${href}"`);
     }
-    for (const href of ["/call", "/fast", "/video", "/tutor", "/study", "/demo", "/voz"]) {
+    for (const href of ["/call", "/fast", "/video", "/tutor", "/study", "/practice", "/demo", "/voz"]) {
       expect(grid).toContain(`href="${href}"`);
     }
   });
@@ -287,10 +288,10 @@ describe("the launcher is the whole catalog, in one glance", () => {
     // from lib/chrome/copy.ts in the phone owner's language; it used to be one
     // doubled "English · Spanish" literal, which is what #68 removed from /call.
     const tiles = tilesOnly.match(/role="menuitem"/g) ?? [];
-    expect(tiles).toHaveLength(15);
-    expect(tilesOnly.match(/<NavIcon name=/g) ?? []).toHaveLength(15);
+    expect(tiles).toHaveLength(16);
+    expect(tilesOnly.match(/<NavIcon name=/g) ?? []).toHaveLength(16);
     const labels = tilesOnly.match(/aria-label=(\{nav\.nav[A-Za-z]+\}|"[^"]+")/g) ?? [];
-    expect(labels).toHaveLength(15);
+    expect(labels).toHaveLength(16);
     // Only Chat is a literal — it is the same word in both languages.
     expect(labels.filter((l) => !l.includes("nav.nav"))).toEqual(['aria-label="Chat"']);
   });
@@ -302,7 +303,7 @@ describe("the launcher is the whole catalog, in one glance", () => {
     // header is ever mounted on a second screen.
     const grid = launcher();
     expect(grid.match(/aria-current=\{pathname === "[^"]*" \? "page" : undefined\}/g) ?? [])
-      .toHaveLength(15);
+      .toHaveLength(16);
     expect(code(SHELL)).toContain("const pathname = usePathname();");
   });
 

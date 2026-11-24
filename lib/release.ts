@@ -76,6 +76,19 @@ export function studyEnabled(): boolean {
   return flag === "1" || flag === "true";
 }
 
+// /practice — Practice with Claude (2026-11-24) — is a third screen beside
+// the tutor and Study, with its own flag for the same reason Study has one:
+// it must be able to go live (or dark) without dragging /tutor along. Dark
+// until NEXT_PUBLIC_ENABLE_PRACTICE=1 in Vercel and a redeploy; with it off
+// the nav tile is gone, /practice redirects home and /api/practice answers
+// 404, so a disabled screen cannot bill Anthropic or OpenAI. It also needs
+// ANTHROPIC_API_KEY (server-only) — without the key the route answers 503
+// and the screen says it is not set up yet, rather than failing a turn.
+export function practiceEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_PRACTICE ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
 // The pricing copy is the other half of that flag, and it was the open
 // objection to pulling tutor at all: the plans sell "15 / 45 / 200 tutor
 // minutes / month" and the add-on packs sell more of them, so with tutor dark

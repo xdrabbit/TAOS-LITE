@@ -10,6 +10,7 @@ import {
   isCallAllowlisted,
   isFounder,
   onDeviceSttEnabled,
+  practiceEnabled,
   studyEnabled,
   tutorComingSoon,
   tutorEnabled
@@ -46,6 +47,7 @@ const ORIGINAL_TUTOR = process.env.NEXT_PUBLIC_ENABLE_TUTOR;
 const ORIGINAL_ONDEVICE = process.env.NEXT_PUBLIC_ENABLE_ONDEVICE_STT;
 const ORIGINAL_CALL = process.env.NEXT_PUBLIC_ENABLE_CALL;
 const ORIGINAL_STUDY = process.env.NEXT_PUBLIC_ENABLE_STUDY;
+const ORIGINAL_PRACTICE = process.env.NEXT_PUBLIC_ENABLE_PRACTICE;
 const ORIGINAL_CALL_ALLOWLIST = process.env.CALL_ALLOWLIST_EMAILS;
 
 function restore(name: string, original: string | undefined): void {
@@ -62,6 +64,7 @@ afterEach(() => {
   restore("NEXT_PUBLIC_ENABLE_ONDEVICE_STT", ORIGINAL_ONDEVICE);
   restore("NEXT_PUBLIC_ENABLE_CALL", ORIGINAL_CALL);
   restore("NEXT_PUBLIC_ENABLE_STUDY", ORIGINAL_STUDY);
+  restore("NEXT_PUBLIC_ENABLE_PRACTICE", ORIGINAL_PRACTICE);
   restore("CALL_ALLOWLIST_EMAILS", ORIGINAL_CALL_ALLOWLIST);
 });
 
@@ -130,6 +133,36 @@ describe("studyEnabled (dark until the flag is set)", () => {
     process.env.NEXT_PUBLIC_ENABLE_STUDY = "1";
     expect(studyEnabled()).toBe(true);
     expect(tutorEnabled()).toBe(false);
+  });
+});
+
+describe("practiceEnabled (dark until the flag is set)", () => {
+  // Practice with Claude spends on every turn, so it ships off and is
+  // switched on per environment, like Study.
+  it("is off when the flag is unset — what production ships", () => {
+    delete process.env.NEXT_PUBLIC_ENABLE_PRACTICE;
+    expect(practiceEnabled()).toBe(false);
+  });
+
+  it("is off for every value that is not an explicit opt-in", () => {
+    for (const value of ["", " ", "0", "false", "no", "off", "undefined", "please"]) {
+      process.env.NEXT_PUBLIC_ENABLE_PRACTICE = value;
+      expect(practiceEnabled()).toBe(false);
+    }
+  });
+
+  it("turns on with 1 or true, tolerating case and stray whitespace", () => {
+    for (const value of ["1", " 1 ", "true", "TRUE", " True "]) {
+      process.env.NEXT_PUBLIC_ENABLE_PRACTICE = value;
+      expect(practiceEnabled()).toBe(true);
+    }
+  });
+
+  it("does not ride on the tutor or study flags", () => {
+    process.env.NEXT_PUBLIC_ENABLE_TUTOR = "1";
+    process.env.NEXT_PUBLIC_ENABLE_STUDY = "1";
+    delete process.env.NEXT_PUBLIC_ENABLE_PRACTICE;
+    expect(practiceEnabled()).toBe(false);
   });
 });
 
