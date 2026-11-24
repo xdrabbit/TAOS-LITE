@@ -93,6 +93,7 @@ const SCREENS: Record<string, Loader> = {
   fast: async () => (await import("@/components/FastShell")).FastShell,
   call: async () => (await import("@/components/CallShell")).CallShell,
   study: async () => (await import("@/components/StudyShell")).StudyShell,
+  practice: async () => (await import("@/components/PracticeShell")).PracticeShell,
   tutor: async () => (await import("@/components/TutorShell")).TutorShell,
   try: async () => (await import("@/components/AtomShell")).AtomShell,
   // /demo's page is a server gate around this; the shell is the screen.

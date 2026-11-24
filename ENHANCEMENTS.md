@@ -16,6 +16,21 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Practice with Claude (/practice) — what the draft PR leaves open.** A
+  turn-based role-play partner for anyone with nobody to practise on: tap to
+  talk (or type) in the language you are learning, Claude answers in
+  character, the stock voice reads it, and the meaning in your own language
+  shows underneath, with one short tip when you slipped. Starter scenes:
+  Just chat, Thanksgiving dinner, café, directions, pharmacy. Built for
+  Taos-giving (Nov 26–30). Dark until `NEXT_PUBLIC_ENABLE_PRACTICE=1`, and
+  the route also needs `ANTHROPIC_API_KEY` on Vercel (503 "not set up yet"
+  without it); both are Tom's to set. The model defaults to the latest
+  Claude and can be swapped with `TAOS_PRACTICE_MODEL`. Per-person limits
+  (12/min, 150/hour, founders exempt) are per instance, like spendGuard's.
+  Every Spanish string is pendiente de revisión por Liz. No real turn has run
+  against the live API yet — the first one on the preview is the test. Not
+  metered against tutor minutes and not behind the paywall: a free-weekend
+  switch was deliberately not built. (added 2026-11-24)
 - **Daily study reminder email — what PR #139 left open.** Every Spanish
   string is pendiente de revisión por Liz. A pair that is not English/Spanish
   still gets the English/Spanish phrase (the course is only those two). No

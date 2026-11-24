@@ -12,6 +12,7 @@
     "icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.13.0",
     "@next/swc-linux-x64-gnu": "^14.2.33",
     "@supabase/supabase-js": "^2.45.0",
     "@vercel/functions": "^1.6.0",

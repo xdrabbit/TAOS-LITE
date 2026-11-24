@@ -73,7 +73,7 @@ import {
   type ContextStore
 } from "@/lib/translate/context";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
-import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
+import { callVisibleTo, fastVisibleTo, isFounder, practiceEnabled, studyEnabled, tutorEnabled } from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
@@ -272,7 +272,9 @@ const NAV_ICON_PATHS = {
   // /review: a waveform with a flag — listen to the turn, mark the bad one.
   review: ["M3 12h2l2-5 3 10 3-8 2 5 2-2h4", "M19 4v6M19 4h3l-1 1.5L22 7h-3"],
   // /study: an open book — your own conversations, read back as lessons.
-  study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"]
+  study: ["M2 5a1 1 0 011-1h6a3 3 0 013 3v13a2 2 0 00-2-2H3a1 1 0 01-1-1V5z", "M22 5a1 1 0 00-1-1h-6a3 3 0 00-3 3v13a2 2 0 012-2h6a1 1 0 001-1V5z"],
+  // /practice: two speech bubbles — a conversation, with nobody else needed.
+  practice: ["M3 6a2 2 0 012-2h9a2 2 0 012 2v5a2 2 0 01-2 2H8l-3 3v-3a2 2 0 01-2-2V6z", "M18 9h1a2 2 0 012 2v5a2 2 0 01-2 2v3l-3-3h-5a2 2 0 01-2-2v-1"]
 } as const;
 
 export function TranslatorShell({
@@ -1823,6 +1825,25 @@ export function TranslatorShell({
                         >
                           <NavIcon name="study" />
                           {nav.navStudy}
+                        </a>
+                      ) : null}
+                      {/* Practice with Claude: a role-play partner for anyone with
+                          nobody to practise on (lib/practice/practice.ts). Behind
+                          its own flag, NEXT_PUBLIC_ENABLE_PRACTICE. */}
+                      {practiceEnabled() ? (
+                        <a
+                          href="/practice"
+                          role="menuitem"
+                          aria-label={nav.navPractice}
+                          aria-current={pathname === "/practice" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/practice"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="practice" />
+                          {nav.navPractice}
                         </a>
                       ) : null}
                     </div>
