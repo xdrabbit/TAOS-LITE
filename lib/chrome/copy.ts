@@ -102,6 +102,16 @@ const EN = {
   installHowOther: "Full screen, one tap from your home screen",
   install: "Install",
   installDismiss: "Dismiss install prompt",
+  // The sheet the Install button opens when the browser has no install prompt
+  // to replay — every iPhone, and anything else that never fired one. Until
+  // 2026-11-25 that tap did nothing. Step 1 names the ••• because iOS 26
+  // Safari keeps Share behind it in the compact bar.
+  installSheetTitle: "Add TAOS to your Home Screen",
+  installIosStep1: "Tap Share — the square with an arrow. If you don't see it, tap ••• first.",
+  installIosStep2: "Scroll down and tap Add to Home Screen.",
+  installIosStep3: "Tap Add. TAOS now opens full screen from its own icon.",
+  installIosNotSafari: "No Add to Home Screen in the list? This browser can't do it. Open taoslite.com in Safari and follow the same steps.",
+  installGeneric: "Open your browser's menu and choose Install app or Add to Home screen.",
 
   // ── The nav on the home header — pills, the nine-dot grid, the avatar ───
   // In the language of the phone's OWNER (`mine`), the same rule /call uses,
@@ -644,6 +654,15 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     installHowOther: "Pantalla completa, a un toque desde tu inicio",
     install: "Instalar",
     installDismiss: "Descartar",
+    // iOS writes the menu item two ways: "Añadir a pantalla de inicio" on a
+    // phone set to Spanish (Spain), "Agregar a Inicio" on Latin American
+    // Spanish. Both are named so the reader finds the one on their phone.
+    installSheetTitle: "Pon TAOS en tu pantalla de inicio", // pendiente de revisión por Liz
+    installIosStep1: "Toca Compartir: el cuadro con la flecha. Si no lo ves, toca ••• primero.", // pendiente de revisión por Liz
+    installIosStep2: "Baja y toca Agregar a Inicio (o Añadir a pantalla de inicio).", // pendiente de revisión por Liz
+    installIosStep3: "Toca Agregar (o Añadir). TAOS ya se abre en pantalla completa desde su propio ícono.", // pendiente de revisión por Liz
+    installIosNotSafari: "¿No aparece esa opción en la lista? Este navegador no puede hacerlo. Abre taoslite.com en Safari y sigue los mismos pasos.", // pendiente de revisión por Liz
+    installGeneric: "Abre el menú de tu navegador y elige Instalar app o Añadir a pantalla de inicio.", // pendiente de revisión por Liz
 
     // The Spanish half of each label the header used to double, unchanged.
     // navAllScreens, navAccount, navScreens, navLive and navTutor are the
