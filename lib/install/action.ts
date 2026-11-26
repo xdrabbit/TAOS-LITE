@@ -61,3 +61,37 @@ export function installAction(env: InstallEnvironment): InstallAction {
   }
   return env.hasPrompt ? "prompt" : "generic";
 }
+
+// ── Where Share actually is ───────────────────────────────────────────────
+// Liz, 2026-11-25, on the first version of the sheet: "Tap Share" does not
+// help if you cannot find Share. So the sheet points at it, and that needs to
+// know where it is:
+//
+// - iPhone, Safari 26 and later: the default "Compact" bar shows only Back,
+//   the address and a ••• button at the bottom RIGHT. Share is a row inside
+//   •••. (Settings → Apps → Safari → Tabs can switch to "Bottom" or "Top",
+//   which keep Share in the bottom toolbar; a page cannot tell which is set,
+//   so the first card also shows the Share icon as the alternative.)
+// - iPhone, Safari 18 and earlier: Share is in the bottom toolbar, CENTER.
+// - iPad: Share is in the toolbar at the TOP, towards the right.
+//
+// The version comes from `Version/x`, not from `OS x_y`: Safari 26 freezes
+// the OS token at 18_x (WebKit bug 298260), so `OS` reads 18 on iOS 26.
+export interface ShareGuide {
+  device: "iphone" | "ipad";
+  /** Share is behind the ••• button: tap that first. */
+  viaMore: boolean;
+}
+
+export function safariMajorVersion(userAgent: string): number | null {
+  const m = /Version\/(\d+)/.exec(userAgent);
+  return m ? Number(m[1]) : null;
+}
+
+export function iosShareGuide(userAgent: string): ShareGuide {
+  // An iPad says "iPad" or, since iPadOS 13, pretends to be a Mac. Only call
+  // this for a UA already known to be iOS (isIosUserAgent).
+  if (!/iphone|ipod/i.test(userAgent)) return { device: "ipad", viaMore: false };
+  const major = safariMajorVersion(userAgent);
+  return { device: "iphone", viaMore: major !== null && major >= 26 };
+}

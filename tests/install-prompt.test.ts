@@ -8,20 +8,46 @@
 // event in any browser, so an iPhone got no button at all, only a five-word
 // hint. Decided the same day: a tap always ends in something on screen.
 //   * a Chromium install prompt   → replay it
-//   * iPhone / iPad, Safari       → a sheet: Share → Add to Home Screen
-//   * iPhone / iPad, anything else → the same sheet + "open it in Safari"
+//   * iPhone / iPad, Safari       → a picture guide: Share → Add to Home Screen
+//   * iPhone / iPad, anything else → "open it in Safari" + a Copy link button
 //   * already on the Home Screen  → no banner
 //   * no prompt to replay         → a sheet pointing at the browser's menu
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+//
+// Liz, the same day, on the first sheet: she did not like the Install button,
+// and "Tap Share" is no help if you cannot find Share. Decided: the guide
+// DRAWS each button and points at where the first one is —
+//   * iPhone, Safari 26+  → ••• at the bottom right, then Share inside it
+//                           (the Share drawing is offered too: the Bottom and
+//                           Top layouts keep it in the bar, and a page cannot
+//                           tell which layout is set)
+//   * iPhone, Safari ≤ 18 → Share, bottom center
+//   * iPad                → Share, top right
+// Version comes from `Version/x`; Safari 26 freezes `OS` at 18_x.
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createElement } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { copyFor } from "@/lib/chrome/copy";
-import { installAction, isIosSafariUserAgent, isIosUserAgent } from "@/lib/install/action";
+import {
+  installAction,
+  iosShareGuide,
+  isIosSafariUserAgent,
+  isIosUserAgent,
+  safariMajorVersion
+} from "@/lib/install/action";
 
 const UA = {
   iphoneSafari:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
+  // Safari 26 on iOS 26: the OS token is frozen at 18_x, Version/ tells the truth.
+  iphoneSafari26:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+  iphoneSafari27:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.1 Mobile/15E148 Safari/604.1",
+  ipadSafari26:
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+  ipadOld:
+    "Mozilla/5.0 (iPad; CPU OS 12_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1 Mobile/15E148 Safari/604.1",
   iphoneChrome:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.7390.41 Mobile/15E148 Safari/604.1",
   iphoneFirefox:
@@ -94,6 +120,29 @@ describe("installAction — what a tap on Install does", () => {
   });
 });
 
+describe("iosShareGuide — where the first button to tap is", () => {
+  it("reads the Safari version from Version/, not from the frozen OS token", () => {
+    expect(safariMajorVersion(UA.iphoneSafari26)).toBe(26); // OS says 18_6
+    expect(safariMajorVersion(UA.iphoneSafari)).toBe(18);
+    expect(safariMajorVersion(UA.iphoneChrome)).toBeNull();
+  });
+
+  it("sends Safari 26 and later through the ••• button", () => {
+    expect(iosShareGuide(UA.iphoneSafari26)).toEqual({ device: "iphone", viaMore: true });
+    expect(iosShareGuide(UA.iphoneSafari27)).toEqual({ device: "iphone", viaMore: true });
+  });
+
+  it("sends Safari 18 and earlier straight to Share", () => {
+    expect(iosShareGuide(UA.iphoneSafari)).toEqual({ device: "iphone", viaMore: false });
+  });
+
+  it("knows an iPad, named or in its Mac disguise, at any version", () => {
+    for (const ua of [UA.ipadSafari, UA.ipadSafari26, UA.ipadOld]) {
+      expect(iosShareGuide(ua), ua).toEqual({ device: "ipad", viaMore: false });
+    }
+  });
+});
+
 for (const lang of ["en", "es"] as const) {
   const copy = copyFor(lang);
   const other = copyFor(lang === "en" ? "es" : "en");
@@ -122,37 +171,147 @@ for (const lang of ["en", "es"] as const) {
       });
     }
 
-    it("gives an iPhone an Install button, and the tap opens the Safari steps", () => {
-      mount(UA.iphoneSafari);
+    const stepsOf = (sheet: HTMLElement) =>
+      Array.from(sheet.querySelectorAll("[data-install-step]")).map((li) => li.getAttribute("data-install-step"));
+    const pointerOf = (sheet: HTMLElement) =>
+      sheet.querySelector("[data-install-pointer]")?.getAttribute("data-install-pointer") ?? null;
+
+    it("names the banner after the app, with its icon, and offers to show the way", () => {
+      const { container } = mount(UA.iphoneSafari26);
+      expect(screen.getByText(copy.installTitle)).toBeTruthy();
+      expect(container.querySelector('img[src="/icons/icon-192.png"]')).toBeTruthy();
+      expect(screen.getByRole("button", { name: copy.installShowMe })).toBeTruthy();
+      // Dismissible, and nothing opens until asked.
+      expect(screen.getByRole("button", { name: copy.installDismiss })).toBeTruthy();
       expect(screen.queryByRole("dialog")).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: copy.install }));
+    });
+
+    it("on Safari 26+, points bottom right at ••• and draws ••• → Share → Add to Home Screen → Add", () => {
+      mount(UA.iphoneSafari26);
+      fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
 
       const sheet = screen.getByRole("dialog", { name: copy.installSheetTitle });
       expect(sheet.getAttribute("data-install-sheet")).toBe("ios-safari");
-      for (const step of [copy.installIosStep1, copy.installIosStep2, copy.installIosStep3]) {
-        expect(sheet.textContent).toContain(step);
+      expect(stepsOf(sheet)).toEqual(["more", "share", "add-square", "add-word"]);
+      expect(pointerOf(sheet)).toBe("bottom-right");
+      expect(sheet.textContent).toContain(copy.installPointerDown);
+      for (const text of [
+        copy.installStepMore,
+        copy.installStepShare,
+        copy.installStepAdd,
+        copy.installStepAddHint, // "scroll down if you don't see it"
+        copy.installStepConfirm
+      ]) {
+        expect(sheet.textContent).toContain(text);
       }
-      // Safari can do it; it is not told to go to Safari.
-      expect(sheet.textContent).not.toContain(copy.installIosNotSafari);
+      // Both paths: the Bottom/Top layouts show Share in the bar, so the •••
+      // card also draws the Share icon as the thing to tap instead.
+      const first = sheet.querySelector('[data-install-step="more"]')!;
+      expect(first.textContent).toContain(copy.installStepMoreHint);
+      expect(first.querySelector('[data-install-icon="share"]')).toBeTruthy();
+      // A drawing on every card, and none of them an emoji.
+      for (const li of Array.from(sheet.querySelectorAll("[data-install-step]"))) {
+        expect(li.querySelector("[data-install-icon]"), li.textContent ?? "").toBeTruthy();
+      }
+      expect(sheet.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+      // Safari can do it; it is not sent to Safari.
+      expect(sheet.textContent).not.toContain(copy.installStepOpenSafari);
       // One language, end to end.
-      expect(sheet.textContent).not.toContain(other.installIosStep2);
+      expect(sheet.textContent).not.toContain(other.installStepAdd);
     });
 
-    it("tells Chrome on an iPhone the same steps, and where to go if they are missing", () => {
-      mount(UA.iphoneChrome);
-      fireEvent.click(screen.getByRole("button", { name: copy.install }));
+    it("on Safari 18 and earlier, points bottom center straight at Share", () => {
+      mount(UA.iphoneSafari);
+      fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
       const sheet = screen.getByRole("dialog");
+      expect(stepsOf(sheet)).toEqual(["share", "add-square", "add-word"]);
+      expect(pointerOf(sheet)).toBe("bottom-center");
+      expect(sheet.textContent).not.toContain(copy.installStepMore);
+    });
+
+    it("on an iPad, points top right at Share, and says what to do if it is not there", () => {
+      // The Mac disguise: only the touch points say iPad.
+      Object.defineProperty(navigator, "maxTouchPoints", { value: 5, configurable: true });
+      onTestFinished(() => {
+        delete (navigator as unknown as { maxTouchPoints?: number }).maxTouchPoints;
+      });
+      mount(UA.ipadSafari26);
+      fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
+      const sheet = screen.getByRole("dialog");
+      expect(sheet.getAttribute("data-install-sheet")).toBe("ios-safari");
+      expect(stepsOf(sheet)).toEqual(["share", "add-square", "add-word"]);
+      expect(pointerOf(sheet)).toBe("top-right");
+      expect(sheet.textContent).toContain(copy.installPointerUp);
+      expect(sheet.textContent).toContain(copy.installStepShareHint);
+    });
+
+    it("keeps every step to six words or fewer", () => {
+      for (const key of [
+        "installStepMore",
+        "installStepShare",
+        "installStepAdd",
+        "installStepConfirm",
+        "installStepCopy",
+        "installStepOpenSafari",
+        "installStepPaste"
+      ] as const) {
+        expect(copy[key].split(/\s+/).length, copy[key]).toBeLessThanOrEqual(6);
+      }
+    });
+
+    it("sends Chrome on an iPhone to Safari, with no arrow at a button it does not have", () => {
+      mount(UA.iphoneChrome);
+      fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
+      const sheet = screen.getByRole("dialog", { name: copy.installNotSafariTitle });
       expect(sheet.getAttribute("data-install-sheet")).toBe("ios-other");
-      expect(sheet.textContent).toContain(copy.installIosStep2);
-      expect(sheet.textContent).toContain(copy.installIosNotSafari);
+      expect(stepsOf(sheet)).toEqual(["copy", "safari", "paste"]);
+      expect(pointerOf(sheet)).toBeNull();
+      expect(sheet.textContent).toContain(copy.installNotSafariWhy);
+    });
+
+    it("copies the link in one tap, and says so", async () => {
+      const writeText = vi.fn(async (_text: string) => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      try {
+        mount(UA.iphoneInstagram);
+        fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: copy.installCopyLink }));
+        });
+        // The address they are on — taoslite.com in production.
+        expect(writeText).toHaveBeenCalledTimes(1);
+        expect(writeText.mock.calls[0][0]).toBe(window.location.origin);
+        expect(screen.getByRole("button", { name: copy.installCopied })).toBeTruthy();
+      } finally {
+        delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+      }
+    });
+
+    it("shows the address to type when the browser refuses the clipboard", async () => {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: vi.fn(async () => Promise.reject(new DOMException("denied", "NotAllowedError"))) },
+        configurable: true
+      });
+      try {
+        mount(UA.iphoneWebview);
+        fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: copy.installCopyLink }));
+        });
+        const status = screen.getByRole("status");
+        expect(status.textContent).toContain(copy.installCopyFailed);
+        expect(status.textContent).toContain(window.location.host);
+      } finally {
+        delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+      }
     });
 
     it("closes the sheet from Close, and leaves the banner for another try", () => {
       mount(UA.iphoneSafari);
-      fireEvent.click(screen.getByRole("button", { name: copy.install }));
+      fireEvent.click(screen.getByRole("button", { name: copy.installShowMe }));
       fireEvent.click(screen.getByRole("button", { name: copy.close }));
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(screen.getByRole("button", { name: copy.install })).toBeTruthy();
+      expect(screen.getByRole("button", { name: copy.installShowMe })).toBeTruthy();
     });
 
     it("replays Chromium's prompt and shows no sheet", async () => {
@@ -193,23 +352,42 @@ for (const lang of ["en", "es"] as const) {
   });
 }
 
-describe("the Spanish sheet", () => {
-  it("has its own words for every new key, and names both of iOS's menu labels", () => {
+describe("the Spanish guide", () => {
+  it("has its own words for every key, and names both of iOS's menu labels", () => {
     const en = copyFor("en");
     const es = copyFor("es");
     for (const key of [
+      "installTitle",
+      "installHowIos",
+      "installShowMe",
       "installSheetTitle",
-      "installIosStep1",
-      "installIosStep2",
-      "installIosStep3",
-      "installIosNotSafari",
+      "installPointerDown",
+      "installPointerUp",
+      "installStepMore",
+      "installStepMoreHint",
+      "installStepShare",
+      "installStepShareHint",
+      "installStepAdd",
+      "installStepAddHint",
+      "installStepConfirm",
+      "installStepConfirmHint",
+      "installAddWord",
+      "installNotSafariTitle",
+      "installNotSafariWhy",
+      "installStepCopy",
+      "installCopyLink",
+      "installCopied",
+      "installCopyFailed",
+      "installStepOpenSafari",
+      "installStepPaste",
       "installGeneric"
     ] as const) {
       expect(es[key], key).not.toBe(en[key]);
     }
     // iOS says "Agregar a Inicio" in Latin American Spanish and "Añadir a
-    // pantalla de inicio" in Spain's; the reader should find theirs.
-    expect(es.installIosStep2).toContain("Agregar a Inicio");
-    expect(es.installIosStep2).toContain("Añadir a pantalla de inicio");
+    // pantalla de inicio" in Spain's; the step says the first and its hint
+    // names the second, so the reader finds theirs.
+    expect(es.installStepAdd).toContain("Agregar a Inicio");
+    expect(es.installStepAddHint).toContain("Añadir a pantalla de inicio");
   });
 });
