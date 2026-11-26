@@ -97,11 +97,41 @@ const EN = {
   searchLanguages: "Search…",
   searchLanguagesAria: "Search languages",
   noLanguageMatches: "No language matches",
-  installTitle: "Install TAOS on your phone 📲",
-  installHowIos: "Share → Add to Home Screen",
+  installTitle: "Add TAOS to your phone",
+  installHowIos: "It's quick. We'll show you where to tap.",
   installHowOther: "Full screen, one tap from your home screen",
   install: "Install",
+  installShowMe: "Show me",
   installDismiss: "Dismiss install prompt",
+  // The picture guide the banner opens on an iPhone or iPad. Liz, 2026-11-25:
+  // "Tap Share → Add to Home Screen" is no help if you cannot find Share. So
+  // each step is one short action beside a drawing of the button, and an
+  // arrow points at where the first one is (lib/install/action.ts knows).
+  // Six words or fewer per step.
+  installSheetTitle: "Add TAOS to your phone",
+  installPointerDown: "It's down here",
+  installPointerUp: "It's up here",
+  installStepMore: "Tap the three dots",
+  installStepMoreHint: "No three dots? Tap this one:",
+  installStepShare: "Tap Share",
+  installStepShareHint: "Don't see it? Tap the three dots first.",
+  installStepAdd: "Tap Add to Home Screen",
+  installStepAddHint: "Scroll down if you don't see it.",
+  installStepConfirm: "Tap Add",
+  installStepConfirmHint: "That's it! TAOS is on your phone.",
+  // The word on iOS's own confirm button, drawn on step 4's tile.
+  installAddWord: "Add",
+  // Any iPhone browser that is not Safari: send them to Safari, and hand them
+  // the link so nobody has to type it.
+  installNotSafariTitle: "Open TAOS in Safari",
+  installNotSafariWhy: "To add TAOS to your phone, use Safari.",
+  installStepCopy: "Copy the link",
+  installCopyLink: "Copy link",
+  installCopied: "Copied!",
+  installCopyFailed: "Couldn't copy. Type this in Safari:",
+  installStepOpenSafari: "Open Safari",
+  installStepPaste: "Paste the link there",
+  installGeneric: "Open your browser's menu and choose Install app or Add to Home screen.",
 
   // ── The nav on the home header — pills, the nine-dot grid, the avatar ───
   // In the language of the phone's OWNER (`mine`), the same rule /call uses,
@@ -639,11 +669,36 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     searchLanguages: "Buscar…",
     searchLanguagesAria: "Buscar idiomas",
     noLanguageMatches: "Ningún idioma coincide",
-    installTitle: "Instala TAOS en tu teléfono 📲",
-    installHowIos: "Compartir → Añadir a inicio",
+    installTitle: "Agrega TAOS a tu teléfono", // pendiente de revisión por Liz
+    installHowIos: "Es rápido. Te mostramos dónde tocar.", // pendiente de revisión por Liz
     installHowOther: "Pantalla completa, a un toque desde tu inicio",
     install: "Instalar",
+    installShowMe: "Muéstrame", // pendiente de revisión por Liz
     installDismiss: "Descartar",
+    // iOS writes the menu item two ways: "Agregar a Inicio" on a phone set to
+    // Latin American Spanish, "Añadir a pantalla de inicio" on Spain's. The
+    // step says the first (Liz's phone) and its hint names the second.
+    installSheetTitle: "Agrega TAOS a tu teléfono", // pendiente de revisión por Liz
+    installPointerDown: "Está aquí abajo", // pendiente de revisión por Liz
+    installPointerUp: "Está aquí arriba", // pendiente de revisión por Liz
+    installStepMore: "Toca los tres puntos", // pendiente de revisión por Liz
+    installStepMoreHint: "¿No ves los tres puntos? Toca este:", // pendiente de revisión por Liz
+    installStepShare: "Toca Compartir", // pendiente de revisión por Liz
+    installStepShareHint: "¿No lo ves? Toca primero los tres puntos.", // pendiente de revisión por Liz
+    installStepAdd: "Toca Agregar a Inicio", // pendiente de revisión por Liz
+    installStepAddHint: "Si no lo ves, baja un poco. A veces dice «Añadir a pantalla de inicio».", // pendiente de revisión por Liz
+    installStepConfirm: "Toca Agregar", // pendiente de revisión por Liz
+    installStepConfirmHint: "¡Listo! TAOS ya está en tu teléfono.", // pendiente de revisión por Liz
+    installAddWord: "Agregar", // pendiente de revisión por Liz
+    installNotSafariTitle: "Abre TAOS en Safari", // pendiente de revisión por Liz
+    installNotSafariWhy: "Para agregar TAOS a tu teléfono, usa Safari.", // pendiente de revisión por Liz
+    installStepCopy: "Copia el enlace", // pendiente de revisión por Liz
+    installCopyLink: "Copiar enlace", // pendiente de revisión por Liz
+    installCopied: "¡Copiado!", // pendiente de revisión por Liz
+    installCopyFailed: "No se pudo copiar. Escribe esto en Safari:", // pendiente de revisión por Liz
+    installStepOpenSafari: "Abre Safari", // pendiente de revisión por Liz
+    installStepPaste: "Pega el enlace allí", // pendiente de revisión por Liz
+    installGeneric: "Abre el menú de tu navegador y elige Instalar app o Añadir a pantalla de inicio.", // pendiente de revisión por Liz
 
     // The Spanish half of each label the header used to double, unchanged.
     // navAllScreens, navAccount, navScreens, navLive and navTutor are the
