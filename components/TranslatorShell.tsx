@@ -44,6 +44,7 @@ import {
   rampStyle,
   rampWindows
 } from "@/lib/translate/recorder";
+import { isClipSilent } from "@/lib/translate/clipSilence";
 import {
   segmentsFromPayload,
   speechForSegments,
@@ -1124,6 +1125,17 @@ export function TranslatorShell({
       // audio (e.g. the page was suspended) produced no translation and no
       // error. Surface it instead so the turn never fails invisibly.
       console.error("[translate] no audio captured (empty recording blob)");
+      setStatus("error");
+      setError(s.noAudio);
+      return;
+    }
+    // A dead microphone: the clip has a length and nothing in it. Decoded
+    // after the fact, never metered live (lib/translate/clipSilence.ts has
+    // why, and the iPhone reasoning); any doubt at all sends the clip, and the
+    // server's silence guard decides. One-recording turns only — a long turn's
+    // earlier chunks are already at the server.
+    if (parts.length === 0 && (await isClipSilent(blob, turnMs))) {
+      console.error("[translate] silent clip (peak under floor) — not sent");
       setStatus("error");
       setError(s.noAudio);
       return;

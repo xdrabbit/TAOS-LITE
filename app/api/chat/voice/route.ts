@@ -4,6 +4,12 @@ import { CHAT_VOICE_BUCKET, voicePath } from "@/lib/chatVoice";
 import { languageLabel } from "@/lib/languages/catalog";
 import { hasServiceRoleKey, supabaseAdmin } from "@/lib/supabaseAdmin";
 import { MEANING_FIRST_RULE, STT_NO_GUESS_RULE } from "@/lib/translate/prompts";
+import {
+  applyConfidenceRequest,
+  guardLogLine,
+  judgeTranscript,
+  silenceGuardEnabled
+} from "@/lib/translate/silenceGuard";
 import { chatCompletion, getOpenAIKey } from "@/lib/translateProvider";
 
 export const runtime = "nodejs";
@@ -35,10 +41,13 @@ async function transcribeAudio(
   // STT_NO_GUESS_RULE: dropouts become gaps, never invented words (Liz, 7/27 —
   // same rule as /api/translate).
   const mixing = otherLabel === sourceLabel ? "" : `, possibly mixing in ${otherLabel}`;
-  form.append(
-    "prompt",
-    `Mostly spoken ${sourceLabel}${mixing}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
-  );
+  const prompt = `Mostly spoken ${sourceLabel}${mixing}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`;
+  form.append("prompt", prompt);
+  // The same silence guard the shared transcriber runs (lib/translate/
+  // silenceGuard.ts): this route keeps its own prompt, not its own exposure.
+  // A voice note of nothing must not arrive captioned with an invented line.
+  const guardOn = silenceGuardEnabled();
+  if (guardOn) applyConfidenceRequest(form, model);
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -49,7 +58,17 @@ async function transcribeAudio(
   if (!res.ok) {
     throw new Error(payload ? JSON.stringify(payload) : `HTTP ${res.status}`);
   }
-  return typeof payload?.text === "string" ? payload.text.trim() : "";
+  const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+  if (!guardOn || !text) return text;
+  const guard = judgeTranscript({ text, payload, prompt });
+  // A merely suspect transcript is dropped here too, with no second opinion:
+  // the audio is the message and still sends, so a wrongly dropped caption
+  // costs a caption — and a wrongly kept one is a line nobody said.
+  if (guard.noSpeech || guard.suspect) {
+    console.log(guardLogLine(model, text, guard));
+    return "";
+  }
+  return text;
 }
 
 async function translateTranscript(
