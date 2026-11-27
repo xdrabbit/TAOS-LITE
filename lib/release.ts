@@ -204,6 +204,33 @@ export function fastVisibleTo(email: string | null | undefined): boolean {
   return fastEnabled() || isFounder(email);
 }
 
+// /dictate: FOUNDERS ONLY, on the same two-function shape as /call and /fast.
+//
+// Speak, get clean styled text back; or paste a messy message and read it
+// (docs/dictate/CLAUDE.md). Held to founders because nothing about it is
+// metered yet: a dictation writes no taos_lite_translations row, so the free
+// monthly allowance cannot see it. Settle metering, and whether dictations
+// are kept at all, before this is set:
+//
+//     NEXT_PUBLIC_ENABLE_DICTATE=1
+//
+// The launcher tile, the page and POST /api/dictate all ask
+// dictateVisibleTo(), so they open together. NEXT_PUBLIC_ and a literal
+// process.env expression for the reason fastEnabled() gives.
+// tests/release.test.ts pins the default.
+export function dictateEnabled(): boolean {
+  const flag = (process.env.NEXT_PUBLIC_ENABLE_DICTATE ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
+/**
+ * May this person reach /dictate at all? The route-level check is the
+ * load-bearing one, for the reason callVisibleTo() documents.
+ */
+export function dictateVisibleTo(email: string | null | undefined): boolean {
+  return dictateEnabled() || isFounder(email);
+}
+
 /**
  * Does a founder bypass /fast's STREAMING-SPEECH budget?
  *

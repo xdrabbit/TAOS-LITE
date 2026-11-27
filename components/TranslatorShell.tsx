@@ -73,7 +73,14 @@ import {
   type ContextStore
 } from "@/lib/translate/context";
 import { canSpeak, languageNative } from "@/lib/languages/catalog";
-import { callVisibleTo, fastVisibleTo, isFounder, studyEnabled, tutorEnabled } from "@/lib/release";
+import {
+  callVisibleTo,
+  dictateVisibleTo,
+  fastVisibleTo,
+  isFounder,
+  studyEnabled,
+  tutorEnabled
+} from "@/lib/release";
 import { keepWake } from "@/lib/wakeLock";
 import { BUILD_LABEL } from "@/lib/version";
 import { authHeaders } from "@/lib/authClient";
@@ -262,6 +269,8 @@ const NAV_ICON_PATHS = {
   call: ["M21.5 16.9v2.8a2 2 0 01-2.2 2 19.6 19.6 0 01-8.5-3 19.3 19.3 0 01-6-6 19.6 19.6 0 01-3-8.6A2 2 0 013.8 2h2.8a2 2 0 012 1.7c.1 1 .4 1.9.7 2.8a2 2 0 01-.5 2.1L7.6 9.9a16 16 0 006 6l1.3-1.2a2 2 0 012.1-.5c.9.3 1.8.6 2.8.7a2 2 0 011.7 2z"],
   // /fast is the quickie box: a bolt.
   fast: ["M13 2L4 14h7l-1 8 9-12h-7l1-8z"],
+  // Dictate: a pencil writing a line — the mic is already "speak".
+  dictate: ["M12 20h9", "M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"],
   photo: ["M3 8.5A2 2 0 015 6.5h2.2L8.5 4.5h7l1.3 2H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9z", "M15.5 13a3.5 3.5 0 11-7 0 3.5 3.5 0 017 0z"],
   video: ["M3 7a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z", "M15 10.5l6-3.5v10l-6-3.5"],
   tutor: ["M12 3L2 8l10 5 10-5-10-5z", "M6 10.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-5.5"],
@@ -414,6 +423,8 @@ export function TranslatorShell({
   // Same shape as callVisible, and for the same reason: /fast is founders OR
   // everyone once NEXT_PUBLIC_ENABLE_FAST ships it.
   const fastVisible = fastVisibleTo(email);
+  // /dictate, on the same two-function shape (lib/release.ts).
+  const dictateVisible = dictateVisibleTo(email);
 
   // Which tile in the launcher is the screen you are already on. The header
   // only renders on "/" today, so this is "/" every time — it is read from the
@@ -1677,6 +1688,22 @@ export function TranslatorShell({
                         >
                           <NavIcon name="fast" />
                           {nav.navFast}
+                        </a>
+                      ) : null}
+                      {dictateVisible ? (
+                        <a
+                          href="/dictate"
+                          role="menuitem"
+                          aria-label={nav.navDictate}
+                          aria-current={pathname === "/dictate" ? "page" : undefined}
+                          className={`flex min-h-[44px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center text-[11px] leading-tight transition hover:bg-amber-400/10 ${
+                            pathname === "/dictate"
+                              ? "border-amber-300/50 bg-amber-400/15 text-amber-100"
+                              : "border-white/10 bg-white/[0.03] text-amber-100/85"
+                          }`}
+                        >
+                          <NavIcon name="dictate" />
+                          {nav.navDictate}
                         </a>
                       ) : null}
                       <a

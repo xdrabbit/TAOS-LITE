@@ -91,6 +91,8 @@ const SCREENS: Record<string, Loader> = {
   vision: async () => (await import("@/components/VisionShell")).VisionShell,
   video: async () => (await import("@/components/VideoShell")).VideoShell,
   fast: async () => (await import("@/components/FastShell")).FastShell,
+  // /dictate's page is a founder gate around this; the shell is the screen.
+  dictate: async () => (await import("@/components/DictateShell")).DictateShell,
   call: async () => (await import("@/components/CallShell")).CallShell,
   study: async () => (await import("@/components/StudyShell")).StudyShell,
   tutor: async () => (await import("@/components/TutorShell")).TutorShell,

@@ -4,6 +4,43 @@ File:line references are against `main` at `1489fcb` (2026-11-27). Re-check
 them before you rely on one; the root `CLAUDE.md` rules still apply (read
 `ENHANCEMENTS.md` first, tests are the fence, `guardSpend` first).
 
+## Status (2026-11-27)
+**v1 is built in the same PR as this brief (#145), founders only.** Tom's
+decisions that day, which settle most of "Open questions" below:
+
+- **Phone-first.** Liz adds taoslite.com to her home screen and uses it on her
+  iPhone. One thumb: big mic, big Copy, Share where the browser has it.
+- **A second mode, Decoder (paste-in)** — see its own section below.
+- **No metering and nothing stored** while founders-only. No row in
+  `taos_lite_translations`.
+- **Gate:** founders only. Liz is in `FOUNDER_EMAILS` (`lib/release.ts`).
+- **Spanish strings** follow the owner-language chrome rule and are each marked
+  `// pendiente de revisión por Liz`.
+- Last style, output language and mode are kept per device.
+
+Where it lives:
+
+| piece | file |
+|---|---|
+| route (audio, re-style, decode) | `app/api/dictate/route.ts` |
+| prompts | `lib/dictate/prompt.ts` |
+| model calls + Decoder JSON parsing | `lib/dictate/restyle.ts` |
+| styles, limits, per-device storage | `lib/dictate/style.ts` |
+| screen | `components/DictateShell.tsx`, `app/dictate/page.tsx` |
+| gate | `dictateEnabled()` / `dictateVisibleTo()` in `lib/release.ts` |
+| tests | `tests/dictate-prompt.test.ts`, `tests/dictate-route.test.ts`, `tests/dictate-shell.test.ts` |
+
+Three things the build does differently from the text below, on purpose:
+
+1. **Languages travel as catalog codes, not labels.** The browser sends
+   `source` / `target` / `reader` / `other` as codes and the route looks the
+   label up (`languageLabel`). A label typed by the caller would be text placed
+   straight into the system prompt.
+2. **No "re-style" button.** With a result on screen, tapping another style
+   pill (or changing the output language) re-writes the same transcript.
+3. **No provider `details` in an error body or a log.** A provider error can
+   quote the request back, and the request is somebody's words.
+
 ## What we're building
 Dictate mode for TAOS-LITE. You tap the mic, talk, tap again, and TAOS returns
 **clean, styled text in the same language** (or optionally in a target
@@ -98,6 +135,41 @@ Formal letter addressed in tú reads wrong, so: Formal and Professional pass
 `"usted"`, Conversational and Casual pass `"tu"`. This is new behaviour, not a
 change to the pinned default (`tests/meaning-first-rule.test.ts:67-82`).
 **Liz confirms before it ships.**
+
+## Decoder (paste-in) — added 2026-11-27
+The second tab on `/dictate`. Use case, in Tom's words: he receives fast,
+messy, unpunctuated Spanish texts from Liz and needs to understand them.
+
+- **In:** a paste box. A **Paste** button reads the clipboard where the browser
+  allows it (`navigator.clipboard.readText`); where it does not, the box still
+  takes a manual paste and the screen says so.
+- **Request:** JSON on the same route, no STT:
+  `{ mode: "decode", raw, reader, other }`. `reader` is the phone owner's side
+  of the pair (`pair[0]`), `other` is the other side. Same text cap as a
+  re-style (`DICTATE_MAX_TEXT_CHARS`).
+- **Out:** `{ mode: "decode", raw, cleaned, translation, notes, sourceLanguage }`.
+  - `cleaned` — the message in its **original language**, with punctuation,
+    capitals, accents and sentence breaks restored and texting abbreviations
+    written out. The words, their order and the tone stay the writer's.
+  - `translation` — faithful, into the reader's language. A message already in
+    the reader's language is translated into `other` instead, so the same
+    screen works on Liz's phone for Tom's English texts.
+  - `notes` — short strings in the reader's language, one per place that stays
+    open to more than one reading even after reading the whole message. Usually
+    empty. The UI shows them in a "Not clear in the original" box.
+- **Prompt:** `buildDecoderInstructions(readerLabel, otherLabel)` in
+  `lib/dictate/prompt.ts`, called with `response_format: json_object`. Rules:
+  preserve meaning and tone, everything comes from the message, flag the
+  genuinely ambiguous briefly rather than guess, translate a question rather
+  than answer it. Register is the house default, tú — these are messages
+  between two people who know each other.
+- **A reply missing either text is a 502**, not half an answer
+  (`parseDecoded`, `lib/dictate/restyle.ts`).
+- Probed live against `gpt-4.1` on 2026-11-27 before and after the notes
+  wording was tightened: the first draft flagged places the rest of the message
+  already settled ("llego tipo 7 o 730 … but context suggests arrival"); the
+  shipped wording returned no notes for clear messages and one note each for
+  "lo ve el viernes con ella" and "deje el banco aquí".
 
 ## Server
 - New route `app/api/dictate/route.ts`. Don't extend `/api/translate`: it is
@@ -211,21 +283,36 @@ change to the pinned default (`tests/meaning-first-rule.test.ts:67-82`).
   likely to be refused on iOS Safari; verify on the phone before promising it.
 - The mic is the one place desktop engines do not reproduce iOS. Only Tom's
   phone confirms it.
+- **Silence can come back as words.** Live run, 2026-11-27: two seconds of
+  digital silence went through the real handler and `gpt-4o-transcribe`
+  returned "I need a doctor.", which was then styled and returned as a 200.
+  The 422 path only fires when the transcriber returns `""`, and for silence it
+  does not always. This is the shared transcriber (`lib/translate/transcribe.ts`)
+  and home has the same exposure; it is not fixed here. A level check in the
+  browser is the obvious guard, but an `AudioContext` on iOS can sit suspended
+  without throwing, which would turn it into a false "nothing heard" on the one
+  phone this screen is for. Decide with a phone in hand.
 - Don't touch release flags in Production, Stripe, or Supabase schema without
   Tom. v1 as written needs no migration.
 
 ## Open questions for Tom
-1. Metering: unmetered while founders-only (recommended), or a row per
-   dictation now?
-2. Are dictations saved anywhere (History, /study), or gone when the screen
-   closes?
-3. Recording cap: 2 minutes?
+1. ~~Metering~~ — **settled 2026-11-27: none while founders-only.** Must be
+   settled again before `NEXT_PUBLIC_ENABLE_DICTATE` is set.
+2. ~~Are dictations saved anywhere~~ — **settled 2026-11-27: no, not while
+   founders-only.** Gone when the screen closes.
+3. Recording cap: 2 minutes? (Built at 2 minutes, `DICTATE_MAX_RECORDING_MS`.)
 4. Formal/Professional → usted when translating to Spanish (Liz).
 5. Spoken language: always the owner's side of the pair, or auto-detect between
-   the two?
+   the two? (Built as the owner's side.)
+6. Decoder: when the pasted message is already in the reader's language it is
+   translated into the other side of the pair. Is that what you want, or should
+   it only clean it up?
 
 ## Acceptance (Tom on his iPhone, preview URL)
 - Speak a rambly 20-second thought → Formal output reads like an email he'd send.
 - The same recording re-styled to Casual reads like a text he'd send.
 - "Tuesday, no, Wednesday" → only Wednesday survives.
 - Nothing invented. Copy works. Share works.
+- Decoder: paste one of Liz's real unpunctuated texts → the punctuated Spanish
+  reads like what she meant, the English says the same thing in her tone, and
+  a note appears only where the original really is unclear.
