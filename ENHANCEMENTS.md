@@ -16,6 +16,7 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Dictate — Wispr-style styled dictation (`/dictate`).** Speak, get clean text back in one of four styles (Formal, Professional, Conversational, Casual), same language or translated; founders-only behind `NEXT_PUBLIC_ENABLE_DICTATE`. Not built. Build brief: `docs/dictate/CLAUDE.md`. (added 2026-11-27)
 - **Daily study reminder email — what PR #139 left open.** Every Spanish
   string is pendiente de revisión por Liz. A pair that is not English/Spanish
   still gets the English/Spanish phrase (the course is only those two). No
