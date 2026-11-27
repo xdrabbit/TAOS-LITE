@@ -26,6 +26,7 @@ import {
   rampStyle,
   rampWindows
 } from "@/lib/translate/recorder";
+import { isClipSilent } from "@/lib/translate/clipSilence";
 import type { ConversationSession } from "@/lib/translate/session";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { ttsDeviceHeaders } from "@/lib/tts/deviceHints";
@@ -949,6 +950,13 @@ export function WalkieShell({
       return;
     }
     if (blob.size === 0) {
+      setError(s.noAudio);
+      return;
+    }
+    // A dead microphone, caught on the phone (lib/translate/clipSilence.ts):
+    // only a clip that decoded and never left the floor. Anything uncertain
+    // is sent, and /api/walkie/turn's transcriber has the silence guard.
+    if (await isClipSilent(blob, turnMs)) {
       setError(s.noAudio);
       return;
     }

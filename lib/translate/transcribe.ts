@@ -19,6 +19,17 @@ import {
   isUnusableAudioError,
   STT_NO_GUESS_RULE
 } from "@/lib/translate/prompts";
+import {
+  applyConfidenceRequest,
+  guardLogLine,
+  judgeTranscript,
+  resolveSuspect,
+  secondOpinionModelFor,
+  silenceGuardEnabled,
+  type GuardVerdict,
+  type SecondOpinion
+} from "@/lib/translate/silenceGuard";
+import { measurePeakDb } from "@/lib/translate/signalLevel";
 
 /**
  * Production 2026-07-19: an OpenAI call stalled and the function hung its full
@@ -74,6 +85,12 @@ export interface TranscribeOptions {
    * it, 32 and 81. Never set on a first transcription.
    */
   omitPrompt?: boolean;
+  /**
+   * Internal to the silence guard: `false` on the second-opinion call itself,
+   * so a suspect answer there is taken as "it heard something" instead of
+   * asking a third model. Callers never set it.
+   */
+  silenceSecondOpinion?: boolean;
 }
 
 /** The model every surface's mic uses: OPENAI_TRANSCRIBE_MODEL, else gpt-4o-transcribe. */
@@ -107,17 +124,79 @@ export function usesPluralLanguageHints(model: string): boolean {
 }
 
 /**
+ * How long a finished transcription waits for the level probe that ran beside
+ * it. The probe is nearly always back first (~40 ms against the provider's
+ * ~600); this only bounds the case where it is not.
+ */
+export const LEVEL_WAIT_MS = 150;
+
+/** The second opinion on a suspect transcript never gets longer than this. */
+export const SECOND_OPINION_TIMEOUT_MS = 15000;
+
+/**
+ * Does a second transcriber hear anything in this clip? Same audio, same
+ * language hints, a different model (silenceGuard.ts secondOpinionModelFor).
+ * Its own structural rules and no-speech flag apply; its confidence does not
+ * get a third opinion. A failure is "error", which the guard treats as no.
+ */
+async function secondOpinion(
+  apiKey: string,
+  file: File,
+  primaryModel: string,
+  options: TranscribeOptions
+): Promise<SecondOpinion> {
+  const model = secondOpinionModelFor(primaryModel);
+  const whisper = /^whisper/i.test(model);
+  try {
+    const heard = await transcribeAudioDetailed(apiKey, file, {
+      sourceLabel: options.sourceLabel,
+      // whisper reads `prompt` as text to continue (see omitPrompt above).
+      extraHint: whisper ? undefined : options.extraHint,
+      languageCode: options.languageCode,
+      omitPrompt: whisper || undefined,
+      model,
+      timeoutMs: Math.min(options.timeoutMs ?? TRANSCRIBE_TIMEOUT_MS, SECOND_OPINION_TIMEOUT_MS),
+      silenceSecondOpinion: false
+    });
+    return heard.text ? "speech" : "no_speech";
+  } catch {
+    return "error";
+  }
+}
+
+export interface TranscribeResult {
+  /** The transcript; "" when nothing was heard OR the silence guard dropped it. */
+  text: string;
+  /** The silence guard's verdict; null when the guard is off or never ran. */
+  guard: GuardVerdict | null;
+}
+
+/**
  * Transcribe one audio file.
  *
  * Returns `""` — not an error — when the audio held no usable speech, so the
  * caller can answer with its own bilingual "try again" rather than surfacing
  * provider JSON to somebody who just tapped a button too fast.
+ *
+ * "No usable speech" includes a transcript the silence guard does not believe
+ * (lib/translate/silenceGuard.ts): the transcriber writes a sentence for
+ * silence, and that sentence must never leave this function. Every caller
+ * gets that for free — which is the point of there being one transcriber.
  */
 export async function transcribeAudio(
   apiKey: string,
   file: File,
   options: TranscribeOptions = {}
 ): Promise<string> {
+  return (await transcribeAudioDetailed(apiKey, file, options)).text;
+}
+
+/** transcribeAudio(), plus the silence guard's verdict for callers that log it. */
+export async function transcribeAudioDetailed(
+  apiKey: string,
+  file: File,
+  options: TranscribeOptions = {}
+): Promise<TranscribeResult> {
   const { sourceLabel, extraHint, timeoutMs = TRANSCRIBE_TIMEOUT_MS } = options;
   const model = options.model?.trim() || defaultTranscribeModel();
   const form = new FormData();
@@ -137,7 +216,15 @@ export async function transcribeAudio(
     ? `Spoken ${sourceLabel}. Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`
     : `Transcribe verbatim with natural punctuation. ${STT_NO_GUESS_RULE}`;
   const hint = extraHint ?? (sourceLabel === "Cantonese" ? CANTONESE_STT_HINT : "");
-  if (!options.omitPrompt) form.append("prompt", hint ? `${base} ${hint}` : base);
+  const prompt = options.omitPrompt ? undefined : hint ? `${base} ${hint}` : base;
+  if (prompt !== undefined) form.append("prompt", prompt);
+
+  // The silence guard: ask the model for its own confidence in this same
+  // request, and measure the clip's level beside it (not in front of it — a
+  // turn with speech in it must not wait on the check).
+  const guardOn = silenceGuardEnabled();
+  if (guardOn) applyConfidenceRequest(form, model);
+  const level: Promise<number | null> = guardOn ? measurePeakDb(file).catch(() => null) : Promise.resolve(null);
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -155,7 +242,7 @@ export async function transcribeAudio(
     const err = payload?.error as Record<string, unknown> | undefined;
     const msg = typeof err?.message === "string" ? err.message : "";
     if (isUnusableAudioError(msg)) {
-      return "";
+      return { text: "", guard: null };
     }
     const detail =
       payload && typeof payload === "object" ? JSON.stringify(payload) : `HTTP ${res.status}`;
@@ -166,5 +253,23 @@ export async function transcribeAudio(
     });
   }
   const text = typeof payload?.text === "string" ? payload.text.trim() : "";
-  return text;
+  if (!guardOn || !text) return { text, guard: null };
+  const peakDb = await Promise.race([
+    level,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), LEVEL_WAIT_MS))
+  ]);
+  let guard = judgeTranscript({ text, payload, prompt, peakDb });
+  // Low confidence alone is a suspicion (one token's logprob is as much
+  // about spelling as about sound). Ask a second model; drop the transcript
+  // only if it hears nothing either. Costs ~400 ms, on suspect turns only.
+  if (guard.suspect && options.silenceSecondOpinion !== false) {
+    guard = resolveSuspect(guard, await secondOpinion(apiKey, file, model, options));
+  }
+  if (guard.noSpeech) {
+    // Numbers only: what was dropped is, by definition, not what anybody said,
+    // but it is still not ours to print.
+    console.log(guardLogLine(model, text, guard));
+    return { text: "", guard };
+  }
+  return { text, guard };
 }
