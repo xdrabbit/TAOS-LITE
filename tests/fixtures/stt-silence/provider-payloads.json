@@ -1,0 +1,1037 @@
+[
+  {
+    "id": "silence-2s#1",
+    "clip": "sil2.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "and here's",
+      "logprobs": [
+        {
+          "token": "and",
+          "logprob": -4.9362
+        },
+        {
+          "token": " here's",
+          "logprob": -8.075
+        }
+      ]
+    }
+  },
+  {
+    "id": "silence-2s#2",
+    "clip": "sil2.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "All right, so",
+      "logprobs": [
+        {
+          "token": "All",
+          "logprob": -4.9124
+        },
+        {
+          "token": " right",
+          "logprob": -0.7019
+        },
+        {
+          "token": ",",
+          "logprob": -1.085
+        },
+        {
+          "token": " so",
+          "logprob": -3.2756
+        }
+      ]
+    }
+  },
+  {
+    "id": "silence-2s#3",
+    "clip": "sil2.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "I can't.",
+      "logprobs": [
+        {
+          "token": "I",
+          "logprob": -2.3123
+        },
+        {
+          "token": " can't",
+          "logprob": -2.7766
+        },
+        {
+          "token": ".",
+          "logprob": -2.7649
+        }
+      ]
+    }
+  },
+  {
+    "id": "silence-2s#4",
+    "clip": "sil2.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "And so,",
+      "logprobs": [
+        {
+          "token": "And",
+          "logprob": -3.8123
+        },
+        {
+          "token": " so",
+          "logprob": -3.1059
+        },
+        {
+          "token": ",",
+          "logprob": -1.2893
+        }
+      ]
+    }
+  },
+  {
+    "id": "silence-8s#1",
+    "clip": "sil8.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Bedeutung.",
+      "logprobs": [
+        {
+          "token": "B",
+          "logprob": -5.7255
+        },
+        {
+          "token": "edeut",
+          "logprob": -6.2582
+        },
+        {
+          "token": "ung",
+          "logprob": -0.8235
+        },
+        {
+          "token": ".",
+          "logprob": -1.2669
+        }
+      ]
+    }
+  },
+  {
+    "id": "silence-8s#2",
+    "clip": "sil8.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "He shrugged.",
+      "logprobs": [
+        {
+          "token": "He",
+          "logprob": -5.4339
+        },
+        {
+          "token": " shrugged",
+          "logprob": -8.4507
+        },
+        {
+          "token": ".",
+          "logprob": -0.3916
+        }
+      ]
+    }
+  },
+  {
+    "id": "silence-8s#3",
+    "clip": "sil8.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "context:",
+      "logprobs": [
+        {
+          "token": "context",
+          "logprob": -2.8668
+        },
+        {
+          "token": ":",
+          "logprob": -0.0331
+        }
+      ]
+    }
+  },
+  {
+    "id": "room-tone#1",
+    "clip": "room50.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "Spoken English.",
+      "logprobs": [
+        {
+          "token": "Sp",
+          "logprob": -1.9429
+        },
+        {
+          "token": "oken",
+          "logprob": 0
+        },
+        {
+          "token": " English",
+          "logprob": -0.0004
+        },
+        {
+          "token": ".",
+          "logprob": -0.1184
+        }
+      ]
+    }
+  },
+  {
+    "id": "room-tone#2",
+    "clip": "room50.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "If any part",
+      "logprobs": [
+        {
+          "token": "If",
+          "logprob": -3.3141
+        },
+        {
+          "token": " any",
+          "logprob": -0.0255
+        },
+        {
+          "token": " part",
+          "logprob": -0.0041
+        }
+      ]
+    }
+  },
+  {
+    "id": "room-tone#3",
+    "clip": "room50.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "I love you.",
+      "logprobs": [
+        {
+          "token": "I",
+          "logprob": -3.4429
+        },
+        {
+          "token": " love",
+          "logprob": -3.9132
+        },
+        {
+          "token": " you",
+          "logprob": -1.4769
+        },
+        {
+          "token": ".",
+          "logprob": -0.612
+        }
+      ]
+    }
+  },
+  {
+    "id": "room-tone-auto#1",
+    "clip": "room40.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Transcribe verbatim with natural punctuation.",
+      "logprobs": [
+        {
+          "token": "Trans",
+          "logprob": -4.1883
+        },
+        {
+          "token": "cribe",
+          "logprob": -0.0003
+        },
+        {
+          "token": " verb",
+          "logprob": -0.001
+        },
+        {
+          "token": "atim",
+          "logprob": 0
+        },
+        {
+          "token": " with",
+          "logprob": -0.0236
+        },
+        {
+          "token": " natural",
+          "logprob": -0.0096
+        },
+        {
+          "token": " punctuation",
+          "logprob": -0.2152
+        },
+        {
+          "token": ".",
+          "logprob": -0.0816
+        }
+      ]
+    }
+  },
+  {
+    "id": "room-tone-auto#2",
+    "clip": "room40.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": ".",
+      "logprobs": [
+        {
+          "token": ".",
+          "logprob": -3.1652
+        }
+      ]
+    }
+  },
+  {
+    "id": "room-tone-auto#3",
+    "clip": "room40.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": ".",
+      "logprobs": [
+        {
+          "token": ".",
+          "logprob": -2.1119
+        }
+      ]
+    }
+  },
+  {
+    "id": "hum#1",
+    "clip": "hum.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": ".",
+      "logprobs": [
+        {
+          "token": ".",
+          "logprob": -1.0968
+        }
+      ]
+    }
+  },
+  {
+    "id": "hum#2",
+    "clip": "hum.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "context:",
+      "logprobs": [
+        {
+          "token": "context",
+          "logprob": -1.6234
+        },
+        {
+          "token": ":",
+          "logprob": -0.0701
+        }
+      ]
+    }
+  },
+  {
+    "id": "hum#3",
+    "clip": "hum.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": ".",
+      "logprobs": [
+        {
+          "token": ".",
+          "logprob": -1.5811
+        }
+      ]
+    }
+  },
+  {
+    "id": "hum#4",
+    "clip": "hum.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "transcribe verbatim",
+      "logprobs": [
+        {
+          "token": "trans",
+          "logprob": -6.1234
+        },
+        {
+          "token": "cribe",
+          "logprob": -0.0083
+        },
+        {
+          "token": " verb",
+          "logprob": -0.6907
+        },
+        {
+          "token": "atim",
+          "logprob": -0.0046
+        }
+      ]
+    }
+  },
+  {
+    "id": "quiet-speech-en",
+    "clip": "en_q45.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "Take one tablet twice a day with food and call me if you feel dizzy.",
+      "logprobs": [
+        {
+          "token": "Take",
+          "logprob": -0.0342
+        },
+        {
+          "token": " one",
+          "logprob": -0.0005
+        },
+        {
+          "token": " tablet",
+          "logprob": 0
+        },
+        {
+          "token": " twice",
+          "logprob": -0.0042
+        },
+        {
+          "token": " a",
+          "logprob": -0.0001
+        },
+        {
+          "token": " day",
+          "logprob": 0
+        },
+        {
+          "token": " with",
+          "logprob": -0.0147
+        },
+        {
+          "token": " food",
+          "logprob": -0.0002
+        },
+        {
+          "token": " and",
+          "logprob": -0.3515
+        },
+        {
+          "token": " call",
+          "logprob": -0.0005
+        },
+        {
+          "token": " me",
+          "logprob": -0.0001
+        },
+        {
+          "token": " if",
+          "logprob": -0.0006
+        },
+        {
+          "token": " you",
+          "logprob": -0.0001
+        },
+        {
+          "token": " feel",
+          "logprob": -0.0001
+        },
+        {
+          "token": " dizzy",
+          "logprob": -0.0014
+        },
+        {
+          "token": ".",
+          "logprob": -0.0726
+        }
+      ]
+    }
+  },
+  {
+    "id": "quiet-speech-es",
+    "clip": "es_q45.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "Spanish",
+    "payload": {
+      "text": "Tome una tableta dos veces al día con comida. Y llámeme si se siente mareada.",
+      "logprobs": [
+        {
+          "token": "T",
+          "logprob": 0
+        },
+        {
+          "token": "ome",
+          "logprob": 0
+        },
+        {
+          "token": " una",
+          "logprob": 0
+        },
+        {
+          "token": " table",
+          "logprob": 0
+        },
+        {
+          "token": "ta",
+          "logprob": 0
+        },
+        {
+          "token": " dos",
+          "logprob": 0
+        },
+        {
+          "token": " veces",
+          "logprob": 0
+        },
+        {
+          "token": " al",
+          "logprob": 0
+        },
+        {
+          "token": " día",
+          "logprob": 0
+        },
+        {
+          "token": " con",
+          "logprob": 0
+        },
+        {
+          "token": " comida",
+          "logprob": 0
+        },
+        {
+          "token": ".",
+          "logprob": -1.0987
+        },
+        {
+          "token": " Y",
+          "logprob": -0.0461
+        },
+        {
+          "token": " ll",
+          "logprob": 0
+        },
+        {
+          "token": "ám",
+          "logprob": 0
+        },
+        {
+          "token": "eme",
+          "logprob": -0.0001
+        },
+        {
+          "token": " si",
+          "logprob": 0
+        },
+        {
+          "token": " se",
+          "logprob": 0
+        },
+        {
+          "token": " siente",
+          "logprob": 0
+        },
+        {
+          "token": " mare",
+          "logprob": 0
+        },
+        {
+          "token": "ada",
+          "logprob": 0
+        },
+        {
+          "token": ".",
+          "logprob": -0.0015
+        }
+      ]
+    }
+  },
+  {
+    "id": "quiet-speech-room",
+    "clip": "en_q35_room55.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Take one tablet twice a day with food and call me if you feel dizzy.",
+      "logprobs": [
+        {
+          "token": "Take",
+          "logprob": -0.05
+        },
+        {
+          "token": " one",
+          "logprob": -0.0004
+        },
+        {
+          "token": " tablet",
+          "logprob": 0
+        },
+        {
+          "token": " twice",
+          "logprob": -0.0007
+        },
+        {
+          "token": " a",
+          "logprob": 0
+        },
+        {
+          "token": " day",
+          "logprob": 0
+        },
+        {
+          "token": " with",
+          "logprob": -0.0032
+        },
+        {
+          "token": " food",
+          "logprob": 0
+        },
+        {
+          "token": " and",
+          "logprob": -0.4366
+        },
+        {
+          "token": " call",
+          "logprob": -0.0001
+        },
+        {
+          "token": " me",
+          "logprob": 0
+        },
+        {
+          "token": " if",
+          "logprob": -0.0007
+        },
+        {
+          "token": " you",
+          "logprob": 0
+        },
+        {
+          "token": " feel",
+          "logprob": 0
+        },
+        {
+          "token": " dizzy",
+          "logprob": -0.0003
+        },
+        {
+          "token": ".",
+          "logprob": -0.0906
+        }
+      ]
+    }
+  },
+  {
+    "id": "quiet-one-word",
+    "clip": "si_q45.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Si",
+      "logprobs": [
+        {
+          "token": "Si",
+          "logprob": -2.969
+        }
+      ]
+    }
+  },
+  {
+    "id": "normal-speech-en",
+    "clip": "en_norm.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "Take one tablet twice a day with food and call me if you feel dizzy.",
+      "logprobs": [
+        {
+          "token": "Take",
+          "logprob": -0.0005
+        },
+        {
+          "token": " one",
+          "logprob": -0.0001
+        },
+        {
+          "token": " tablet",
+          "logprob": 0
+        },
+        {
+          "token": " twice",
+          "logprob": -0.0067
+        },
+        {
+          "token": " a",
+          "logprob": 0
+        },
+        {
+          "token": " day",
+          "logprob": 0
+        },
+        {
+          "token": " with",
+          "logprob": -0.0017
+        },
+        {
+          "token": " food",
+          "logprob": 0
+        },
+        {
+          "token": " and",
+          "logprob": -1.6006
+        },
+        {
+          "token": " call",
+          "logprob": 0
+        },
+        {
+          "token": " me",
+          "logprob": 0
+        },
+        {
+          "token": " if",
+          "logprob": 0
+        },
+        {
+          "token": " you",
+          "logprob": 0
+        },
+        {
+          "token": " feel",
+          "logprob": 0
+        },
+        {
+          "token": " dizzy",
+          "logprob": 0
+        },
+        {
+          "token": ".",
+          "logprob": -0.0164
+        }
+      ]
+    }
+  },
+  {
+    "id": "normal-speech-es",
+    "clip": "es_norm.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Tome una tableta dos veces al día con comida. Llámeme si se siente mareada.",
+      "logprobs": [
+        {
+          "token": "T",
+          "logprob": 0
+        },
+        {
+          "token": "ome",
+          "logprob": 0
+        },
+        {
+          "token": " una",
+          "logprob": 0
+        },
+        {
+          "token": " table",
+          "logprob": 0
+        },
+        {
+          "token": "ta",
+          "logprob": 0
+        },
+        {
+          "token": " dos",
+          "logprob": 0
+        },
+        {
+          "token": " veces",
+          "logprob": 0
+        },
+        {
+          "token": " al",
+          "logprob": 0
+        },
+        {
+          "token": " día",
+          "logprob": 0
+        },
+        {
+          "token": " con",
+          "logprob": 0
+        },
+        {
+          "token": " comida",
+          "logprob": 0
+        },
+        {
+          "token": ".",
+          "logprob": -0.3308
+        },
+        {
+          "token": " Ll",
+          "logprob": -3.7906
+        },
+        {
+          "token": "ám",
+          "logprob": -0.0021
+        },
+        {
+          "token": "eme",
+          "logprob": 0
+        },
+        {
+          "token": " si",
+          "logprob": 0
+        },
+        {
+          "token": " se",
+          "logprob": 0
+        },
+        {
+          "token": " siente",
+          "logprob": 0
+        },
+        {
+          "token": " mare",
+          "logprob": 0
+        },
+        {
+          "token": "ada",
+          "logprob": 0
+        },
+        {
+          "token": ".",
+          "logprob": -0.0034
+        }
+      ]
+    }
+  },
+  {
+    "id": "one-word-mhm#1",
+    "clip": "hm_norm.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Mhm.",
+      "logprobs": [
+        {
+          "token": "M",
+          "logprob": -1.0597
+        },
+        {
+          "token": "hm",
+          "logprob": -0.1483
+        },
+        {
+          "token": ".",
+          "logprob": -0.8387
+        }
+      ]
+    }
+  },
+  {
+    "id": "one-word-mhm#2",
+    "clip": "hm_norm.webm",
+    "model": "gpt-4o-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Mm-hmm.",
+      "logprobs": [
+        {
+          "token": "Mm",
+          "logprob": -0.5607
+        },
+        {
+          "token": "-h",
+          "logprob": -0.0481
+        },
+        {
+          "token": "mm",
+          "logprob": -0.1273
+        },
+        {
+          "token": ".",
+          "logprob": -0.6999
+        }
+      ]
+    }
+  },
+  {
+    "id": "mini-normal-speech",
+    "clip": "en_norm.webm",
+    "model": "gpt-4o-mini-transcribe",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Take one tablet twice a day with food, and call me if you feel dizzy.",
+      "logprobs": [
+        {
+          "token": "Take",
+          "logprob": -0.0007
+        },
+        {
+          "token": " one",
+          "logprob": 0
+        },
+        {
+          "token": " tablet",
+          "logprob": 0
+        },
+        {
+          "token": " twice",
+          "logprob": -0.0012
+        },
+        {
+          "token": " a",
+          "logprob": 0
+        },
+        {
+          "token": " day",
+          "logprob": 0
+        },
+        {
+          "token": " with",
+          "logprob": 0
+        },
+        {
+          "token": " food",
+          "logprob": 0
+        },
+        {
+          "token": ",",
+          "logprob": -0.1002
+        },
+        {
+          "token": " and",
+          "logprob": 0
+        },
+        {
+          "token": " call",
+          "logprob": 0
+        },
+        {
+          "token": " me",
+          "logprob": 0
+        },
+        {
+          "token": " if",
+          "logprob": 0
+        },
+        {
+          "token": " you",
+          "logprob": 0
+        },
+        {
+          "token": " feel",
+          "logprob": 0
+        },
+        {
+          "token": " dizzy",
+          "logprob": 0
+        },
+        {
+          "token": ".",
+          "logprob": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "whisper-silence",
+    "clip": "sil2.webm",
+    "model": "whisper-1",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "Learn English for free www.engvid.com",
+      "segments": [
+        {
+          "text": " Learn English for free www.engvid.com",
+          "no_speech_prob": 0.9776,
+          "avg_logprob": -0.5263,
+          "compression_ratio": 0.8222
+        }
+      ]
+    }
+  },
+  {
+    "id": "whisper-room-tone",
+    "clip": "room50.webm",
+    "model": "whisper-1",
+    "sourceLabel": "English",
+    "payload": {
+      "text": "Thank you for watching.",
+      "segments": [
+        {
+          "text": " Thank you for watching.",
+          "no_speech_prob": 0.9326,
+          "avg_logprob": -0.9731,
+          "compression_ratio": 0.7419
+        }
+      ]
+    }
+  },
+  {
+    "id": "whisper-quiet-one-word",
+    "clip": "si_q45.webm",
+    "model": "whisper-1",
+    "sourceLabel": null,
+    "payload": {
+      "text": "See.",
+      "segments": [
+        {
+          "text": " See.",
+          "no_speech_prob": 0.5013,
+          "avg_logprob": -0.7237,
+          "compression_ratio": 0.3333
+        }
+      ]
+    }
+  },
+  {
+    "id": "whisper-quiet-speech",
+    "clip": "es_q45.webm",
+    "model": "whisper-1",
+    "sourceLabel": "Spanish",
+    "payload": {
+      "text": "Tome una tableta dos veces al día con comida, y llámeme si se siente mareada.",
+      "segments": [
+        {
+          "text": " Tome una tableta dos veces al día con comida, y llámeme si se siente mareada.",
+          "no_speech_prob": 0.1259,
+          "avg_logprob": -0.3093,
+          "compression_ratio": 0.9875
+        }
+      ]
+    }
+  },
+  {
+    "id": "whisper-normal-speech",
+    "clip": "en_norm.webm",
+    "model": "whisper-1",
+    "sourceLabel": null,
+    "payload": {
+      "text": "Take one tablet twice a day with food, and call me if you feel dizzy.",
+      "segments": [
+        {
+          "text": " Take one tablet twice a day with food, and call me if you feel dizzy.",
+          "no_speech_prob": 0.0031,
+          "avg_logprob": -0.3659,
+          "compression_ratio": 1.0147
+        }
+      ]
+    }
+  }
+]
