@@ -265,6 +265,36 @@ describe("a recording — transcribe, then restyle", () => {
     expect(chatCalls()).toHaveLength(0);
   });
 
+  it("THE REPRO: silence the transcriber wrote a sentence for is a 422 too, and the model is never asked", async () => {
+    // Found building this screen: 2 s of silence came back "I need a doctor."
+    // and was styled as a normal dictation. The shared transcriber's silence
+    // guard (lib/translate/silenceGuard.ts, PR #146) is what stops it. This is
+    // what gpt-4o-transcribe really returned for two seconds of silence, with
+    // its own token logprobs — a different sentence every run.
+    const rows = JSON.parse(read("tests/fixtures/stt-silence/provider-payloads.json")) as {
+      id: string;
+      payload: { text: string };
+    }[];
+    const invented = rows.find((r) => r.id === "silence-2s#3")!.payload;
+    expect(invented.text.trim()).not.toBe("");
+    const answer = (body: unknown) => async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: init?.body });
+      return Response.json(body);
+    };
+    // The transcriber invents; the second opinion hears nothing.
+    fetchMock.mockImplementationOnce(answer(invented)).mockImplementationOnce(answer({ text: "" }));
+    const res = await post(audioRequest());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe(
+      "Nothing was heard — try again. · No se escuchó nada — intenta de nuevo."
+    );
+    expect(sttCalls().map((c) => (c.body as FormData).get("model"))).toEqual([
+      "gpt-4o-transcribe",
+      "gpt-4o-mini-transcribe"
+    ]);
+    expect(chatCalls()).toHaveLength(0);
+  });
+
   it("refuses a recording over the cap before any provider is called", async () => {
     const res = await post(audioRequest({}, true, DICTATE_MAX_AUDIO_BYTES + 1));
     expect(res.status).toBe(413);
