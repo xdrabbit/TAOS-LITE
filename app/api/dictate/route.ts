@@ -7,26 +7,60 @@ import { getTranslateModel } from "@/lib/translate/paraphrase";
 import { decodeMessage, DICTATE_RESTYLE_TIMEOUT_MS, restyle } from "@/lib/dictate/restyle";
 import {
   DICTATE_MAX_AUDIO_BYTES,
+  DICTATE_MAX_CHUNKS,
+  DICTATE_MAX_REPORTED_MS,
   DICTATE_MAX_TEXT_CHARS,
+  DICTATE_MAX_TRANSCRIPT_CHARS,
   DICTATE_SAME_LANGUAGE,
   resolveDictateStyle,
   type DictateStyle
 } from "@/lib/dictate/style";
+import {
+  parsePriorField,
+  stitchTranscripts,
+  translateTimeoutFor,
+  weaveTranslations,
+  type ChunkResult
+} from "@/lib/translate/longTurn";
 
 export const runtime = "nodejs";
-// One two-minute recording, one transcription (60 s cap) and one chat
-// completion (45 s cap): 120 leaves the sum room to fail as JSON rather than
-// as Safari's "Load failed".
-export const maxDuration = 120;
+// The longest request is a long dictation's last: one chunk's transcription
+// (90 s cap) and one rewrite of up to ten minutes of text (150 s cap). 300
+// leaves the sum room to fail as JSON rather than as Safari's "Load failed".
+export const maxDuration = 300;
 
-const TRANSCRIBE_TIMEOUT_MS = 60000;
+// One chunk is at most 4.5 minutes of audio. One attempt: the phone retries.
+const TRANSCRIBE_TIMEOUT_MS = 90000;
 
-// POST /api/dictate — three requests, one route (docs/dictate/CLAUDE.md).
+// POST /api/dictate — one route (docs/dictate/CLAUDE.md has the contract).
 //
-//   multipart, `audio`            → transcribe, then restyle   (STT + chat)
-//   JSON { raw, style, … }        → restyle only               (chat)
-//   JSON { mode: "decode", raw }  → the Decoder: a pasted message, cleaned
-//                                   and translated             (chat)
+//   multipart, `audio`                → transcribe, then restyle (STT + chat)
+//   multipart, `audio`, chunk_part=1  → a long dictation's EARLIER chunk:
+//                                       transcribe only          (STT)
+//   multipart, `prior` (+ `audio`)    → its LAST chunk: transcribe, stitch
+//                                       with the earlier ones, restyle the
+//                                       whole text ONCE          (STT + chat)
+//   JSON { raw, style, … }            → restyle only             (chat)
+//   JSON { mode: "decode", raw }      → the Decoder: a pasted message,
+//                                       cleaned and translated   (chat)
+//
+// ── Who may call ───────────────────────────────────────────────────────────
+// `Authorization: Bearer <Supabase access token>`, verified with Supabase on
+// every request (lib/authServer.ts, through guardSpend). There is no cookie:
+// the web screen sends the same header (lib/authClient.ts), so the iOS app
+// signs in to the same project and calls this exactly as the website does.
+// No token, or one Supabase will not vouch for (expired, forged): 401 — the
+// app's cue to refresh and try again. A real user who is not a founder: 404.
+// No CORS headers are set, on purpose: a native app needs none, and the web
+// screen is same-origin.
+//
+// ── Ten minutes, in chunks ─────────────────────────────────────────────────
+// A dictation runs up to ten minutes and is recorded the way a long home
+// turn is (lib/translate/longTurn.ts): in chunks, each its own request, the
+// earlier ones transcribed while the speaker is still talking. That is what
+// keeps every request inside Vercel's 4.5 MB body limit and this function's
+// 300 s. The transcripts travel back with the last chunk — this route keeps
+// nothing between requests — and the rewrite runs once, on all of it.
 //
 // Not an extension of /api/translate: that route refuses source === target,
 // its prompt is an interpreter's, and it carries chunking, auto-detect, retry
@@ -57,7 +91,7 @@ function isTimeout(e: unknown): boolean {
 // counts and milliseconds ONLY — never the transcript, the styled text, the
 // pasted message, or an email.
 interface DictateTiming {
-  mode: "audio" | "restyle" | "decode" | "?";
+  mode: "audio" | "part" | "restyle" | "decode" | "?";
   style: DictateStyle | "?";
   src: string;
   tgt: string;
@@ -68,6 +102,9 @@ interface DictateTiming {
   srcChars: number | "?";
   outChars: number | "?";
   notes: number | "?";
+  /** Chunks in this dictation so far, and how many of them were lost. */
+  chunks: number | "?";
+  lost: number | "?";
   err: string;
 }
 
@@ -78,8 +115,15 @@ function logTiming(t: DictateTiming, http: number, started: number): void {
       ` transcribe_ms=${t.transcribeMs} transcribe_model=${getTranscribeModel()}` +
       ` model_ms=${t.modelMs} model=${getTranslateModel()} guard_ms=${t.guardMs}` +
       ` total_ms=${Math.round(performance.now() - started)} src_chars=${t.srcChars}` +
-      ` out_chars=${t.outChars} notes=${t.notes} err=${t.err}`
+      ` out_chars=${t.outChars} notes=${t.notes} chunks=${t.chunks} lost=${t.lost} err=${t.err}`
   );
+}
+
+function intField(form: FormData, name: string): number | null {
+  const raw = form.get(name);
+  if (typeof raw !== "string") return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 function code(value: unknown): string | null {
@@ -96,15 +140,22 @@ function targetOf(value: unknown, source: string): string | null {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const started = performance.now();
-  // Identity, then the gate, then the 401 — all before the body is read, the
-  // order /api/fast/listen keeps. guardSpend touches Supabase and never a
-  // paid provider, so a stranger's upload is refused having cost nothing.
+  // Identity, then the 401, then the gate — all before the body is read.
+  // guardSpend touches Supabase and never a paid provider, so a stranger's
+  // upload is refused having cost nothing.
+  //
+  // 401 comes BEFORE the 404. Tom's brief of 2026-11-27 for the iOS app asks
+  // for: missing token 401, bad/expired token 401, non-founder 404. The first
+  // build had the gate first, which answered all three 404 — so the order
+  // moved. A missing, expired or forged token must read as "sign in again",
+  // which a client can act on; the 404 is for someone Supabase vouches for
+  // who is not let in.
   const guard = await guardSpend(req);
-  const email = guard.ok ? (guard.user?.email ?? null) : null;
+  if (!guard.ok) return guard.response;
+  const email = guard.user?.email ?? null;
   if (!dictateVisibleTo(email)) {
     return NextResponse.json({ error: "not_found" }, { status: 404, headers: NO_STORE });
   }
-  if (!guard.ok) return guard.response;
 
   const t: DictateTiming = {
     mode: "?",
@@ -118,6 +169,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     srcChars: "?",
     outChars: "?",
     notes: "?",
+    chunks: "?",
+    lost: "?",
     err: "?"
   };
   const done = (body: Record<string, unknown>, status = 200): NextResponse => {
@@ -145,7 +198,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const raw = typeof body.raw === "string" ? body.raw.trim() : "";
       t.srcChars = raw.length;
       if (!raw) return fail("empty", "There is no text to work on.", 400);
-      if (raw.length > DICTATE_MAX_TEXT_CHARS) {
+      // A pasted message and a transcript have different ceilings: a
+      // re-style must take back anything a ten-minute dictation produced.
+      if (raw.length > (decode ? DICTATE_MAX_TEXT_CHARS : DICTATE_MAX_TRANSCRIPT_CHARS)) {
         return fail("too_long", "That text is too long. Try a shorter piece.", 413);
       }
 
@@ -186,14 +241,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         raw,
         style,
         languageLabel(source),
-        target ? languageLabel(target) : null
+        target ? languageLabel(target) : null,
+        translateTimeoutFor(raw.length, DICTATE_RESTYLE_TIMEOUT_MS)
       );
       t.modelMs = Math.round(performance.now() - modelStart);
       t.outChars = styled.length;
       return done({ raw, styled, style, lang: target ?? source });
     }
 
-    // ── Multipart: a recording. Transcribe, then restyle. ──────────────────
+    // ── Multipart: a recording, or one chunk of a long one. ────────────────
     t.mode = "audio";
     let form: FormData;
     try {
@@ -201,46 +257,130 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     } catch {
       return fail("bad_form", "Request body must be multipart form data or JSON.", 400);
     }
-    const audio = form.get("audio");
-    if (!(audio instanceof File) || audio.size === 0) {
-      return fail("no_audio", "An audio recording is required.", 400);
+
+    // The long turn's fields, as /api/translate reads them:
+    //   chunk_part=1  an earlier chunk — transcribe it, answer with its text
+    //   prior         this is the LAST chunk; these are the earlier ones
+    // Neither: a dictation that fit in one recording, handled as it always was.
+    const isPart = form.get("chunk_part") === "1";
+    const priorRaw = form.get("prior");
+    const chunkMs = intField(form, "chunk_ms") ?? 0;
+    let prior: ChunkResult[] | null = null;
+    if (isPart) t.mode = "part";
+    if (isPart || priorRaw !== null) {
+      const index = intField(form, "chunk_index") ?? 0;
+      t.chunks = index + 1;
+      if (index >= DICTATE_MAX_CHUNKS || (isPart && priorRaw !== null)) {
+        return fail("bad_chunk", "Malformed long-dictation request.", 400);
+      }
+      if (!isPart) {
+        prior = parsePriorField(priorRaw, DICTATE_MAX_CHUNKS);
+        if (!prior) return fail("bad_prior", "Malformed long-dictation request.", 400);
+        t.chunks = prior.length + 1;
+        const reported = prior.reduce((sum, part) => sum + part.ms, chunkMs);
+        if (reported > DICTATE_MAX_REPORTED_MS) {
+          return fail("too_long", "That dictation is too long. Keep it under ten minutes.", 413);
+        }
+      }
     }
-    t.audioBytes = audio.size;
-    if (audio.size > DICTATE_MAX_AUDIO_BYTES) {
-      return fail("too_big", "That recording is too long. Keep a dictation under two minutes.", 413);
+
+    const audioField = form.get("audio");
+    // The last request of a long dictation may carry no audio of its own: the
+    // speaker stopped in the instant after a chunk rolled. Everything else
+    // needs a recording.
+    const audio = audioField instanceof File && audioField.size > 0 ? audioField : null;
+    if (!audio && !prior) return fail("no_audio", "An audio recording is required.", 400);
+    if (audio) {
+      t.audioBytes = audio.size;
+      if (audio.size > DICTATE_MAX_AUDIO_BYTES) {
+        return fail("too_big", "That recording is too large for one request. Send a long dictation in chunks.", 413);
+      }
     }
     const source = code(form.get("source"));
     if (!source) return fail("bad_lang", "A spoken language is required.", 400);
+    t.src = source;
+
+    // ── An earlier chunk: its transcript, and nothing else. ────────────────
+    if (isPart) {
+      const sttStart = performance.now();
+      const text = await transcribeAudio(apiKey, audio as File, {
+        sourceLabel: languageLabel(source),
+        timeoutMs: TRANSCRIBE_TIMEOUT_MS
+      });
+      t.transcribeMs = Math.round(performance.now() - sttStart);
+      t.srcChars = text.length;
+      // "" is a quiet chunk, not an error: the dictation goes on around it.
+      return done({ chunk: { index: (t.chunks as number) - 1, text, ms: chunkMs } });
+    }
+
     const target = targetOf(form.get("target"), source);
     if (target === "invalid") return fail("bad_lang", "Unknown output language.", 400);
     const style = resolveDictateStyle(form.get("style"));
     t.style = style;
-    t.src = source;
     t.tgt = target ?? source;
 
-    const sttStart = performance.now();
-    const raw = await transcribeAudio(apiKey, audio, {
-      sourceLabel: languageLabel(source),
-      timeoutMs: TRANSCRIBE_TIMEOUT_MS
-    });
-    t.transcribeMs = Math.round(performance.now() - sttStart);
+    let heard: string | null = "";
+    if (audio) {
+      const sttStart = performance.now();
+      try {
+        heard = await transcribeAudio(apiKey, audio, {
+          sourceLabel: languageLabel(source),
+          timeoutMs: TRANSCRIBE_TIMEOUT_MS
+        });
+      } catch (error) {
+        // One recording: there is nothing else to write up. A long
+        // dictation: this chunk is lost and marked, and the rest goes through.
+        if (!prior) throw error;
+        heard = null;
+      }
+      t.transcribeMs = Math.round(performance.now() - sttStart);
+    }
+
+    const parts: ChunkResult[] = prior
+      ? audio
+        ? [...prior, { text: heard, ms: chunkMs }]
+        : prior
+      : [{ text: heard, ms: chunkMs }];
+    const stitched = stitchTranscripts(parts, source);
+    const raw = stitched.text;
+    t.lost = stitched.failed;
     t.srcChars = raw.length;
-    // "" is the transcriber saying there was no usable speech. It stops here:
-    // the model step cannot answer "nothing", so it is never asked.
-    if (!raw) return fail("nothing_heard", NOTHING_HEARD, 422);
+    // Nothing usable in any chunk. It stops here: the model step cannot
+    // answer "nothing", so it is never asked. (Chunks that were all LOST are
+    // a failure, not silence.)
+    if (!stitched.heard) {
+      if (stitched.failed > 0) return fail("all_lost", "Dictation failed. Please try again.", 502);
+      return fail("nothing_heard", NOTHING_HEARD, 422);
+    }
 
     const modelStart = performance.now();
-    const styled = await restyle(
-      apiKey,
-      raw,
-      style,
-      languageLabel(source),
-      target ? languageLabel(target) : null,
-      DICTATE_RESTYLE_TIMEOUT_MS
-    );
+    const sourceLabel = languageLabel(source);
+    const targetLabel = target ? languageLabel(target) : null;
+    const write = (text: string) =>
+      restyle(apiKey, text, style, sourceLabel, targetLabel, translateTimeoutFor(text.length, DICTATE_RESTYLE_TIMEOUT_MS));
+    // The rewrite runs ONCE over the whole dictation. Only when a chunk was
+    // lost is each run of speech written on its own, with the marker placed
+    // between them here — a model handed "[audio lost 4:30]" inside the text
+    // drops it (measured for home, lib/translate/longTurn.ts).
+    const styled =
+      stitched.failed === 0
+        ? await write(raw)
+        : weaveTranslations(
+            stitched.pieces,
+            await Promise.all(
+              stitched.pieces.flatMap((piece) => (piece.kind === "text" ? [write(piece.text)] : []))
+            ),
+            target ?? source
+          );
     t.modelMs = Math.round(performance.now() - modelStart);
     t.outChars = styled.length;
-    return done({ raw, styled, style, lang: target ?? source });
+    return done({
+      raw,
+      styled,
+      style,
+      lang: target ?? source,
+      ...(prior ? { chunks: stitched.chunks, lost: stitched.failed } : {})
+    });
   } catch (error) {
     if (isTimeout(error)) {
       return fail("timeout", "That took too long. Please try again.", 504);

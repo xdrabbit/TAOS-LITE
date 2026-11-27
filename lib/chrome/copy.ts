@@ -596,7 +596,8 @@ const EN = {
   dictateHideOriginal: "Hide what I said",
   dictateFailed: "That did not work. Try again.",
   dictateTooLong: "That text is too long. Try a shorter piece.",
-  dictateLimit: "Up to two minutes per dictation.",
+  dictateLimit: "Up to ten minutes per dictation.",
+  dictateWrapUp: "Wrapping up — it stops and writes it up in a few seconds…",
   dictatePaste: "Paste",
   dictatePasteBlocked: "This browser will not hand over the clipboard. Press and hold in the box, then Paste.",
   dictatePastePlaceholder: "Paste the message here",
@@ -725,7 +726,8 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     dictateHideOriginal: "Ocultar lo que dije", // pendiente de revisión por Liz
     dictateFailed: "No funcionó. Inténtalo de nuevo.", // pendiente de revisión por Liz
     dictateTooLong: "Ese texto es muy largo. Prueba con un trozo más corto.", // pendiente de revisión por Liz
-    dictateLimit: "Hasta dos minutos por dictado.", // pendiente de revisión por Liz
+    dictateLimit: "Hasta diez minutos por dictado.", // pendiente de revisión por Liz
+    dictateWrapUp: "Terminando — se detiene y lo redacta en unos segundos…", // pendiente de revisión por Liz
     dictatePaste: "Pegar", // pendiente de revisión por Liz
     dictatePasteBlocked: "Este navegador no deja leer el portapapeles. Mantén pulsado dentro del cuadro y elige Pegar.", // pendiente de revisión por Liz
     dictatePastePlaceholder: "Pega el mensaje aquí", // pendiente de revisión por Liz

@@ -30,3 +30,17 @@ export async function authHeaders(): Promise<Record<string, string>> {
 export async function jsonAuthHeaders(): Promise<Record<string, string>> {
   return { "Content-Type": "application/json", ...(await authHeaders()) };
 }
+
+/**
+ * The signed-in person's email, or null. For screens that only need to know
+ * WHO is holding the phone (a founder's test knob) and must not import the
+ * database client to find out.
+ */
+export async function sessionEmail(): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.email ?? null;
+  } catch {
+    return null;
+  }
+}

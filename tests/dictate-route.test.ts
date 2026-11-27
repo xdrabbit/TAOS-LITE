@@ -1,7 +1,11 @@
 // POST /api/dictate — the real handler, with only auth and `fetch` mocked.
 //
 // What is pinned (docs/dictate/CLAUDE.md, and Tom's decisions of 2026-11-27):
-//   · founders only: 404 for a stranger, 401 signed out, nothing spent either way;
+//   · founders only: 401 without a valid token, 404 for a signed-in stranger,
+//     nothing spent either way (the 401 moved ahead of the 404 on 2026-11-27,
+//     Tom's instruction for the iOS app — tests/dictate-bearer-auth.test.ts);
+//   · a dictation runs to ten minutes in chunks: earlier chunks are
+//     transcribed alone, and the rewrite runs ONCE on the stitched text;
 //   · an empty transcript is a 422 and the model is NEVER asked;
 //   · a re-style and a Decoder request make NO transcription call;
 //   · nothing is written to Supabase, and no words reach the log line.
@@ -9,7 +13,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { readFileSync } from "node:fs";
 import { buildDecoderInstructions, buildDictateInstructions } from "@/lib/dictate/prompt";
-import { DICTATE_MAX_AUDIO_BYTES, DICTATE_MAX_TEXT_CHARS } from "@/lib/dictate/style";
+import {
+  DICTATE_CHUNK_MS,
+  DICTATE_MAX_AUDIO_BYTES,
+  DICTATE_MAX_CHUNKS,
+  DICTATE_MAX_RECORDING_MS,
+  DICTATE_MAX_TEXT_CHARS,
+  DICTATE_MAX_TRANSCRIPT_CHARS
+} from "@/lib/dictate/style";
+import { HOME_CHUNK_MS, serializePrior } from "@/lib/translate/longTurn";
 import { dictateEnabled, dictateVisibleTo, HELD_BACK_V1 } from "@/lib/release";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -161,16 +173,16 @@ describe("the gate — founders only, and the flag is off", () => {
     expect(read("app/api/dictate/route.ts")).toContain("dictateVisibleTo(email)");
   });
 
-  it("checks identity, then the gate, then the body — in that order", () => {
+  it("checks identity, then the 401, then the gate, then the body — in that order", () => {
     const route = read("app/api/dictate/route.ts");
     const guard = route.indexOf("await guardSpend(req)");
-    const gate = route.indexOf("dictateVisibleTo(email)");
     const denied = route.indexOf("if (!guard.ok) return guard.response");
+    const gate = route.indexOf("dictateVisibleTo(email)");
     const body = Math.min(route.indexOf("await req.json()"), route.indexOf("await req.formData()"));
     expect(guard).toBeGreaterThan(-1);
-    expect(gate).toBeGreaterThan(guard);
-    expect(denied).toBeGreaterThan(gate);
-    expect(body).toBeGreaterThan(denied);
+    expect(denied).toBeGreaterThan(guard);
+    expect(gate).toBeGreaterThan(denied);
+    expect(body).toBeGreaterThan(gate);
     expect(route).not.toContain("allowAnonymous");
   });
 
@@ -183,9 +195,12 @@ describe("the gate — founders only, and the flag is off", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("answers a signed-out founder-less request 404, not 401 — the screen does not exist for them", async () => {
+  // Was "404, not 401" until 2026-11-27. Tom's instruction that day, for the
+  // iOS app: no token / a bad token is 401 (the app's cue to sign in again or
+  // refresh), and 404 is kept for a real user who is not a founder.
+  it("answers a signed-out request 401 with the flag off — never a 404 a client cannot act on", async () => {
     const res = await post(audioRequest({}, false));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
     expect(calls).toHaveLength(0);
   });
 
@@ -320,6 +335,172 @@ describe("a recording — transcribe, then restyle", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// Ten minutes, in chunks (Tom, 2026-11-27). The protocol is home's long turn
+// (lib/translate/longTurn.ts): `chunk_part=1` for a chunk that closed while
+// the speaker was still talking, `prior` beside the last one.
+describe("a long dictation — ten minutes, recorded in chunks", () => {
+  function chunkRequest(fields: Record<string, string>, bytes: number | null = 2048): NextRequest {
+    const form = new FormData();
+    if (bytes !== null) {
+      form.append("audio", new File([new Uint8Array(bytes)], "audio.webm", { type: "audio/webm" }));
+    }
+    for (const [key, value] of Object.entries({ source: "en", ...fields })) form.append(key, value);
+    return new NextRequest("http://localhost/api/dictate", {
+      method: "POST",
+      headers: { Authorization: "Bearer t" },
+      body: form
+    });
+  }
+  const part = (index: number, extra: Record<string, string> = {}) =>
+    chunkRequest({ chunk_part: "1", chunk_index: String(index), chunk_ms: String(DICTATE_CHUNK_MS), ...extra });
+  const last = (prior: { text: string | null; ms: number }[], extra: Record<string, string> = {}, bytes: number | null = 2048) =>
+    chunkRequest(
+      { prior: serializePrior(prior), chunk_index: String(prior.length), chunk_ms: "60000", style: "formal", ...extra },
+      bytes
+    );
+
+  it("is ten minutes, in home's chunks, on a route with home's five minutes to answer", () => {
+    expect(DICTATE_MAX_RECORDING_MS).toBe(600_000);
+    expect(DICTATE_CHUNK_MS).toBe(HOME_CHUNK_MS);
+    // Three chunks cover ten minutes; none is near Vercel's 4.5 MB body limit.
+    expect(Math.ceil(DICTATE_MAX_RECORDING_MS / DICTATE_CHUNK_MS)).toBe(3);
+    expect((DICTATE_CHUNK_MS / 1000) * (32000 / 8)).toBeLessThan(DICTATE_MAX_AUDIO_BYTES / 2);
+    expect(DICTATE_MAX_AUDIO_BYTES).toBeLessThan(4.5 * 1024 * 1024);
+    expect(read("app/api/dictate/route.ts")).toContain("export const maxDuration = 300;");
+  });
+
+  it("an earlier chunk is transcribed and NOT rewritten: one STT call, no chat call", async () => {
+    transcript = "the first four and a half minutes";
+    const res = await post(part(0));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      chunk: { index: 0, text: "the first four and a half minutes", ms: DICTATE_CHUNK_MS }
+    });
+    expect(sttCalls()).toHaveLength(1);
+    expect(chatCalls()).toHaveLength(0);
+    expect(timingLine()).toContain("mode=part");
+  });
+
+  it("a quiet earlier chunk is an empty transcript, not a 422 — the dictation goes on", async () => {
+    transcript = "";
+    const res = await post(part(1));
+    expect(res.status).toBe(200);
+    expect((await res.json()).chunk.text).toBe("");
+  });
+
+  it("the last chunk is stitched after the earlier ones and the rewrite runs ONCE on all of it", async () => {
+    transcript = "and that is the end";
+    completion = "The whole thing, written up.";
+    const res = await post(
+      last([
+        { text: "it starts here", ms: DICTATE_CHUNK_MS },
+        { text: "it goes on", ms: DICTATE_CHUNK_MS }
+      ])
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      raw: "it starts here it goes on and that is the end",
+      styled: "The whole thing, written up.",
+      style: "formal",
+      lang: "en",
+      chunks: 3,
+      lost: 0
+    });
+    expect(sttCalls()).toHaveLength(1);
+    expect(chatCalls()).toHaveLength(1);
+    expect(chatBody().messages[1].content).toBe("it starts here it goes on and that is the end");
+    expect(timingLine()).toContain("chunks=3 lost=0");
+  });
+
+  it("works with no audio on the last request — the speaker stopped as a chunk rolled", async () => {
+    const res = await post(last([{ text: "all of it was in the first chunk", ms: DICTATE_CHUNK_MS }], {}, null));
+    expect(res.status).toBe(200);
+    expect(sttCalls()).toHaveLength(0);
+    expect(chatBody().messages[1].content).toBe("all of it was in the first chunk");
+  });
+
+  it("marks a lost chunk where it was lost, and never hands the marker to the model", async () => {
+    transcript = "after the gap";
+    completion = "Written.";
+    const res = await post(
+      last([
+        { text: "before the gap", ms: DICTATE_CHUNK_MS },
+        { text: null, ms: DICTATE_CHUNK_MS }
+      ])
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.raw).toBe("before the gap [audio lost 4:30] after the gap");
+    expect(body.styled).toBe("Written. [audio lost 4:30] Written.");
+    expect(body.lost).toBe(1);
+    // Each run of speech is written on its own; the marker is placed by code.
+    expect(chatCalls()).toHaveLength(2);
+    expect(chatBody(0).messages[1].content).toBe("before the gap");
+    expect(chatBody(1).messages[1].content).toBe("after the gap");
+  });
+
+  it("a last chunk that cannot be transcribed is a lost chunk, not a lost dictation", async () => {
+    fetchMock.mockImplementationOnce(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: init?.body });
+      return Response.json({ error: { message: "boom" } }, { status: 500 });
+    });
+    const res = await post(last([{ text: "the first part made it", ms: DICTATE_CHUNK_MS }]));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.raw).toBe("the first part made it [audio lost 1:00]");
+    expect(body.lost).toBe(1);
+  });
+
+  it("answers 422 when no chunk held any speech, and the model is never asked", async () => {
+    transcript = "";
+    const res = await post(last([{ text: "", ms: DICTATE_CHUNK_MS }]));
+    expect(res.status).toBe(422);
+    expect(chatCalls()).toHaveLength(0);
+  });
+
+  it("refuses a malformed long dictation with a 400 before any provider is called", async () => {
+    const bad = [
+      chunkRequest({ prior: "not json", chunk_index: "1", style: "formal" }),
+      chunkRequest({ prior: "[]", chunk_index: "0", style: "formal" }),
+      // An earlier chunk cannot also be the last one.
+      part(0, { prior: serializePrior([{ text: "x", ms: 1 }]) }),
+      part(DICTATE_MAX_CHUNKS),
+      last(Array.from({ length: DICTATE_MAX_CHUNKS }, () => ({ text: "x", ms: 1000 }))),
+      // An earlier chunk with no audio is nothing at all.
+      chunkRequest({ chunk_part: "1", chunk_index: "0" }, null)
+    ];
+    for (const req of bad) expect((await post(req)).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses more than ten minutes, and any one chunk over the byte cap, with a 413", async () => {
+    const tooLong = last([
+      { text: "a", ms: DICTATE_CHUNK_MS },
+      { text: "b", ms: DICTATE_CHUNK_MS },
+      { text: "c", ms: DICTATE_CHUNK_MS }
+    ]);
+    expect((await post(tooLong)).status).toBe(413);
+    expect((await post(chunkRequest({ chunk_part: "1", chunk_index: "0" }, DICTATE_MAX_AUDIO_BYTES + 1))).status).toBe(413);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a founder-less caller gets no further with a chunk than with a recording", async () => {
+    caller = { id: "u-x", email: STRANGER };
+    expect((await post(part(0))).status).toBe(404);
+    expect((await post(last([{ text: "x", ms: 1 }]))).status).toBe(404);
+    caller = null;
+    expect((await post(part(0))).status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps the chunk's words out of the log line too", async () => {
+    transcript = "a private sentence";
+    await post(part(0));
+    expect(timingLine()).not.toContain("private");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 describe("a re-style — JSON in, no transcription", () => {
   it("makes NO STT call and sends the given transcript to the model", async () => {
     completion = "hey, meeting's Wednesday";
@@ -341,9 +522,17 @@ describe("a re-style — JSON in, no transcription", () => {
 
   it("refuses empty text and text over the cap without calling anything", async () => {
     expect((await post(jsonRequest({ raw: "   ", style: "casual", source: "en" }))).status).toBe(400);
-    const long = "a".repeat(DICTATE_MAX_TEXT_CHARS + 1);
+    const long = "a".repeat(DICTATE_MAX_TRANSCRIPT_CHARS + 1);
     expect((await post(jsonRequest({ raw: long, style: "casual", source: "en" }))).status).toBe(413);
     expect(calls).toHaveLength(0);
+  });
+
+  it("takes back the transcript of a ten-minute dictation — longer than a paste may be", async () => {
+    const raw = "word ".repeat(2500).trim(); // ~12,500 characters
+    expect(raw.length).toBeGreaterThan(DICTATE_MAX_TEXT_CHARS);
+    const res = await post(jsonRequest({ raw, style: "formal", source: "en" }));
+    expect(res.status).toBe(200);
+    expect(chatBody().messages[1].content).toBe(raw);
   });
 });
 

@@ -17,6 +17,14 @@ decisions that day, which settle most of "Open questions" below:
 - **Spanish strings** follow the owner-language chrome rule and are each marked
   `// pendiente de revisión por Liz`.
 - Last style, output language and mode are kept per device.
+- **Ten minutes, in chunks** (Tom, 2026-11-27 08:54 MT; was two minutes). The
+  screen records the way a long home turn does — `createChunkedRecorder`,
+  4.5-minute chunks, hard stop at 10:00 with everything captured written up,
+  home's glow from T-30 s. The rewrite runs once on the whole transcript.
+- **The iOS app (`taos-dictate`) calls the same route** with a Supabase access
+  token. See **API contract** below — that section is what the app is built
+  against. As part of this, a request with no valid token is now **401 before
+  the founders gate's 404** (it was 404 first).
 
 Where it lives:
 
@@ -28,7 +36,7 @@ Where it lives:
 | styles, limits, per-device storage | `lib/dictate/style.ts` |
 | screen | `components/DictateShell.tsx`, `app/dictate/page.tsx` |
 | gate | `dictateEnabled()` / `dictateVisibleTo()` in `lib/release.ts` |
-| tests | `tests/dictate-prompt.test.ts`, `tests/dictate-route.test.ts`, `tests/dictate-shell.test.ts` |
+| tests | `tests/dictate-prompt.test.ts`, `tests/dictate-route.test.ts`, `tests/dictate-shell.test.ts`, `tests/dictate-bearer-auth.test.ts` |
 
 Three things the build does differently from the text below, on purpose:
 
@@ -179,14 +187,16 @@ messy, unpunctuated Spanish texts from Liz and needs to understand them.
   - multipart with `audio` → transcribe, then restyle;
   - JSON `{ raw, style, … }` → restyle only (re-style, no STT spend). Cap
     `raw` length.
-- **Order of checks**, exactly as `/api/fast/listen` (:94-97): `guardSpend(req)`
-  with **no** `allowAnonymous`, then the gate → 404 when not visible, then
-  `guard.response` (401), all before the body is read.
+- **Order of checks** — *as built, changed 2026-11-27:* `guardSpend(req)` with
+  **no** `allowAnonymous`, then `guard.response` (**401**), then the gate →
+  **404** when not visible, all before the body is read. (The first build
+  copied `/api/fast/listen`'s gate-then-401; the iOS app needs a bad token to
+  read as 401, so Dictate differs from /fast here on purpose.)
   `tests/spend-guard.test.ts:298-362` sweeps `app/api` and fails any route that
   names a paid provider without a guard.
-- Recording cap: one request, so stay well under Vercel's 4.5 MB body limit
-  (32 kbps ≈ 240 KB a minute) and set `maxDuration` and the upstream timeouts
-  to match. **Default cap: 2 minutes. Tom decides.**
+- Recording cap: **10 minutes, in chunks** (Tom, 2026-11-27). Every request
+  stays well under Vercel's 4.5 MB body limit (32 kbps ≈ 240 KB a minute; a
+  4.5-minute chunk ≈ 1.1 MB); `maxDuration` is 300. See **API contract**.
 - One log line per request, `[taos-dictate-timing]`, in the style of
   `[taos-translate-timing]` (`app/api/translate/route.ts:66-71,360-373`): codes,
   counts and milliseconds only.
@@ -295,12 +305,152 @@ messy, unpunctuated Spanish texts from Liz and needs to understand them.
 - Don't touch release flags in Production, Stripe, or Supabase schema without
   Tom. v1 as written needs no migration.
 
+## API contract (for the iOS app `taos-dictate`)
+
+One endpoint does everything the app's first version needs — speak, the
+chunked long dictation, re-style and the Decoder:
+
+```
+POST https://taoslite.com/api/dictate
+```
+
+Pinned by `tests/dictate-bearer-auth.test.ts` and `tests/dictate-route.test.ts`.
+If you change the route, change this section in the same PR.
+
+### Auth
+- Header on **every** request: `Authorization: Bearer <Supabase access token>`.
+  The token is the `access_token` of a session from the **same Supabase
+  project the website uses** (URL and publishable key: `lib/authServer.ts`) —
+  the same users, so a founder's account works in the app with no setup.
+- The server verifies it with Supabase on each request
+  (`supabase.auth.getUser(token)`, `lib/authServer.ts`); nothing is trusted
+  from the client and no session is kept server-side. There is **no cookie
+  auth** — the web screen sends this same header (`lib/authClient.ts`).
+- Access tokens are short-lived (Supabase default: one hour). Let the Supabase
+  SDK refresh them; on a **401**, refresh once and retry, then sign in again.
+- Order: **401** (no / bad / expired token) → **404** (valid user who is not
+  let in: founders only until `NEXT_PUBLIC_ENABLE_DICTATE` is set) → the body
+  is read. Both refusals cost nothing.
+- **No CORS headers are sent**, on purpose. A native app does not need them;
+  do not call this from a web view on another origin.
+- Send a filename and content type that match the audio (`audio.m4a` /
+  `audio/mp4`, `audio.webm` / `audio/webm`, also wav/mp3) — the transcriber
+  goes by them.
+
+### Languages and styles
+- Languages are **catalog codes** (`lib/languages/catalog.ts`): `en`, `es`, …
+  never a display name. An unknown code is a 400.
+- `style`: `formal` | `professional` | `conversational` | `casual`. Anything
+  else, or absent, is `professional`.
+- `target`: a code, or `same` / absent / equal to `source` = no translation.
+
+### 1. Speak — one recording (up to one chunk)
+`multipart/form-data`:
+
+| field | | |
+|---|---|---|
+| `audio` | file, required | ≤ 4,000,000 bytes |
+| `source` | required | language spoken |
+| `style` | optional | |
+| `target` | optional | |
+
+`200` → `{ "raw": "<transcript>", "styled": "<clean text>", "style": "formal", "lang": "en" }`
+(`lang` is the language `styled` is in.)
+
+### 2. Speak — a long dictation, in chunks (up to 10:00)
+Why chunks: a request body over **4.5 MB** is refused by Vercel before the
+route runs, and one function call has **300 s**. Ten minutes in one upload
+fits neither. So the audio goes up in pieces, each a **complete, separately
+decodable file**, and the server is **stateless between them** — the client
+holds the transcripts and hands them back with the last chunk. It is the home
+screen's long-turn protocol (`lib/translate/longTurn.ts`).
+
+**a. Each earlier chunk**, as soon as it closes (keep recording meanwhile):
+
+| field | | |
+|---|---|---|
+| `audio` | file, required | ≤ 4,000,000 bytes |
+| `source` | required | |
+| `chunk_part` | `1` | marks "not the last" |
+| `chunk_index` | `0`, `1`, … | |
+| `chunk_ms` | integer | this chunk's length |
+
+`200` → `{ "chunk": { "index": 0, "text": "<transcript>", "ms": 270000 } }`
+`text` may be `""` (a quiet chunk) — that is not an error. No rewrite runs.
+If this request fails after a retry, do **not** abandon the dictation: record
+the chunk as lost (below) and carry on.
+
+**b. The last chunk**, when the speaker stops or the cap is reached:
+
+| field | | |
+|---|---|---|
+| `audio` | file, optional | omit only if the last chunk is empty |
+| `prior` | JSON string, required | the earlier chunks, in order |
+| `chunk_index` | integer | = number of earlier chunks |
+| `chunk_ms` | integer | this chunk's length |
+| `source`, `style`, `target` | as in 1 | |
+
+`prior` is `[{ "text": "…", "ms": 270000 }, { "lost": true, "ms": 270000 }]`
+— `text` is exactly what (a) returned; `lost` is a chunk whose transcription
+failed. Do not send `chunk_part` here.
+
+`200` → `{ "raw", "styled", "style", "lang", "chunks": 3, "lost": 0 }`
+The rewrite runs **once** over the whole stitched transcript. A lost chunk
+appears in both texts as `[audio lost 4:30]` (`[audio perdido 4:30]` in
+Spanish) where it was lost. A last chunk the server cannot transcribe is
+marked lost the same way rather than failing the request.
+
+Limits: **10:00** total — the client enforces the hard stop (stop recording at
+10:00 and send what was captured; never discard). The server refuses reported
+lengths (`chunk_ms` + every `prior[].ms`) over 10:30 with a 413. At most **12
+chunks** including the last; each ≤ 4,000,000 bytes; earlier transcripts ≤
+24,000 characters together. The web screen uses 4.5-minute chunks (three
+requests for ten minutes); shorter is fine. Give the last request a client
+timeout near 280 s and earlier chunks ~210 s; a long rewrite is slow.
+
+### 3. Re-style — same words, another style or language (no audio)
+`application/json`:
+`{ "raw": "<the raw transcript from 1 or 2>", "style": "casual", "source": "en", "target": "same" }`
+`raw` ≤ 24,000 characters. `200` → `{ "raw", "styled", "style", "lang" }`
+
+### 4. Decoder — a pasted message, cleaned and translated
+`application/json`:
+`{ "mode": "decode", "raw": "<pasted text>", "reader": "en", "other": "es" }`
+`reader` is the app owner's language, `other` the other side of the pair; they
+must differ. `raw` ≤ 6,000 characters.
+`200` → `{ "mode": "decode", "raw", "cleaned", "translation", "notes": ["…"], "sourceLanguage": "Spanish" }`
+(`notes` is usually empty, at most six.)
+
+### Errors
+Every error is JSON `{ "error": "<message>" }` with `Cache-Control: no-store`.
+The message is safe to show; some are bilingual ("… · …").
+
+| status | when | client should |
+|---|---|---|
+| 400 | malformed body, missing `audio`/`source`, unknown language, bad `prior`/chunk fields, empty `raw` | fix the request; do not retry |
+| 401 | no token, or one Supabase rejects (expired, forged) | refresh the session, retry once, else sign in |
+| 404 | `{ "error": "not_found" }` — signed in, not let in | show "not available"; do not retry |
+| 413 | audio > 4,000,000 bytes; text over its cap; reported length > 10:30 | chunk smaller / shorten |
+| 422 | nothing was heard in the whole dictation (silence) | say so; let them try again — nothing was rewritten |
+| 429 | **not sent by this route today** (nothing is metered while founders-only). Reserved for when metering lands | back off; honour `Retry-After` if present |
+| 500 | server misconfiguration | report |
+| 502 | the transcriber or the model failed | retry once |
+| 504 | a provider timed out | retry once |
+
+Every attempt is paid for: retry at most once, and never on 4xx.
+
+### What the server does not do
+Nothing is stored (no row, no audio, no transcript) and nothing is metered
+while this is founders-only. One log line per request,
+`[taos-dictate-timing]`, with codes, counts and milliseconds — never words.
+
 ## Open questions for Tom
 1. ~~Metering~~ — **settled 2026-11-27: none while founders-only.** Must be
    settled again before `NEXT_PUBLIC_ENABLE_DICTATE` is set.
 2. ~~Are dictations saved anywhere~~ — **settled 2026-11-27: no, not while
    founders-only.** Gone when the screen closes.
-3. Recording cap: 2 minutes? (Built at 2 minutes, `DICTATE_MAX_RECORDING_MS`.)
+3. ~~Recording cap~~ — **settled 2026-11-27: ten minutes, chunked like home**
+   (`DICTATE_MAX_RECORDING_MS`, `DICTATE_CHUNK_MS`).
 4. Formal/Professional → usted when translating to Spanish (Liz).
 5. Spoken language: always the owner's side of the pair, or auto-detect between
    the two? (Built as the owner's side.)

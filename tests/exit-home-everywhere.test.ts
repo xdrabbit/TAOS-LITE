@@ -61,7 +61,8 @@ vi.mock("@/lib/supabase", async () => {
 
 vi.mock("@/lib/authClient", () => ({
   jsonAuthHeaders: async () => ({ "Content-Type": "application/json" }),
-  authHeaders: async () => ({})
+  authHeaders: async () => ({}),
+  sessionEmail: async () => null
 }));
 
 beforeEach(() => {

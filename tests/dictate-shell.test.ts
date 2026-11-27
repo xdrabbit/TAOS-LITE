@@ -10,6 +10,8 @@ import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyFor } from "@/lib/chrome/copy";
 import {
+  DICTATE_CHUNK_MS,
+  DICTATE_MAX_RECORDING_MS,
   DICTATE_MODE_STORAGE_KEY,
   DICTATE_STYLE_STORAGE_KEY,
   DICTATE_TARGET_STORAGE_KEY
@@ -18,10 +20,13 @@ import { PAIR_STORAGE_KEY } from "@/lib/translate/pair";
 
 vi.mock("@/lib/authClient", () => ({
   jsonAuthHeaders: async () => ({ "Content-Type": "application/json", Authorization: "Bearer t" }),
-  authHeaders: async () => ({ Authorization: "Bearer t" })
+  authHeaders: async () => ({ Authorization: "Bearer t" }),
+  sessionEmail: async () => signedInAs
 }));
 
 vi.mock("@/lib/wakeLock", () => ({ keepWake: () => () => {} }));
+
+let signedInAs: string | null = null;
 
 interface Sent {
   url: string;
@@ -29,10 +34,14 @@ interface Sent {
 }
 let sent: Sent[] = [];
 let reply: { status: number; body: Record<string, unknown> } = { status: 200, body: {} };
+/** An answer for one particular request, when a test needs them to differ. */
+let replyFor: ((body: BodyInit | null | undefined) => { status: number; body: Record<string, unknown> } | null) | null =
+  null;
 
 class FakeRecorder {
   static isTypeSupported = () => true;
   static last: FakeRecorder | null = null;
+  static made = 0;
   state: "inactive" | "recording" = "inactive";
   mimeType = "audio/webm";
   ondataavailable: ((event: { data: Blob }) => void) | null = null;
@@ -40,6 +49,7 @@ class FakeRecorder {
   onerror: (() => void) | null = null;
   constructor() {
     FakeRecorder.last = this;
+    FakeRecorder.made += 1;
   }
   start() {
     this.state = "recording";
@@ -59,14 +69,19 @@ beforeEach(() => {
   window.localStorage.clear();
   sent = [];
   reply = { status: 200, body: {} };
+  replyFor = null;
+  signedInAs = null;
+  FakeRecorder.made = 0;
+  window.history.replaceState(null, "", "/dictate");
   now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       sent.push({ url, body: init?.body });
-      return new Response(JSON.stringify(reply.body), {
-        status: reply.status,
+      const answer = replyFor?.(init?.body) ?? reply;
+      return new Response(JSON.stringify(answer.body), {
+        status: answer.status,
         headers: { "Content-Type": "application/json" }
       });
     })
@@ -188,6 +203,189 @@ describe("Speak — tap, talk, tap", () => {
     expect(q(root, "[role=alert]")!.textContent).toBe(copyFor("en").micDenied);
     // And the button works again afterwards.
     expect((q(root, "[data-dictate-mic]") as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// Ten minutes, in chunks (Tom, 2026-11-27) — home's long turn on this screen.
+// The clock is asked on an interval, every frame and whenever the page comes
+// back; the tests ask through the last of those, which needs no real waiting.
+describe("a long dictation — ten minutes, in chunks, with a hard stop", () => {
+  const ask = async () => {
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {});
+  };
+  const forms = () => sent.map((request) => request.body as FormData);
+  const answers = (body: BodyInit | null | undefined) => {
+    const form = body instanceof FormData ? body : null;
+    if (form?.get("chunk_part") === "1") {
+      return { status: 200, body: { chunk: { index: Number(form.get("chunk_index")), text: `part ${form.get("chunk_index")}`, ms: 1 } } };
+    }
+    return null;
+  };
+
+  it("says ten minutes, and shows the clock against it", async () => {
+    const root = await mount();
+    expect(root.textContent).toContain(copyFor("en").dictateLimit);
+    expect(copyFor("en").dictateLimit).toContain("ten minutes");
+    expect(copyFor("es").dictateLimit).toContain("diez minutos");
+    await tap(q(root, "[data-dictate-mic]"));
+    expect(q(root, "[data-dictate-mic]")!.textContent).toContain("/ 10:00");
+  });
+
+  it("a short dictation is still ONE request with no chunk fields", async () => {
+    reply.body = { raw: "hello", styled: "Hello." };
+    const root = await mount();
+    await dictate(root, 60_000);
+    expect(sent).toHaveLength(1);
+    expect(forms()[0].get("prior")).toBeNull();
+    expect(forms()[0].get("chunk_part")).toBeNull();
+    expect(FakeRecorder.made).toBe(1);
+  });
+
+  it("rolls to a new recorder at 4.5 minutes and sends the closed chunk while still recording", async () => {
+    replyFor = answers;
+    reply.body = { raw: "part 0 the rest", styled: "All of it." };
+    const root = await mount();
+    const mic = q(root, "[data-dictate-mic]")!;
+    await tap(mic);
+    now += DICTATE_CHUNK_MS - 1000;
+    await ask();
+    expect(sent).toHaveLength(0);
+    expect(FakeRecorder.made).toBe(1);
+
+    now += 1000;
+    await ask();
+    // Same microphone, a new recorder, and the mic is still open.
+    expect(FakeRecorder.made).toBe(2);
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(mic.getAttribute("aria-pressed")).toBe("true");
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1);
+    expect(forms()[0].get("chunk_part")).toBe("1");
+    expect(forms()[0].get("chunk_index")).toBe("0");
+    expect(forms()[0].get("chunk_ms")).toBe(String(DICTATE_CHUNK_MS));
+    expect(forms()[0].get("audio")).toBeInstanceOf(File);
+    expect(forms()[0].get("source")).toBe("en");
+    // An earlier chunk asks for no rewrite.
+    expect(forms()[0].get("style")).toBeNull();
+
+    now += 30_000;
+    await tap(mic);
+    await act(async () => {});
+    expect(sent).toHaveLength(2);
+    const last = forms()[1];
+    expect(last.get("chunk_part")).toBeNull();
+    expect(JSON.parse(String(last.get("prior")))).toEqual([{ text: "part 0", ms: DICTATE_CHUNK_MS }]);
+    expect(last.get("chunk_index")).toBe("1");
+    expect(last.get("chunk_ms")).toBe("30000");
+    expect(last.get("audio")).toBeInstanceOf(File);
+    expect(last.get("style")).toBe("professional");
+    expect(last.get("target")).toBe("same");
+    expect(q(root, "[data-dictate-result]")?.textContent).toContain("All of it.");
+    expect(track.stop).toHaveBeenCalled();
+  });
+
+  it("stops by itself at 10:00 and writes up everything captured — three chunks, none lost", async () => {
+    replyFor = answers;
+    reply.body = { raw: "part 0 part 1 the tail", styled: "Ten minutes, written up." };
+    const root = await mount();
+    const mic = q(root, "[data-dictate-mic]")!;
+    await tap(mic);
+    now += DICTATE_CHUNK_MS;
+    await ask();
+    now += DICTATE_CHUNK_MS;
+    await ask();
+    expect(sent).toHaveLength(2);
+    expect(mic.getAttribute("aria-pressed")).toBe("true");
+
+    now = DICTATE_MAX_RECORDING_MS - 1;
+    await ask();
+    expect(mic.getAttribute("aria-pressed")).toBe("true");
+    expect(sent).toHaveLength(2);
+
+    // 10:00. Nobody taps.
+    now = DICTATE_MAX_RECORDING_MS;
+    await ask();
+    await act(async () => {});
+    expect(mic.getAttribute("aria-pressed")).toBe("false");
+    expect(FakeRecorder.last?.state).toBe("inactive");
+    expect(track.stop).toHaveBeenCalled();
+    expect(sent).toHaveLength(3);
+    const last = forms()[2];
+    expect(JSON.parse(String(last.get("prior")))).toEqual([
+      { text: "part 0", ms: DICTATE_CHUNK_MS },
+      { text: "part 1", ms: DICTATE_CHUNK_MS }
+    ]);
+    expect(last.get("chunk_ms")).toBe(String(DICTATE_MAX_RECORDING_MS - 2 * DICTATE_CHUNK_MS));
+    expect(last.get("audio")).toBeInstanceOf(File);
+    expect(q(root, "[data-dictate-result]")?.textContent).toContain("Ten minutes, written up.");
+    // And it cannot run on: asking again sends nothing more.
+    now += 60_000;
+    await ask();
+    expect(sent).toHaveLength(3);
+  });
+
+  it("a chunk that could not be transcribed is reported lost, and the rest still goes up", async () => {
+    replyFor = (body) =>
+      body instanceof FormData && body.get("chunk_part") === "1" ? { status: 500, body: { error: "x" } } : null;
+    reply.body = { raw: "[audio lost 4:30] the tail", styled: "[audio lost 4:30] The tail." };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const root = await mount();
+    const mic = q(root, "[data-dictate-mic]")!;
+    await tap(mic);
+    now += DICTATE_CHUNK_MS;
+    await ask();
+    now += 20_000;
+    await tap(mic);
+    await act(async () => {});
+    await act(async () => {});
+    expect(sent).toHaveLength(2);
+    expect(JSON.parse(String(forms()[1].get("prior")))).toEqual([{ lost: true, ms: DICTATE_CHUNK_MS }]);
+    expect(q(root, "[data-dictate-result]")?.textContent).toContain("[audio lost 4:30] The tail.");
+    expect(q(root, '[role="alert"]')).toBeNull();
+  });
+
+  it("warns before the stop the way home does: a line of text from T-30 s", async () => {
+    const root = await mount();
+    await tap(q(root, "[data-dictate-mic]"));
+    const frame = async () => {
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      });
+      await act(async () => {});
+    };
+    now = DICTATE_MAX_RECORDING_MS - 31_000;
+    await ask();
+    await frame();
+    expect(q(root, "[data-dictate-wrap-up]")).toBeNull();
+    now = DICTATE_MAX_RECORDING_MS - 29_000;
+    await frame();
+    await frame();
+    expect(q(root, "[data-dictate-wrap-up]")?.textContent).toBe(copyFor("en").dictateWrapUp);
+    expect(q(root, "[data-dictate-mic]")!.style.boxShadow).not.toBe("");
+  });
+
+  it("a founder can shorten the chunk from the address bar to test a seam; nobody else can", async () => {
+    replyFor = answers;
+    window.history.replaceState(null, "", "/dictate?chunk=30");
+    let root = await mount();
+    await tap(q(root, "[data-dictate-mic]"));
+    now += 30_000;
+    await ask();
+    expect(FakeRecorder.made).toBe(1);
+    cleanup();
+
+    signedInAs = "xdrabbit@gmail.com";
+    FakeRecorder.made = 0;
+    now = 0;
+    root = await mount();
+    await tap(q(root, "[data-dictate-mic]"));
+    now += 30_000;
+    await ask();
+    expect(FakeRecorder.made).toBe(2);
   });
 });
 

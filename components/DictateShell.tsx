@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authHeaders, jsonAuthHeaders } from "@/lib/authClient";
+import { authHeaders, jsonAuthHeaders, sessionEmail } from "@/lib/authClient";
 import { copyFor, fill } from "@/lib/chrome/copy";
 import {
   DEFAULT_DICTATE_MODE,
   DEFAULT_DICTATE_STYLE,
+  DICTATE_CHUNK_MS,
   DICTATE_MAX_RECORDING_MS,
   DICTATE_MAX_TEXT_CHARS,
   DICTATE_SAME_LANGUAGE,
@@ -26,11 +27,29 @@ import {
   SHEET_LANGUAGES
 } from "@/lib/languages/catalog";
 import { fetchWithRetry, isConnectionError } from "@/lib/net";
+import { isFounder } from "@/lib/release";
+import {
+  createChunkedRecorder,
+  type ChunkedRecorder,
+  type RecordedChunk
+} from "@/lib/translate/chunkedRecorder";
+import {
+  LONG_TRANSLATE_FROM_CHARS,
+  longTurnKnobs,
+  serializePrior,
+  turnCapReached,
+  turnElapsedMs,
+  type ChunkResult,
+  type TurnClock
+} from "@/lib/translate/longTurn";
 import {
   AUDIO_BITS_PER_SECOND,
   fileNameFor,
   MIN_TURN_DURATION_MS,
-  pickMimeType
+  pickMimeType,
+  pulsePeriod,
+  rampStyle,
+  rampWindows
 } from "@/lib/translate/recorder";
 import { useLanguagePair } from "@/lib/translate/useLanguagePair";
 import { keepWake } from "@/lib/wakeLock";
@@ -49,9 +68,21 @@ import { ExitHome } from "./ExitHome";
 //            with a short note wherever the original is genuinely unclear.
 //
 // Built for one thumb on a phone: Liz uses this from her home screen. The mic
-// is the home screen's recorder in its simplest form — one MediaRecorder, one
-// recording per dictation, tap-to-toggle, and the two iOS interruption
-// handlers (lib/translate/recorder.ts). Not home's chunked recorder.
+// is the home screen's recorder — tap-to-toggle, the two iOS interruption
+// handlers (lib/translate/recorder.ts) and, since 2026-11-27, home's LONG
+// turn: a dictation runs up to ten minutes, recorded in chunks of at most
+// 4.5 minutes on one mic stream (lib/translate/chunkedRecorder.ts). A chunk
+// that closes while the speaker is still talking is sent at once to be
+// transcribed; when they stop, the last chunk goes up with the earlier
+// transcripts and the rewrite runs once over the whole text. A chunk that
+// could not be transcribed becomes "[audio lost 4:30]" where it was lost —
+// never the whole dictation. One that fits in a single chunk (nearly all of
+// them) is one request, exactly as before.
+//
+// The cap is home's too: a hard stop at 10:00 that writes up everything
+// captured, asked about every half second, every frame and whenever the page
+// comes back (a single timer is lost when a phone sleeps), with the same
+// glow on the button from T-30 s.
 //
 // Nothing is stored and nothing is metered while this is founders-only. The
 // style, the output language and the mode are remembered per device
@@ -74,8 +105,29 @@ interface DecodeResult {
 
 // The audio request can legitimately take a transcription plus a completion;
 // the JSON ones are a single completion. One retry: every attempt is paid for.
+// The long ones are home's numbers (components/TranslatorShell.tsx), under
+// the route's 300 s.
 const AUDIO_REQUEST_TIMEOUT_MS = 115000;
+const PART_REQUEST_TIMEOUT_MS = 210000;
+const LONG_REQUEST_TIMEOUT_MS = 280000;
 const TEXT_REQUEST_TIMEOUT_MS = 60000;
+const LONG_TEXT_REQUEST_TIMEOUT_MS = 170000;
+
+const RAMP = rampWindows(DICTATE_MAX_RECORDING_MS);
+
+/** One dictation being recorded: its earlier chunks, each already on its way. */
+interface DictationTurn {
+  parts: { ms: number; result: Promise<ChunkResult> }[];
+  mime: string;
+  /** Founder test knob (?failchunk=N): the chunk to treat as lost, or null. */
+  failIndex: number | null;
+  /** Set when the screen went away mid-recording: nothing is sent. */
+  cancelled: boolean;
+}
+
+function nowClock(): TurnClock {
+  return { perf: performance.now(), wall: Date.now() };
+}
 
 function clock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -103,14 +155,21 @@ export function DictateShell(): JSX.Element {
   const [decoding, setDecoding] = useState(false);
   const [decoded, setDecoded] = useState<DecodeResult | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [wrappingUp, setWrappingUp] = useState(false);
 
   const phaseRef = useRef<Phase>("idle");
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderRef = useRef<ChunkedRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const startedAtRef = useRef(0);
-  const capTimerRef = useRef<number | null>(null);
+  const turnRef = useRef<DictationTurn | null>(null);
+  const turnStartRef = useRef<TurnClock>({ perf: 0, wall: 0 });
   const tickRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const micBtnRef = useRef<HTMLButtonElement | null>(null);
+  const pulsePhaseRef = useRef(0);
+  const lastFrameRef = useRef(0);
+  const checkTurnRef = useRef<() => void>(() => {});
+  // Only a founder's phone reads the ?chunk= / ?failchunk= test knobs.
+  const founderRef = useRef(false);
   const wakeStopRef = useRef<(() => void) | null>(null);
   // Every request takes a number; only the newest one may write to the
   // screen. A slow Formal must not land on top of the Casual tapped after it.
@@ -132,11 +191,26 @@ export function DictateShell(): JSX.Element {
     setTarget(isLanguageCode(stored) ? stored : DICTATE_SAME_LANGUAGE);
   }, []);
 
+  useEffect(() => {
+    let live = true;
+    void sessionEmail().then((email) => {
+      if (live) founderRef.current = isFounder(email);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const clearTimers = useCallback(() => {
-    if (capTimerRef.current !== null) window.clearTimeout(capTimerRef.current);
     if (tickRef.current !== null) window.clearInterval(tickRef.current);
-    capTimerRef.current = null;
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     tickRef.current = null;
+    rafRef.current = null;
+    const btn = micBtnRef.current;
+    if (btn) {
+      btn.style.transform = "";
+      btn.style.boxShadow = "";
+    }
   }, []);
 
   const releaseMic = useCallback(() => {
@@ -150,15 +224,27 @@ export function DictateShell(): JSX.Element {
   useEffect(
     () => () => {
       clearTimers();
-      const recorder = recorderRef.current;
-      if (recorder && recorder.state !== "inactive") {
-        recorder.onstop = null;
-        recorder.stop();
-      }
+      if (turnRef.current) turnRef.current.cancelled = true;
+      recorderRef.current?.stop();
+      recorderRef.current = null;
       releaseMic();
     },
     [clearTimers, releaseMic]
   );
+
+  // rAF stops in a hidden tab and an interval is throttled there; the moment
+  // the page is back is the moment to ask about the cap again.
+  useEffect(() => {
+    const ask = () => checkTurnRef.current();
+    document.addEventListener("visibilitychange", ask);
+    window.addEventListener("pageshow", ask);
+    window.addEventListener("focus", ask);
+    return () => {
+      document.removeEventListener("visibilitychange", ask);
+      window.removeEventListener("pageshow", ask);
+      window.removeEventListener("focus", ask);
+    };
+  }, []);
 
   const flashCopied = useCallback((which: string) => {
     setCopied(which);
@@ -210,18 +296,17 @@ export function DictateShell(): JSX.Element {
 
   // ── Speak ────────────────────────────────────────────────────────────────
 
-  async function sendRecording(blob: Blob, mime: string) {
+  /** The styled answer to a dictation's last (or only) request. */
+  async function sendFinal(form: FormData, timeoutMs: number) {
     const request = ++requestRef.current;
     try {
-      const form = new FormData();
-      form.append("audio", new File([blob], fileNameFor(mime), { type: mime || "audio/webm" }));
       form.append("style", style);
       form.append("source", mine);
       form.append("target", target);
       const res = await fetchWithRetry(
         "/api/dictate",
         { method: "POST", headers: await authHeaders(), body: form },
-        { retries: 1, timeoutMs: AUDIO_REQUEST_TIMEOUT_MS }
+        { retries: 1, timeoutMs }
       );
       const payload = await readJson(res);
       if (request !== requestRef.current) return;
@@ -237,13 +322,134 @@ export function DictateShell(): JSX.Element {
     }
   }
 
-  function stopRecording() {
-    clearTimers();
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      go("working");
-      recorder.stop();
+  const audioFile = (blob: Blob, mime: string) =>
+    new File([blob], fileNameFor(mime), { type: mime || "audio/webm" });
+
+  // One earlier chunk of a long dictation → its transcript. Never rejects: a
+  // chunk that cannot be transcribed is a LOST chunk (text null), which the
+  // route marks in place rather than failing the dictation.
+  async function transcribePart(turn: DictationTurn, chunk: RecordedChunk): Promise<ChunkResult> {
+    try {
+      if (turn.failIndex === chunk.index) throw new Error("forced by ?failchunk");
+      if (chunk.blob.size === 0) throw new Error("empty chunk");
+      const form = new FormData();
+      form.append("audio", audioFile(chunk.blob, turn.mime));
+      form.append("source", mine);
+      form.append("chunk_part", "1");
+      form.append("chunk_index", String(chunk.index));
+      form.append("chunk_ms", String(Math.round(chunk.ms)));
+      const res = await fetchWithRetry(
+        "/api/dictate",
+        { method: "POST", headers: await authHeaders(), body: form },
+        { retries: 1, timeoutMs: PART_REQUEST_TIMEOUT_MS }
+      );
+      const payload = (await res.json().catch(() => ({}))) as { chunk?: { text?: unknown } };
+      if (!res.ok || typeof payload.chunk?.text !== "string") throw new Error(`chunk ${chunk.index}`);
+      return { text: payload.chunk.text, ms: chunk.ms };
+    } catch (e) {
+      console.error("[dictate] a chunk of this dictation could not be transcribed", chunk.index, e);
+      return { text: null, ms: chunk.ms };
     }
+  }
+
+  // The recorder has flushed its last chunk: the dictation is over.
+  async function handleStopped(turn: DictationTurn, last: RecordedChunk) {
+    recorderRef.current = null;
+    turnRef.current = null;
+    releaseMic();
+    if (turn.cancelled) return;
+    const heldMs = turn.parts.reduce((sum, part) => sum + part.ms, last.ms);
+    if (heldMs < MIN_TURN_DURATION_MS) {
+      go("idle");
+      setError(c.tooShort);
+      return;
+    }
+    const form = new FormData();
+    if (turn.parts.length === 0) {
+      // It fit in one chunk: one request, as it always was.
+      if (last.blob.size === 0) {
+        go("idle");
+        setError(c.noAudio);
+        return;
+      }
+      form.append("audio", audioFile(last.blob, turn.mime));
+      void sendFinal(form, AUDIO_REQUEST_TIMEOUT_MS);
+      return;
+    }
+    // A long one: the earlier chunks are already at the server (nearly always
+    // back, too). Their transcripts go up beside the last chunk.
+    const prior = await Promise.all(turn.parts.map((part) => part.result));
+    if (turn.cancelled) return;
+    if (last.blob.size > 0) form.append("audio", audioFile(last.blob, turn.mime));
+    form.append("prior", serializePrior(prior));
+    form.append("chunk_index", String(turn.parts.length));
+    form.append("chunk_ms", String(Math.round(last.ms)));
+    void sendFinal(form, LONG_REQUEST_TIMEOUT_MS);
+  }
+
+  function stopRecording() {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+    clearTimers();
+    setWrappingUp(false);
+    go("working");
+    // The last chunk arrives through onChunk with final=true.
+    recorder.stop();
+  }
+
+  // The dictation's one clock question (home's checkTurn): is it at its cap,
+  // and is the current chunk at its length?
+  function checkTurn() {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+    if (turnCapReached(turnStartRef.current, nowClock(), DICTATE_MAX_RECORDING_MS)) {
+      // Hard stop — and everything captured is written up.
+      stopRecording();
+      return;
+    }
+    if (recorder.shouldRoll() && !recorder.roll()) {
+      // This phone would not start another recorder. The chunk that just
+      // closed arrives as the last; finish exactly as a stop would.
+      console.warn("[dictate] could not start the next chunk — finishing the dictation");
+      clearTimers();
+      setWrappingUp(false);
+      go("working");
+    }
+  }
+  checkTurnRef.current = checkTurn;
+
+  // The visual wrap-up on the mic button, each frame: home's ramp
+  // (lib/translate/recorder.ts) — a slow glow from T-30 s, a pulse that
+  // quickens from T-10 s. Styles are written straight to the button so a
+  // frame is not a re-render; reduced motion gets a steady glow.
+  function tickRamp() {
+    const frame = performance.now();
+    const remaining = DICTATE_MAX_RECORDING_MS - turnElapsedMs(turnStartRef.current, nowClock());
+    setWrappingUp(remaining <= RAMP.early);
+    const btn = micBtnRef.current;
+    if (btn) {
+      if (remaining > RAMP.early) {
+        btn.style.transform = "";
+        btn.style.boxShadow = "";
+      } else {
+        const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+        let wave: number;
+        if (reduceMotion) {
+          wave = remaining <= RAMP.fast ? 1 : 0.5;
+        } else {
+          const dt = frame - (lastFrameRef.current || frame);
+          pulsePhaseRef.current += (dt / pulsePeriod(remaining, RAMP)) * Math.PI * 2;
+          wave = (Math.sin(pulsePhaseRef.current) + 1) / 2;
+        }
+        const look = rampStyle(remaining, wave, RAMP, reduceMotion);
+        btn.style.transform = look.transform;
+        btn.style.boxShadow = look.boxShadow;
+      }
+    }
+    lastFrameRef.current = frame;
+    checkTurn();
+    if (recorderRef.current?.state !== "recording") return;
+    rafRef.current = requestAnimationFrame(tickRamp);
   }
 
   async function startRecording() {
@@ -265,53 +471,49 @@ export function DictateShell(): JSX.Element {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mime = pickMimeType();
-      const recorder = new MediaRecorder(stream, {
-        ...(mime ? { mimeType: mime } : {}),
-        audioBitsPerSecond: AUDIO_BITS_PER_SECOND
+      const knobs = longTurnKnobs(window.location.search, founderRef.current);
+      const turn: DictationTurn = { parts: [], mime, failIndex: knobs.failIndex, cancelled: false };
+      turnRef.current = turn;
+      // One dictation, one or more recordings on this stream; each recorder
+      // flushes every second, so a long chunk is never one fragile buffer.
+      const recorder = createChunkedRecorder({
+        stream,
+        mime,
+        bitsPerSecond: AUDIO_BITS_PER_SECOND,
+        chunkMs: Math.min(knobs.chunkMs, DICTATE_CHUNK_MS),
+        onChunk: (chunk) => {
+          if (chunk.final) void handleStopped(turn, chunk);
+          else if (!turn.cancelled) {
+            // Still talking: send it now, so at the stop only the last
+            // chunk is left to wait for.
+            turn.parts[chunk.index] = { ms: chunk.ms, result: transcribePart(turn, chunk) };
+          }
+        },
+        // iOS Safari ends the mic track SILENTLY when the audio session is
+        // interrupted (a call, Siri, another app). Both handlers go through
+        // the normal stop, so what was said before the interruption is still
+        // written up (components/TranslatorShell.tsx keeps the same pair).
+        onError: () => stopRecording()
       });
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        const heldMs = performance.now() - startedAtRef.current;
-        const type = recorder.mimeType || mime;
-        const blob = new Blob(chunksRef.current, { type: type || "audio/webm" });
-        chunksRef.current = [];
-        recorderRef.current = null;
-        releaseMic();
-        if (heldMs < MIN_TURN_DURATION_MS) {
-          go("idle");
-          setError(c.tooShort);
-          return;
-        }
-        if (blob.size === 0) {
-          go("idle");
-          setError(c.noAudio);
-          return;
-        }
-        void sendRecording(blob, type);
-      };
-      // iOS Safari ends the mic track SILENTLY when the audio session is
-      // interrupted (a call, Siri, another app). Both handlers go through the
-      // normal stop, so what was said before the interruption is still
-      // written up (components/TranslatorShell.tsx keeps the same pair).
-      recorder.onerror = () => stopRecording();
       for (const track of stream.getAudioTracks()) {
         track.onended = () => stopRecording();
       }
-      // A flush every second, so a long dictation is never one fragile buffer.
-      recorder.start(1000);
+      recorder.start();
       recorderRef.current = recorder;
-      startedAtRef.current = performance.now();
+      turnStartRef.current = nowClock();
+      pulsePhaseRef.current = 0;
+      lastFrameRef.current = 0;
       setElapsedMs(0);
+      setWrappingUp(false);
       go("recording");
-      capTimerRef.current = window.setTimeout(stopRecording, DICTATE_MAX_RECORDING_MS);
-      tickRef.current = window.setInterval(
-        () => setElapsedMs(performance.now() - startedAtRef.current),
-        500
-      );
+      clearTimers();
+      tickRef.current = window.setInterval(() => {
+        setElapsedMs(turnElapsedMs(turnStartRef.current, nowClock()));
+        checkTurnRef.current();
+      }, 500);
+      rafRef.current = requestAnimationFrame(tickRamp);
     } catch {
+      turnRef.current = null;
       releaseMic();
       go("idle");
       setError(c.micDenied);
@@ -338,7 +540,12 @@ export function DictateShell(): JSX.Element {
           headers: await jsonAuthHeaders(),
           body: JSON.stringify({ raw: result.raw, style: nextStyle, source: mine, target: nextTarget })
         },
-        { retries: 1, timeoutMs: TEXT_REQUEST_TIMEOUT_MS }
+        {
+          retries: 1,
+          // Ten minutes of words is a long rewrite; the route allows it more.
+          timeoutMs:
+            result.raw.length > LONG_TRANSLATE_FROM_CHARS ? LONG_TEXT_REQUEST_TIMEOUT_MS : TEXT_REQUEST_TIMEOUT_MS
+        }
       );
       const payload = await readJson(res);
       if (request !== requestRef.current) return;
@@ -543,6 +750,7 @@ export function DictateShell(): JSX.Element {
             </label>
 
             <button
+              ref={micBtnRef}
               type="button"
               data-dictate-mic=""
               aria-pressed={recording}
@@ -574,6 +782,16 @@ export function DictateShell(): JSX.Element {
                 </span>
               ) : null}
             </button>
+            {wrappingUp && recording ? (
+              <p
+                role="status"
+                aria-live="polite"
+                data-dictate-wrap-up=""
+                className="-mt-2 text-center text-sm text-amber-300"
+              >
+                {c.dictateWrapUp}
+              </p>
+            ) : null}
             <p className="-mt-2 text-center text-xs text-amber-100/50">
               {fill(c.dictateSpeakingIn, { language: nameOf(mine) })} · {c.dictateLimit}
             </p>
