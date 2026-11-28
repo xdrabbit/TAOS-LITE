@@ -447,6 +447,35 @@ must differ. `raw` ≤ 6,000 characters.
 `200` → `{ "mode": "decode", "raw", "cleaned", "translation", "notes": ["…"], "sourceLanguage": "Spanish" }`
 (`notes` is usually empty, at most six.)
 
+### 5. Live notes — one piece of a room (added 2026-11-27)
+The app listens continuously and cuts the audio at each pause (a piece is a
+few seconds to ~30 s). Each piece is its own request; the server keeps nothing.
+`multipart/form-data`:
+
+| field | | |
+|---|---|---|
+| `mode` | `live`, required | |
+| `audio` | file, required | ≤ 4,000,000 bytes |
+| `mine` | required | the phone owner's language |
+| `theirs` | required | the other language of the pair; = `mine` for plain notes |
+| `context` | optional | the last line or two already shown, ≤ 600 chars used |
+| `words`, `dialects` | optional | as above |
+
+`200` → `{ "mode": "live", "heard": "…", "heardLang": "es", "text": "…", "textLang": "en" }`
+— `heard` is the piece cleaned in the language spoken; `text` is its faithful
+translation into the other side (or `heard` again when `mine` = `theirs`).
+Silence → `422` (the app skips it quietly).
+
+### 6. Live notes — the summary (no audio)
+`{ "mode": "summarize", "reader": "en", "raw": "<the lines, one per line>" }`
+(≤ 60,000 chars) → `{ "mode": "summarize", "title": "…", "summary": "…", "points": ["…"] }`,
+written in `reader`'s language.
+
+Saving: the app sends each line to the existing `/api/live/saved/lines`
+(text only, same bearer token), so Live notes also appear at
+taoslite.com/live/saved. The summary is kept on the phone for now (no
+schema change).
+
 ### Errors
 Every error is JSON `{ "error": "<message>" }` with `Cache-Control: no-store`.
 The message is safe to show; some are bilingual ("… · …").

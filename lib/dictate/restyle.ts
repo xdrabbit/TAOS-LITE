@@ -5,6 +5,16 @@
 import { getTranslateModel } from "@/lib/translate/paraphrase";
 import { buildDecoderInstructions, buildDictateInstructions, type PromptExtras } from "./prompt";
 import type { DictateStyle } from "./style";
+import {
+  buildLiveInstructions,
+  buildSummaryInstructions,
+  liveUserMessage,
+  parseLivePiece,
+  parseLiveSummary,
+  type LivePiece,
+  type LiveSide,
+  type LiveSummary
+} from "./live";
 
 /**
  * Well under the route's maxDuration, for the reason paraphrase() records: a
@@ -126,4 +136,31 @@ export async function decodeMessage(
       timeoutMs
     )
   );
+}
+
+/** Live notes: one heard piece → the piece and its translation (lib/dictate/live.ts). */
+export async function livePiece(
+  apiKey: string,
+  heard: string,
+  context: string,
+  mine: LiveSide,
+  theirs: LiveSide,
+  words: string[],
+  timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS
+): Promise<LivePiece> {
+  return parseLivePiece(
+    await complete(apiKey, buildLiveInstructions(mine, theirs, words), liveUserMessage(heard, context), true, timeoutMs),
+    mine.code,
+    theirs.code
+  );
+}
+
+/** Live notes: the finished transcript → title, summary and key points. */
+export async function summarizeLive(
+  apiKey: string,
+  transcript: string,
+  readerLabel: string,
+  timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS
+): Promise<LiveSummary> {
+  return parseLiveSummary(await complete(apiKey, buildSummaryInstructions(readerLabel), transcript, true, timeoutMs));
 }

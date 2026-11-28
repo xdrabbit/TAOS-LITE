@@ -6,7 +6,8 @@ import { getTranscribeModel, transcribeAudio } from "@/lib/translate/transcribe"
 import { getTranslateModel } from "@/lib/translate/paraphrase";
 import { parseWords, wordsTranscribeHint } from "@/lib/dictate/words";
 import { dialectLabel, parseDialects } from "@/lib/dictate/dialect";
-import { decodeMessage, DICTATE_RESTYLE_TIMEOUT_MS, restyle } from "@/lib/dictate/restyle";
+import { decodeMessage, DICTATE_RESTYLE_TIMEOUT_MS, livePiece, restyle, summarizeLive } from "@/lib/dictate/restyle";
+import { LIVE_MAX_SUMMARY_CHARS, liveTranscribeHint, type LiveSide } from "@/lib/dictate/live";
 import {
   DICTATE_MAX_AUDIO_BYTES,
   DICTATE_MAX_CHUNKS,
@@ -45,6 +46,10 @@ const TRANSCRIBE_TIMEOUT_MS = 90000;
 //   JSON { raw, style, … }            → restyle only             (chat)
 //   JSON { mode: "decode", raw }      → the Decoder: a pasted message,
 //                                       cleaned and translated   (chat)
+//   multipart, mode=live, `audio`     → Live notes: one piece of a room,
+//                                       heard + translated       (STT + chat)
+//   JSON { mode: "summarize", raw }   → Live notes: the finished transcript,
+//                                       title + summary + points (chat)
 //
 // ── Who may call ───────────────────────────────────────────────────────────
 // `Authorization: Bearer <Supabase access token>`, verified with Supabase on
@@ -93,7 +98,7 @@ function isTimeout(e: unknown): boolean {
 // counts and milliseconds ONLY — never the transcript, the styled text, the
 // pasted message, or an email.
 interface DictateTiming {
-  mode: "audio" | "part" | "restyle" | "decode" | "?";
+  mode: "audio" | "part" | "restyle" | "decode" | "live" | "summary" | "?";
   style: DictateStyle | "?";
   src: string;
   tgt: string;
@@ -200,6 +205,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (isJson) {
       const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
       if (!body || typeof body !== "object") return fail("bad_json", "Request body must be JSON.", 400);
+
+      // Live notes, end of session: the transcript in, notes for the reader out.
+      if (body.mode === "summarize") {
+        t.mode = "summary";
+        const reader = code(body.reader);
+        if (!reader) return fail("bad_lang", "A reader language is required.", 400);
+        t.src = reader;
+        t.tgt = reader;
+        const transcript = typeof body.raw === "string" ? body.raw.trim() : "";
+        t.srcChars = transcript.length;
+        if (!transcript) return fail("empty", "There is no text to work on.", 400);
+        if (transcript.length > LIVE_MAX_SUMMARY_CHARS) {
+          return fail("too_long", "That conversation is too long to summarize.", 413);
+        }
+        const modelStart = performance.now();
+        const notes = await summarizeLive(
+          apiKey,
+          transcript,
+          languageLabel(reader),
+          translateTimeoutFor(transcript.length, DICTATE_RESTYLE_TIMEOUT_MS)
+        );
+        t.modelMs = Math.round(performance.now() - modelStart);
+        t.outChars = notes.summary.length;
+        t.notes = notes.points.length;
+        return done({ mode: "summarize", ...notes });
+      }
+
       const decode = body.mode === "decode";
       t.mode = decode ? "decode" : "restyle";
 
@@ -284,6 +316,58 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       form = await req.formData();
     } catch {
       return fail("bad_form", "Request body must be multipart form data or JSON.", 400);
+    }
+
+    // ── Live notes: one piece of a room, cut at a pause by the phone. ──────
+    // Two-way: the piece may be either language of the pair, and comes back
+    // with a faithful translation into the other. Same language on both sides
+    // is plain note-taking. Silence is 422, which the phone skips quietly.
+    if (form.get("mode") === "live") {
+      t.mode = "live";
+      const mineCode = code(form.get("mine"));
+      const theirsCode = code(form.get("theirs"));
+      if (!mineCode || !theirsCode) return fail("bad_lang", "Two languages are required.", 400);
+      t.src = theirsCode;
+      t.tgt = mineCode;
+      const audio = form.get("audio");
+      if (!(audio instanceof File) || audio.size === 0) {
+        return fail("no_audio", "An audio recording is required.", 400);
+      }
+      t.audioBytes = audio.size;
+      if (audio.size > DICTATE_MAX_AUDIO_BYTES) {
+        return fail("too_big", "That piece is too large for one request.", 413);
+      }
+      const words = parseWords(form.get("words"));
+      t.words = words.length;
+      const dialects = parseDialects(form.get("dialects"));
+      t.dialects = Object.keys(dialects).length;
+      const side = (c: string): LiveSide => ({
+        code: c,
+        label: languageLabel(c),
+        dialect: dialectLabel(dialects, c)
+      });
+      const mine = side(mineCode);
+      const theirs = side(theirsCode);
+      const context = typeof form.get("context") === "string" ? (form.get("context") as string) : "";
+
+      const sttStart = performance.now();
+      const heard = await transcribeAudio(apiKey, audio, {
+        // One language: a hint sharpens it. Two: let the model hear which.
+        sourceLabel: mineCode === theirsCode ? mine.label : undefined,
+        extraHint: liveTranscribeHint(mine, theirs, wordsTranscribeHint(words)),
+        timeoutMs: TRANSCRIBE_TIMEOUT_MS
+      });
+      t.transcribeMs = Math.round(performance.now() - sttStart);
+      t.srcChars = heard.length;
+      if (!heard.trim()) return fail("nothing_heard", NOTHING_HEARD, 422);
+
+      const modelStart = performance.now();
+      const piece = await livePiece(apiKey, heard, context, mine, theirs, words);
+      t.modelMs = Math.round(performance.now() - modelStart);
+      t.src = piece.heardLang;
+      t.tgt = piece.textLang;
+      t.outChars = piece.text.length;
+      return done({ mode: "live", ...piece });
     }
 
     // The long turn's fields, as /api/translate reads them:
