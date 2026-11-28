@@ -75,11 +75,12 @@ export async function restyle(
   style: DictateStyle,
   sourceLabel: string,
   targetLabel: string | null,
-  timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS
+  timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS,
+  words: string[] = []
 ): Promise<string> {
   return complete(
     apiKey,
-    buildDictateInstructions(style, sourceLabel, targetLabel),
+    buildDictateInstructions(style, sourceLabel, targetLabel, words),
     raw,
     false,
     timeoutMs
@@ -113,9 +114,16 @@ export async function decodeMessage(
   raw: string,
   readerLabel: string,
   otherLabel: string,
-  timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS
+  timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS,
+  words: string[] = []
 ): Promise<DecodedMessage> {
   return parseDecoded(
-    await complete(apiKey, buildDecoderInstructions(readerLabel, otherLabel), raw, true, timeoutMs)
+    await complete(
+      apiKey,
+      buildDecoderInstructions(readerLabel, otherLabel, undefined, words),
+      raw,
+      true,
+      timeoutMs
+    )
   );
 }

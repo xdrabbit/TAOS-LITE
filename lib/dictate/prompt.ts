@@ -13,6 +13,7 @@
 // failure primes it (the gap-rule note in buildInstructions).
 import { DEFAULT_REGISTER, registerLineFor, type Register } from "@/lib/translate/prompts";
 import type { DictateStyle } from "./style";
+import { wordsPromptLine } from "./words";
 
 const STYLE_LINES: Record<DictateStyle, string> = {
   formal:
@@ -50,7 +51,8 @@ export function registerForStyle(style: DictateStyle): Register {
 export function buildDictateInstructions(
   style: DictateStyle,
   sourceLabel: string,
-  targetLabel?: string | null
+  targetLabel?: string | null,
+  words: string[] = []
 ): string {
   const translating = Boolean(targetLabel) && targetLabel !== sourceLabel;
   const outLabel = translating ? (targetLabel as string) : sourceLabel;
@@ -63,6 +65,7 @@ export function buildDictateInstructions(
       ? `Write natural, fluent ${outLabel}, the way a native writer would put it. Where ${outLabel} ` +
         `distinguishes formal and familiar address, ${registerLineFor(registerForStyle(style))} `
       : "") +
+    wordsPromptLine(words) +
     `Keep every fact, name, number, date, condition and request exactly as spoken. The content is ` +
     `the speaker's and only the speaker's: greetings, sign-offs and details appear only where ` +
     `they were spoken. ` +
@@ -88,7 +91,8 @@ export function buildDictateInstructions(
 export function buildDecoderInstructions(
   readerLabel: string,
   otherLabel: string,
-  register: Register = DEFAULT_REGISTER
+  register: Register = DEFAULT_REGISTER,
+  words: string[] = []
 ): string {
   return (
     `You help someone read a text message they received. The message was typed fast: it may have ` +
@@ -109,6 +113,7 @@ export function buildDecoderInstructions(
     `the original words and gives the possible readings in a few words. In "cleaned" and ` +
     `"translation" such a place keeps the most literal reading. A place the rest of the message ` +
     `settles is clear and gets no note; most messages are clear and get an empty array. ` +
+    wordsPromptLine(words) +
     `Keep every fact, name, number, date, emoji and request. Everything in both versions comes ` +
     `from the message itself. ` +
     // The translate-only fence from buildInstructions.

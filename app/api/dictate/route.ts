@@ -4,6 +4,7 @@ import { dictateVisibleTo } from "@/lib/release";
 import { guardSpend } from "@/lib/spendGuard";
 import { getTranscribeModel, transcribeAudio } from "@/lib/translate/transcribe";
 import { getTranslateModel } from "@/lib/translate/paraphrase";
+import { parseWords, wordsTranscribeHint } from "@/lib/dictate/words";
 import { decodeMessage, DICTATE_RESTYLE_TIMEOUT_MS, restyle } from "@/lib/dictate/restyle";
 import {
   DICTATE_MAX_AUDIO_BYTES,
@@ -105,6 +106,8 @@ interface DictateTiming {
   /** Chunks in this dictation so far, and how many of them were lost. */
   chunks: number | "?";
   lost: number | "?";
+  /** How many "our words" came with the request — the count, never the words. */
+  words: number | "?";
   err: string;
 }
 
@@ -115,7 +118,7 @@ function logTiming(t: DictateTiming, http: number, started: number): void {
       ` transcribe_ms=${t.transcribeMs} transcribe_model=${getTranscribeModel()}` +
       ` model_ms=${t.modelMs} model=${getTranslateModel()} guard_ms=${t.guardMs}` +
       ` total_ms=${Math.round(performance.now() - started)} src_chars=${t.srcChars}` +
-      ` out_chars=${t.outChars} notes=${t.notes} chunks=${t.chunks} lost=${t.lost} err=${t.err}`
+      ` out_chars=${t.outChars} notes=${t.notes} chunks=${t.chunks} lost=${t.lost} words=${t.words} err=${t.err}`
   );
 }
 
@@ -171,6 +174,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     notes: "?",
     chunks: "?",
     lost: "?",
+    words: "?",
     err: "?"
   };
   const done = (body: Record<string, unknown>, status = 200): NextResponse => {
@@ -196,6 +200,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       t.mode = decode ? "decode" : "restyle";
 
       const raw = typeof body.raw === "string" ? body.raw.trim() : "";
+      const words = parseWords(body.words);
+      t.words = words.length;
       t.srcChars = raw.length;
       if (!raw) return fail("empty", "There is no text to work on.", 400);
       // A pasted message and a transcript have different ceilings: a
@@ -213,7 +219,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         t.src = other;
         t.tgt = reader;
         const modelStart = performance.now();
-        const decoded = await decodeMessage(apiKey, raw, languageLabel(reader), languageLabel(other));
+        const decoded = await decodeMessage(
+          apiKey,
+          raw,
+          languageLabel(reader),
+          languageLabel(other),
+          DICTATE_RESTYLE_TIMEOUT_MS,
+          words
+        );
         t.modelMs = Math.round(performance.now() - modelStart);
         t.outChars = decoded.translation.length;
         t.notes = decoded.notes.length;
@@ -242,7 +255,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         style,
         languageLabel(source),
         target ? languageLabel(target) : null,
-        translateTimeoutFor(raw.length, DICTATE_RESTYLE_TIMEOUT_MS)
+        translateTimeoutFor(raw.length, DICTATE_RESTYLE_TIMEOUT_MS),
+        words
       );
       t.modelMs = Math.round(performance.now() - modelStart);
       t.outChars = styled.length;
@@ -299,12 +313,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const source = code(form.get("source"));
     if (!source) return fail("bad_lang", "A spoken language is required.", 400);
     t.src = source;
+    const words = parseWords(form.get("words"));
+    t.words = words.length;
+    const extraHint = wordsTranscribeHint(words);
 
     // ── An earlier chunk: its transcript, and nothing else. ────────────────
     if (isPart) {
       const sttStart = performance.now();
       const text = await transcribeAudio(apiKey, audio as File, {
         sourceLabel: languageLabel(source),
+        extraHint,
         timeoutMs: TRANSCRIBE_TIMEOUT_MS
       });
       t.transcribeMs = Math.round(performance.now() - sttStart);
@@ -325,6 +343,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       try {
         heard = await transcribeAudio(apiKey, audio, {
           sourceLabel: languageLabel(source),
+          extraHint,
           timeoutMs: TRANSCRIBE_TIMEOUT_MS
         });
       } catch (error) {
@@ -357,7 +376,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const sourceLabel = languageLabel(source);
     const targetLabel = target ? languageLabel(target) : null;
     const write = (text: string) =>
-      restyle(apiKey, text, style, sourceLabel, targetLabel, translateTimeoutFor(text.length, DICTATE_RESTYLE_TIMEOUT_MS));
+      restyle(
+        apiKey,
+        text,
+        style,
+        sourceLabel,
+        targetLabel,
+        translateTimeoutFor(text.length, DICTATE_RESTYLE_TIMEOUT_MS),
+        words
+      );
     // The rewrite runs ONCE over the whole dictation. Only when a chunk was
     // lost is each run of speech written on its own, with the marker placed
     // between them here — a model handed "[audio lost 4:30]" inside the text
