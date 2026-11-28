@@ -13,7 +13,20 @@
 // failure primes it (the gap-rule note in buildInstructions).
 import { DEFAULT_REGISTER, registerLineFor, type Register } from "@/lib/translate/prompts";
 import type { DictateStyle } from "./style";
+import { conversationDialectLine, IDIOM_RULE, readAsLine, writeForLine } from "./dialect";
 import { wordsPromptLine } from "./words";
+
+/** What a request may add to a prompt: the caller's words and dialects. */
+export interface PromptExtras {
+  /** "Our words" (lib/dictate/words.ts). */
+  words?: string[];
+  /** Dictation: the speaker's dialect / the output's. Labels from lib/dictate/dialect.ts. */
+  sourceDialect?: string | null;
+  targetDialect?: string | null;
+  /** Decoder: the dialects of the reader's and the other side's languages. */
+  readerDialect?: string | null;
+  otherDialect?: string | null;
+}
 
 const STYLE_LINES: Record<DictateStyle, string> = {
   formal:
@@ -52,19 +65,23 @@ export function buildDictateInstructions(
   style: DictateStyle,
   sourceLabel: string,
   targetLabel?: string | null,
-  words: string[] = []
+  extras: PromptExtras = {}
 ): string {
   const translating = Boolean(targetLabel) && targetLabel !== sourceLabel;
   const outLabel = translating ? (targetLabel as string) : sourceLabel;
+  const { words = [], sourceDialect = null, targetDialect = null } = extras;
   return (
     `You turn a spoken dictation into clean written text. The message you receive is a raw ` +
     `speech transcript in ${sourceLabel}: one person thinking out loud, to be sent as their own ` +
     `writing. Write it out in ${outLabel}, in the FIRST PERSON as the speaker, in this style — ` +
     `${STYLE_LINES[style]} ` +
+    readAsLine(sourceDialect, "The speaker") +
     (translating
       ? `Write natural, fluent ${outLabel}, the way a native writer would put it. Where ${outLabel} ` +
-        `distinguishes formal and familiar address, ${registerLineFor(registerForStyle(style))} `
-      : "") +
+        `distinguishes formal and familiar address, ${registerLineFor(registerForStyle(style))} ` +
+        writeForLine(targetDialect) +
+        IDIOM_RULE
+      : writeForLine(sourceDialect)) +
     wordsPromptLine(words) +
     `Keep every fact, name, number, date, condition and request exactly as spoken. The content is ` +
     `the speaker's and only the speaker's: greetings, sign-offs and details appear only where ` +
@@ -92,8 +109,9 @@ export function buildDecoderInstructions(
   readerLabel: string,
   otherLabel: string,
   register: Register = DEFAULT_REGISTER,
-  words: string[] = []
+  extras: PromptExtras = {}
 ): string {
+  const { words = [], readerDialect = null, otherDialect = null } = extras;
   return (
     `You help someone read a text message they received. The message was typed fast: it may have ` +
     `no punctuation, no accents, run-together sentences, abbreviations and typos. The reader's ` +
@@ -108,11 +126,16 @@ export function buildDecoderInstructions(
     `a fluent native speaker would, in the same tone and register the writer used: affectionate ` +
     `stays affectionate, curt stays curt, slang stays informal. Where the translation's language ` +
     `distinguishes formal and familiar address, ${registerLineFor(register)} ` +
+    IDIOM_RULE +
     `"notes" — an array of short strings in ${readerLabel}, one for each place whose meaning ` +
     `stays open to more than one reading even after reading the whole message; each note quotes ` +
     `the original words and gives the possible readings in a few words. In "cleaned" and ` +
     `"translation" such a place keeps the most literal reading. A place the rest of the message ` +
     `settles is clear and gets no note; most messages are clear and get an empty array. ` +
+    conversationDialectLine([
+      [readerLabel, readerDialect],
+      [otherLabel, otherDialect]
+    ]) +
     wordsPromptLine(words) +
     `Keep every fact, name, number, date, emoji and request. Everything in both versions comes ` +
     `from the message itself. ` +

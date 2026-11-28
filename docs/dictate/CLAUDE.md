@@ -355,6 +355,21 @@ characters; quotes, brackets and line breaks are stripped; repeats dropped.
 Anything malformed is ignored, never an error. The server stores none of it
 (`lib/dictate/words.ts`, pinned by `tests/dictate-words.test.ts`).
 
+### Dialects — optional on every request
+`dialects`: one region per language, as **codes** —
+`{"es":"VE","en":"US"}` (multipart: a JSON string; JSON body: an object).
+The labels that reach the prompt ("Venezuelan Spanish") come from the table
+in `lib/dictate/dialect.ts`; an unknown language or region is ignored, never
+an error. Regions today: es VE CO MX AR CL PE CU PR DO US ES · en US GB AU CA
+IE · pt BR PT · fr FR CA · de DE AT CH.
+- Dictation: the speaker's words are read in the `source` dialect; the text is
+  written for a reader of the `target` dialect (or the source's, untranslated).
+- Decoder: both sides' dialects are named, so "arrecha" from a Venezuelan
+  reads as angry.
+- Idioms (always, whenever text crosses languages): a saying travels by its
+  meaning — the target's own saying where one exists, otherwise plain words;
+  a half-said saying counts. Pinned by `tests/dictate-dialect.test.ts`.
+
 ### 1. Speak — one recording (up to one chunk)
 `multipart/form-data`:
 

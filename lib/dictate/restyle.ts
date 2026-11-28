@@ -3,7 +3,7 @@
 // and a timeout — not chatCompletion (lib/translateProvider.ts), which has no
 // timeout and defaults to the mini model.
 import { getTranslateModel } from "@/lib/translate/paraphrase";
-import { buildDecoderInstructions, buildDictateInstructions } from "./prompt";
+import { buildDecoderInstructions, buildDictateInstructions, type PromptExtras } from "./prompt";
 import type { DictateStyle } from "./style";
 
 /**
@@ -76,11 +76,11 @@ export async function restyle(
   sourceLabel: string,
   targetLabel: string | null,
   timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS,
-  words: string[] = []
+  extras: PromptExtras = {}
 ): Promise<string> {
   return complete(
     apiKey,
-    buildDictateInstructions(style, sourceLabel, targetLabel, words),
+    buildDictateInstructions(style, sourceLabel, targetLabel, extras),
     raw,
     false,
     timeoutMs
@@ -115,12 +115,12 @@ export async function decodeMessage(
   readerLabel: string,
   otherLabel: string,
   timeoutMs: number = DICTATE_RESTYLE_TIMEOUT_MS,
-  words: string[] = []
+  extras: PromptExtras = {}
 ): Promise<DecodedMessage> {
   return parseDecoded(
     await complete(
       apiKey,
-      buildDecoderInstructions(readerLabel, otherLabel, undefined, words),
+      buildDecoderInstructions(readerLabel, otherLabel, undefined, extras),
       raw,
       true,
       timeoutMs
