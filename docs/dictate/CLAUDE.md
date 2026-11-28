@@ -344,6 +344,17 @@ If you change the route, change this section in the same PR.
   else, or absent, is `professional`.
 - `target`: a code, or `same` / absent / equal to `source` = no translation.
 
+### "Our words" — optional on every request
+`words`: the caller's own names and words, spelled their way (Tom: "Lu, not
+Lou"). In multipart it is a **JSON string** (`["Lu","Marcela"]`); in a JSON
+body, an array. It goes to the transcriber as a spelling hint and to the
+writer as "spell these exactly as listed, in any language" — dictation,
+re-style and the Decoder. Send it on **every** request of a long dictation
+(earlier chunks are transcribed with it too). At most 50 words of 40
+characters; quotes, brackets and line breaks are stripped; repeats dropped.
+Anything malformed is ignored, never an error. The server stores none of it
+(`lib/dictate/words.ts`, pinned by `tests/dictate-words.test.ts`).
+
 ### 1. Speak — one recording (up to one chunk)
 `multipart/form-data`:
 
