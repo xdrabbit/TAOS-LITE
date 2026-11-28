@@ -300,9 +300,11 @@ export const PRIOR_MAX_CHARS = 24000;
  * The earlier chunks, as the phone reports them on the final request:
  * `[{ "text": "…", "ms": 270000 }, { "lost": true, "ms": 270000 }]`.
  * Null on anything malformed — the route then answers 400 rather than
- * translate half a turn as though it were whole.
+ * translate half a turn as though it were whole. `maxChunks` is the whole
+ * turn's limit (the earlier chunks plus the final one); /api/dictate passes
+ * its own.
  */
-export function parsePriorField(raw: unknown): ChunkResult[] | null {
+export function parsePriorField(raw: unknown, maxChunks: number = HOME_MAX_CHUNKS): ChunkResult[] | null {
   if (typeof raw !== "string" || !raw) return null;
   let parsed: unknown;
   try {
@@ -310,7 +312,7 @@ export function parsePriorField(raw: unknown): ChunkResult[] | null {
   } catch {
     return null;
   }
-  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length >= HOME_MAX_CHUNKS) return null;
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length >= maxChunks) return null;
   const out: ChunkResult[] = [];
   let chars = 0;
   for (const item of parsed) {

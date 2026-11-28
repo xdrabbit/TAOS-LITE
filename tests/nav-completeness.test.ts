@@ -56,6 +56,9 @@ const GATED: Record<string, string> = {
   // flag that has not shipped (NEXT_PUBLIC_ENABLE_FAST) plus a founder bypass.
   // Stripping this block is what a CUSTOMER's grid menu looks like.
   fast: "fastVisible",
+  // /dictate is founders-only on the same shape (NEXT_PUBLIC_ENABLE_DICTATE
+  // plus a founder bypass), added 2026-11-27.
+  dictate: "dictateVisible",
   // /call went from "dark to everyone" back to founders-only on 8/27, so the
   // guard it hides behind is a founder check now, not the public flag. The
   // flag is still off and still real — callVisibleTo() is `flag || founder`,

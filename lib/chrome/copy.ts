@@ -124,6 +124,7 @@ const EN = {
   // (every Spanish key must really be Spanish), so the header prints it plain.
   navCall: "Call",
   navFast: "Quick translate",
+  navDictate: "Dictate",
   navPhoto: "Photo translator",
   navVideo: "Video captions",
   navTutor: "Language tutor",
@@ -565,7 +566,47 @@ const EN = {
   interpreterStyleMediatorHint:
     "Still interprets everything. May briefly speak up, in both languages, only when the meaning is at risk — and answers if you ask it directly. Never takes sides, never gives advice.",
   interpreterStyleNotOnEngine: "This engine cannot be briefed, so it is always a plain interpreter.",
-  interpreterMediatorNote: "Mediator note"
+  interpreterMediatorNote: "Mediator note",
+
+  // ── Dictate (/dictate) — founders only, 2026-11-27 ──────────────────────
+  // Speak and get clean styled text back, or paste a messy message and read
+  // it (docs/dictate/CLAUDE.md). No dictateStyleFormal: "Formal" is the same
+  // word in Spanish, so the shell prints it plain — the "Chat" rule above.
+  // Spanish: every line pendiente de revisión por Liz.
+  dictateTitle: "Dictate",
+  dictateModeSpeak: "Speak",
+  dictateModeDecode: "Decoder",
+  dictateSpeakHint: "Tap, say it however it comes out, tap again. You get clean text to copy.",
+  dictateDecodeHint: "Paste a message that is hard to read. You get it punctuated, and in {language}.",
+  dictateStyleLabel: "Style",
+  dictateStyleProfessional: "Professional",
+  dictateStyleConversational: "Conversational",
+  dictateStyleCasual: "Casual",
+  dictateOutputLabel: "Write it in",
+  dictateSameLanguage: "Same language ({language})",
+  dictateSpeakingIn: "You speak {language}",
+  dictateTapToStart: "TAP TO DICTATE",
+  dictateTapToStop: "TAP WHEN DONE",
+  dictateWorking: "Writing it up…",
+  dictateRestyling: "Rewriting…",
+  dictateCopy: "Copy",
+  dictateCopied: "Copied ✓",
+  dictateShare: "Share",
+  dictateShowOriginal: "Show what I said",
+  dictateHideOriginal: "Hide what I said",
+  dictateFailed: "That did not work. Try again.",
+  dictateTooLong: "That text is too long. Try a shorter piece.",
+  dictateLimit: "Up to ten minutes per dictation.",
+  dictateWrapUp: "Wrapping up — it stops and writes it up in a few seconds…",
+  dictatePaste: "Paste",
+  dictatePasteBlocked: "This browser will not hand over the clipboard. Press and hold in the box, then Paste.",
+  dictatePastePlaceholder: "Paste the message here",
+  dictateDecode: "Read it for me",
+  dictateDecoding: "Reading it…",
+  dictateClear: "Clear",
+  dictateCleaned: "As written, cleaned up",
+  dictateTranslation: "What it says",
+  dictateUnclear: "Not clear in the original"
 } as const;
 
 /** Every key the chrome can ask for. Derived — never hand-written. */
@@ -658,6 +699,44 @@ const TRANSLATIONS: Record<string, Partial<ChromeCopy>> = {
     navTable: "Mesa",
     navCall: "Llamada",
     navFast: "Rápida",
+    navDictate: "Dictar", // pendiente de revisión por Liz
+
+    // ── Dictar (/dictate) — PLACEHOLDERS escritos por un agente el
+    // 2026-11-27. Cada línea: pendiente de revisión por Liz.
+    dictateTitle: "Dictar", // pendiente de revisión por Liz
+    dictateModeSpeak: "Hablar", // pendiente de revisión por Liz
+    dictateModeDecode: "Descifrar", // pendiente de revisión por Liz
+    dictateSpeakHint: "Toca, dilo como te salga y toca otra vez. Te queda un texto limpio para copiar.", // pendiente de revisión por Liz
+    dictateDecodeHint: "Pega un mensaje difícil de leer. Te lo devuelve con puntuación y en {language}.", // pendiente de revisión por Liz
+    dictateStyleLabel: "Estilo", // pendiente de revisión por Liz
+    dictateStyleProfessional: "Profesional", // pendiente de revisión por Liz
+    dictateStyleConversational: "Conversacional", // pendiente de revisión por Liz
+    dictateStyleCasual: "Informal", // pendiente de revisión por Liz
+    dictateOutputLabel: "Escribirlo en", // pendiente de revisión por Liz
+    dictateSameLanguage: "El mismo idioma ({language})", // pendiente de revisión por Liz
+    dictateSpeakingIn: "Hablas en {language}", // pendiente de revisión por Liz
+    dictateTapToStart: "TOCA PARA DICTAR", // pendiente de revisión por Liz
+    dictateTapToStop: "TOCA AL TERMINAR", // pendiente de revisión por Liz
+    dictateWorking: "Redactando…", // pendiente de revisión por Liz
+    dictateRestyling: "Reescribiendo…", // pendiente de revisión por Liz
+    dictateCopy: "Copiar", // pendiente de revisión por Liz
+    dictateCopied: "Copiado ✓", // pendiente de revisión por Liz
+    dictateShare: "Compartir", // pendiente de revisión por Liz
+    dictateShowOriginal: "Ver lo que dije", // pendiente de revisión por Liz
+    dictateHideOriginal: "Ocultar lo que dije", // pendiente de revisión por Liz
+    dictateFailed: "No funcionó. Inténtalo de nuevo.", // pendiente de revisión por Liz
+    dictateTooLong: "Ese texto es muy largo. Prueba con un trozo más corto.", // pendiente de revisión por Liz
+    dictateLimit: "Hasta diez minutos por dictado.", // pendiente de revisión por Liz
+    dictateWrapUp: "Terminando — se detiene y lo redacta en unos segundos…", // pendiente de revisión por Liz
+    dictatePaste: "Pegar", // pendiente de revisión por Liz
+    dictatePasteBlocked: "Este navegador no deja leer el portapapeles. Mantén pulsado dentro del cuadro y elige Pegar.", // pendiente de revisión por Liz
+    dictatePastePlaceholder: "Pega el mensaje aquí", // pendiente de revisión por Liz
+    dictateDecode: "Léemelo", // pendiente de revisión por Liz
+    dictateDecoding: "Leyéndolo…", // pendiente de revisión por Liz
+    dictateClear: "Borrar", // pendiente de revisión por Liz
+    dictateCleaned: "Tal como lo escribió, con puntuación", // pendiente de revisión por Liz
+    dictateTranslation: "Lo que dice", // pendiente de revisión por Liz
+    dictateUnclear: "No queda claro en el original", // pendiente de revisión por Liz
     navPhoto: "Fotos",
     navVideo: "Subtítulos",
     navTutor: "Tutor de idiomas",

@@ -16,6 +16,20 @@ Entry format (loose): `- What it is — why / any detail. (added YYYY-MM-DD)`
 
 ## Up next (roughly prioritized)
 
+- **Dictate (`/dictate`) — what PR #145 left open.** Built founders-only;
+  not yet used on a phone. Open: Tom/Liz walk it on an iPhone (the mic, Copy
+  inside the tap, the share sheet, the Paste button's clipboard prompt); every
+  Spanish string is pendiente de revisión por Liz; Liz confirms usted for
+  Formal/Professional when translating; whether the Decoder
+  should translate a message that is already in the reader's language. The
+  ten-minute chunked recording (added to #145 on 2026-11-27) has not been
+  walked on a phone: a founder can test a seam with `/dictate?chunk=30`
+  instead of talking for 4.5 minutes. The route also serves the upcoming iOS
+  app `taos-dictate` by Supabase bearer token — contract in the brief. Before
+  `NEXT_PUBLIC_ENABLE_DICTATE` is ever set: metering and whether dictations
+  are kept (today: neither). Then rung 2, the iOS Shortcut / Action Button
+  entry, which needs a long-lived per-user token designed first. Brief:
+  `docs/dictate/CLAUDE.md`. (added 2026-11-27)
 - **Daily study reminder email — what PR #139 left open.** Every Spanish
   string is pendiente de revisión por Liz. A pair that is not English/Spanish
   still gets the English/Spanish phrase (the course is only those two). No
@@ -1262,6 +1276,29 @@ blank.
 
 ## Shipped
 
+- Dictate — Wispr-style styled dictation, plus a paste-in Decoder
+  (`/dictate`, founders only). Tap, talk, tap: clean text back in one of four
+  styles (Formal, Professional, Conversational, Casual), in the language
+  spoken or another; tapping a different style re-writes the same words with
+  no second transcription. Decoder tab: paste a fast, unpunctuated message and
+  get it punctuated in its own language plus a faithful translation into the
+  reader's, with a short note where the original is genuinely unclear (Tom,
+  2026-11-27, for Liz's texts). Copy and Share. Nothing stored, nothing
+  metered. Gate `dictateVisibleTo()`; flag `NEXT_PUBLIC_ENABLE_DICTATE` unset.
+  Brief: `docs/dictate/CLAUDE.md`. (built 2026-11-27, PR #145)
+  Same day, Tom: dictations run to ten minutes, recorded in chunks like a
+  long home turn (hard stop at 10:00, nothing lost, one rewrite of the whole
+  transcript), and the route takes a Supabase bearer token so the iOS app
+  `taos-dictate` can call it — a missing or bad token is now 401 ahead of the
+  founders gate's 404.
+- The transcriber no longer invents text from silence — two seconds of
+  silence came back as "I need a doctor." and was translated as if spoken;
+  `gpt-4o-transcribe` wrote words for 79 of 80 silent clips. A guard in
+  `lib/translate/silenceGuard.ts` (level, no-words, prompt-echo,
+  no-speech-probability, and low confidence checked by a second opinion)
+  turns those into the existing "nothing heard" on every route that
+  transcribes. Knob `TAOS_STT_SILENCE_GUARD=0` restores the old request.
+  — 2026-11-27, PR #146
 - Daily study reminder email, opt-in — Tom (2026-11-18): "we want them to
   invite us into their lives every day." A "Remind me every day" toggle on
   `/study` and `/tutor` (default OFF, hour of day in the person's own time
