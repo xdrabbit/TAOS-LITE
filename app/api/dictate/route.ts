@@ -5,6 +5,7 @@ import { guardSpend } from "@/lib/spendGuard";
 import { getTranscribeModel, transcribeAudio } from "@/lib/translate/transcribe";
 import { getTranslateModel } from "@/lib/translate/paraphrase";
 import { parseWords, wordsTranscribeHint } from "@/lib/dictate/words";
+import { dialectLabel, parseDialects } from "@/lib/dictate/dialect";
 import { decodeMessage, DICTATE_RESTYLE_TIMEOUT_MS, restyle } from "@/lib/dictate/restyle";
 import {
   DICTATE_MAX_AUDIO_BYTES,
@@ -108,6 +109,8 @@ interface DictateTiming {
   lost: number | "?";
   /** How many "our words" came with the request — the count, never the words. */
   words: number | "?";
+  /** How many languages came with a dialect (codes only, and only the count). */
+  dialects: number | "?";
   err: string;
 }
 
@@ -118,7 +121,7 @@ function logTiming(t: DictateTiming, http: number, started: number): void {
       ` transcribe_ms=${t.transcribeMs} transcribe_model=${getTranscribeModel()}` +
       ` model_ms=${t.modelMs} model=${getTranslateModel()} guard_ms=${t.guardMs}` +
       ` total_ms=${Math.round(performance.now() - started)} src_chars=${t.srcChars}` +
-      ` out_chars=${t.outChars} notes=${t.notes} chunks=${t.chunks} lost=${t.lost} words=${t.words} err=${t.err}`
+      ` out_chars=${t.outChars} notes=${t.notes} chunks=${t.chunks} lost=${t.lost} words=${t.words} dialects=${t.dialects} err=${t.err}`
   );
 }
 
@@ -175,6 +178,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     chunks: "?",
     lost: "?",
     words: "?",
+    dialects: "?",
     err: "?"
   };
   const done = (body: Record<string, unknown>, status = 200): NextResponse => {
@@ -202,6 +206,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const raw = typeof body.raw === "string" ? body.raw.trim() : "";
       const words = parseWords(body.words);
       t.words = words.length;
+      const dialects = parseDialects(body.dialects);
+      t.dialects = Object.keys(dialects).length;
       t.srcChars = raw.length;
       if (!raw) return fail("empty", "There is no text to work on.", 400);
       // A pasted message and a transcript have different ceilings: a
@@ -225,7 +231,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           languageLabel(reader),
           languageLabel(other),
           DICTATE_RESTYLE_TIMEOUT_MS,
-          words
+          {
+            words,
+            readerDialect: dialectLabel(dialects, reader),
+            otherDialect: dialectLabel(dialects, other)
+          }
         );
         t.modelMs = Math.round(performance.now() - modelStart);
         t.outChars = decoded.translation.length;
@@ -256,7 +266,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         languageLabel(source),
         target ? languageLabel(target) : null,
         translateTimeoutFor(raw.length, DICTATE_RESTYLE_TIMEOUT_MS),
-        words
+        {
+          words,
+          sourceDialect: dialectLabel(dialects, source),
+          targetDialect: dialectLabel(dialects, target)
+        }
       );
       t.modelMs = Math.round(performance.now() - modelStart);
       t.outChars = styled.length;
@@ -315,6 +329,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     t.src = source;
     const words = parseWords(form.get("words"));
     t.words = words.length;
+    const dialects = parseDialects(form.get("dialects"));
+    t.dialects = Object.keys(dialects).length;
     const extraHint = wordsTranscribeHint(words);
 
     // ── An earlier chunk: its transcript, and nothing else. ────────────────
@@ -383,7 +399,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         sourceLabel,
         targetLabel,
         translateTimeoutFor(text.length, DICTATE_RESTYLE_TIMEOUT_MS),
-        words
+        {
+          words,
+          sourceDialect: dialectLabel(dialects, source),
+          targetDialect: dialectLabel(dialects, target)
+        }
       );
     // The rewrite runs ONCE over the whole dictation. Only when a chunk was
     // lost is each run of speech written on its own, with the marker placed

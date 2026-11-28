@@ -89,8 +89,8 @@ describe("the prompts", () => {
   it("say nothing about words when there are none — the prompts are unchanged", () => {
     expect(wordsPromptLine([])).toBe("");
     expect(wordsTranscribeHint([])).toBeUndefined();
-    expect(buildDictateInstructions("casual", "English", null, [])).toBe(buildDictateInstructions("casual", "English"));
-    expect(buildDecoderInstructions("English", "Spanish", undefined, [])).toBe(
+    expect(buildDictateInstructions("casual", "English", null, { words: [] })).toBe(buildDictateInstructions("casual", "English"));
+    expect(buildDecoderInstructions("English", "Spanish", undefined, { words: [] })).toBe(
       buildDecoderInstructions("English", "Spanish")
     );
   });
@@ -100,8 +100,8 @@ describe("the prompts", () => {
     expect(line).toContain("Lu");
     expect(line).toContain("exactly as listed");
     expect(line).toContain("in any language");
-    expect(buildDictateInstructions("casual", "English", "Spanish", ["Lu"])).toContain(line);
-    expect(buildDecoderInstructions("English", "Spanish", undefined, ["Lu"])).toContain(line);
+    expect(buildDictateInstructions("casual", "English", "Spanish", { words: ["Lu"] })).toContain(line);
+    expect(buildDecoderInstructions("English", "Spanish", undefined, { words: ["Lu"] })).toContain(line);
   });
 });
 
